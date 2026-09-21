@@ -34,6 +34,13 @@ The daemon owns durable state and policy. Workers execute in repository
 worktrees. See the [architecture overview](docs/architecture/README.md) for
 more detail.
 
+## Who it is for
+
+Convoy is for developers experimenting with AI coding agents across projects
+who want to track durable sessions, run work locally or over SSH, and review
+agent results before work continues. The Linux-first alpha welcomes bug
+reports, workflow feedback, and focused open-source contributions.
+
 ## Get it running
 
 You'll need **Node.js 22+**, **Git**, Linux **Bubblewrap** (`bwrap`) for
