@@ -518,7 +518,13 @@ export function SessionControls({
 export function RuntimeSessions({ openChat }: { openChat: (id: string) => void }) {
   const { state, error } = useRuntime();
   const [view, setView] = useState<'live' | 'attention' | 'history'>('live');
-  const all = state?.sessions ?? [];
+  const [projectFilter, setProjectFilter] = useState('');
+  const sessionProjectId = (session: Session) =>
+    session.projectId ??
+    state?.tickets.find((ticket) => ticket.id === session.activeTicketId)?.projectId;
+  const all = (state?.sessions ?? []).filter(
+    (session) => !projectFilter || sessionProjectId(session) === projectFilter,
+  );
   const attention = all.filter((s) => sessionBucket(s) === 'attention');
   const active = all.filter((s) => sessionBucket(s) === 'active');
   const history = all.filter((s) => sessionBucket(s) === 'history');
@@ -544,6 +550,20 @@ export function RuntimeSessions({ openChat }: { openChat: (id: string) => void }
         <button aria-pressed={view === 'history'} onClick={() => setView('history')}>
           History <span>{history.length}</span>
         </button>
+        {(state?.projects.length ?? 0) > 1 && (
+          <select
+            aria-label="Filter sessions by project"
+            value={projectFilter}
+            onChange={(event) => setProjectFilter(event.target.value)}
+          >
+            <option value="">All projects</option>
+            {state?.projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       {error && <p role="alert">{error}</p>}
       {!state && !error && <p className="muted">Loading execution state…</p>}
@@ -580,7 +600,10 @@ export function RuntimeSessions({ openChat }: { openChat: (id: string) => void }
                   {ticket?.title ?? s.title}
                 </strong>
                 <p>
-                  {s.activeTicketId ? `CVY-${s.activeTicketId}` : 'Conversation agent'} · {s.model}
+                  {state?.projects.find((project) => project.id === sessionProjectId(s))?.name ??
+                    'Project'}{' '}
+                  · {s.activeTicketId ? `CVY-${s.activeTicketId}` : 'Conversation agent'} ·{' '}
+                  {s.model}
                   {s.workflow && ` · ${s.workflow.name}`}
                 </p>
               </div>

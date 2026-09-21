@@ -1,0 +1,66 @@
+.project-switcher {
+  position: relative;
+  min-width: 0;
+}
+.project-switcher > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.project-switcher > summary::-webkit-details-marker {
+  display: none;
+}
+.project-switcher-menu {
+  position: absolute;
+  top: calc(100% + 14px);
+  left: 0;
+  z-index: 40;
+  width: min(300px, 80vw);
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px #17271b22;
+}
+.project-switcher-menu input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 5px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.project-switcher-options {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.project-switcher-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 9px;
+  border-radius: 7px;
+  text-align: left;
+}
+.project-switcher-menu button:hover {
+  background: #edf2eb;
+}
+.project-switcher-empty {
+  display: block;
+  padding: 9px;
+  color: var(--muted);
+}
+.project-switcher-actions {
+  border-top: 1px solid var(--line);
+  margin-top: 5px;
+  padding-top: 5px;
+}
+.project-switcher-actions button {
+  justify-content: flex-start;
+}

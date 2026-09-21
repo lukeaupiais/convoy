@@ -41,6 +41,16 @@
 .app-navigation svg {
   flex-shrink: 0;
 }
+.sidebar-attention-count {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: #e4d2bc;
+  color: #674123;
+  font-size: 10px;
+  text-align: center;
+}
 .sidebar-pins {
   margin-top: 32px;
 }

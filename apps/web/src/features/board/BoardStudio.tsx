@@ -1,5 +1,6 @@
 import { Select } from '../../shared/ui/Select';
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Flag,
   UserRound,
@@ -20,6 +21,7 @@ import './tickets.css';
 
 type Props = {
   state: RuntimeState;
+  projectId: string;
   tickets: Ticket[];
   projectName: (id?: string) => string;
   onSelectTicket: (id: number) => void;
@@ -65,12 +67,39 @@ function columnFor(board: Board, ticket: Ticket) {
   );
 }
 
-export function BoardStudio({ state, tickets, projectName, onSelectTicket, onNewTicket }: Props) {
-  const boards = boardData(state);
+export function BoardStudio({
+  state,
+  projectId,
+  tickets,
+  projectName,
+  onSelectTicket,
+  onNewTicket,
+}: Props) {
+  const boards = boardData(state).filter((value) => value.projectIds.includes(projectId));
   const templates = templateData(state);
-  const available = boards.length ? boards : [starter];
+  const available = boards.length ? boards : [{ ...starter, projectIds: [projectId] }];
   const [boardId, setBoardId] = useState(available[0].id);
   const board = available.find((b) => b.id === boardId) ?? available[0];
+  const [boardQuery, setBoardQuery] = useState('');
+  const [boardMenuOpen, setBoardMenuOpen] = useState(false);
+  const boardMenu = useRef<HTMLDetailsElement>(null);
+  const [headerTarget, setHeaderTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => setHeaderTarget(document.getElementById('board-context-slot')), []);
+  useEffect(() => {
+    if (!boardMenuOpen) return;
+    const outside = (event: PointerEvent) => {
+      if (!boardMenu.current?.contains(event.target as Node)) setBoardMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setBoardMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', outside);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [boardMenuOpen]);
   const [draft, setDraft] = useState<Board>(board);
   const [editing, setEditing] = useState(false);
   const [view, setView] = useState<'board' | 'list'>('board');
@@ -185,7 +214,7 @@ export function BoardStudio({ state, tickets, projectName, onSelectTicket, onNew
     const value = {
       ...starter,
       id: `board-${Date.now()}`,
-      projectIds: state.projects.map((p) => p.id),
+      projectIds: [projectId],
       columns: starter.columns.map((c) => ({ ...c })),
     };
     setDraft(value);
@@ -194,35 +223,81 @@ export function BoardStudio({ state, tickets, projectName, onSelectTicket, onNew
   }
   return (
     <section className="board-studio" aria-label="Custom board workspace">
-      <div className="board-studio-header">
-        <div>
+      {headerTarget &&
+        createPortal(
           <div className="board-picker">
-            <Select
-              aria-label="Choose board"
-              value={board.id}
-              onChange={(e) => setBoardId(e.target.value)}
+            <details
+              ref={boardMenu}
+              className="board-switcher"
+              open={boardMenuOpen}
+              onToggle={(event) => setBoardMenuOpen(event.currentTarget.open)}
             >
-              {available.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </Select>
-            <button className="icon-button" aria-label="New board" onClick={newBoard}>
-              <Plus size={15} />
-            </button>
+              <summary aria-label="Choose board">
+                {editing && draft.id === boardId ? draft.name : board.name}{' '}
+                <span aria-hidden="true">⌄</span>
+              </summary>
+              {boardMenuOpen && (
+                <div className="board-switcher-menu">
+                  <input
+                    autoFocus
+                    aria-label="Search boards"
+                    placeholder="Search boards…"
+                    value={boardQuery}
+                    onChange={(event) => setBoardQuery(event.target.value)}
+                  />
+                  <div className="board-switcher-options">
+                    {boards
+                      .filter((value) =>
+                        value.name.toLowerCase().includes(boardQuery.toLowerCase()),
+                      )
+                      .map((value) => (
+                        <button
+                          type="button"
+                          key={value.id}
+                          onClick={() => {
+                            setBoardId(value.id);
+                            setBoardMenuOpen(false);
+                            setBoardQuery('');
+                            setEditing(false);
+                          }}
+                        >
+                          {value.name}
+                          {value.id === board.id && <span aria-hidden="true">✓</span>}
+                        </button>
+                      ))}
+                    {!boards.some((value) =>
+                      value.name.toLowerCase().includes(boardQuery.toLowerCase()),
+                    ) && <span className="board-switcher-empty">No boards found</span>}
+                  </div>
+                  <button
+                    type="button"
+                    className="board-switcher-create"
+                    onClick={() => {
+                      newBoard();
+                      setBoardMenuOpen(false);
+                      setBoardQuery('');
+                    }}
+                  >
+                    <Plus size={14} /> New board
+                  </button>
+                </div>
+              )}
+            </details>
             <button
               className="icon-button"
               aria-label="Configure board"
+              disabled={editing && draft.id !== board.id}
               onClick={() => {
                 setDraft(board);
-                setEditing((v) => !v);
+                setEditing((value) => !value);
               }}
             >
               <Settings2 size={15} />
             </button>
-          </div>
-        </div>
+          </div>,
+          headerTarget,
+        )}
+      <div className="board-studio-header">
         <div className="board-studio-actions">
           <div className="view-toggle">
             <button
@@ -421,41 +496,6 @@ export function BoardStudio({ state, tickets, projectName, onSelectTicket, onNew
                 }
               />
             </label>
-            <fieldset>
-              <legend>Projects shown</legend>
-              <label className="board-all-projects">
-                <input
-                  type="checkbox"
-                  checked={draft.projectIds.length === 0}
-                  onChange={(e) =>
-                    patch({ projectIds: e.target.checked ? [] : state.projects.map((p) => p.id) })
-                  }
-                />
-                All projects
-              </label>
-              <div className="board-project-checks">
-                {state.projects.map((p) => (
-                  <label key={p.id}>
-                    <input
-                      type="checkbox"
-                      checked={draft.projectIds.length === 0 || draft.projectIds.includes(p.id)}
-                      onChange={(e) => {
-                        const ids =
-                          draft.projectIds.length === 0
-                            ? state.projects.map((value) => value.id)
-                            : draft.projectIds;
-                        patch({
-                          projectIds: e.target.checked
-                            ? [...new Set([...ids, p.id])]
-                            : ids.filter((id) => id !== p.id),
-                        });
-                      }}
-                    />
-                    {p.name}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
             <fieldset className="board-columns">
               <legend>Columns</legend>
               {draft.columns.map((c, i) => (

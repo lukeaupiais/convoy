@@ -9,6 +9,7 @@ import '../shared/styles/minimal.css';
 import { ChatWorkspace } from '../features/chat/ChatWorkspace';
 import { NewChatDialog } from '../features/chat/ChatWorkspaceContext';
 import { RuntimeSessions } from '../features/sessions/RuntimeViews';
+import { sessionBucket } from '../features/sessions/sessionMonitor';
 import { SettingsPage } from './SettingsPage';
 import { command, useRuntime, type ContextRef } from '../shared/api/runtime';
 import { copyText, newId } from '../shared/lib/browser';
@@ -20,6 +21,7 @@ import { BoardStudio } from '../features/board/BoardStudio';
 import '../shared/styles/readability.css';
 import '../shared/styles/identity.css';
 import { ActiveContext } from '../features/access';
+import { ProjectSwitcher } from '../features/access/ProjectSwitcher';
 
 type Status = 'Backlog' | 'Ready' | 'In progress' | 'In review' | 'Done';
 type Task = {
@@ -275,6 +277,7 @@ function App() {
     (
       {
         'Project board': 'Board',
+        Sessions: 'Live',
         'Project settings': 'Projects',
         'Skills & instructions': 'Library',
         Runners: 'Environments',
@@ -306,6 +309,10 @@ function App() {
           setSelected(id);
         }}
         unpin={togglePin}
+        attentionCount={
+          liveRuntime?.sessions.filter((session) => sessionBucket(session) === 'attention')
+            .length ?? 0
+        }
       />
       <main>
         <header className="topbar">
@@ -319,8 +326,29 @@ function App() {
             >
               <Menu size={20} />
             </button>
-            <strong>{pageTitle}</strong>
-            {liveRuntime && (
+            {page === 'Project board' && liveRuntime && project ? (
+              <>
+                <ProjectSwitcher
+                  state={liveRuntime}
+                  projectId={project.id}
+                  selectContext={(context) => void selectContext(context)}
+                  createProject={() => {
+                    navigate('Project settings');
+                    requestAnimationFrame(() =>
+                      document.querySelector<HTMLInputElement>('#new-project-name')?.focus(),
+                    );
+                  }}
+                  manageProject={() => navigate('Project settings')}
+                />
+                <span className="board-context-divider" aria-hidden="true">
+                  /
+                </span>
+                <span id="board-context-slot" />
+              </>
+            ) : (
+              <strong>{pageTitle}</strong>
+            )}
+            {liveRuntime && page !== 'Project board' && (
               <ActiveContext
                 state={liveRuntime}
                 projectId={project?.id}
@@ -397,7 +425,10 @@ function App() {
                       name: String(f.get('name') ?? ''),
                       description: '',
                     });
-                    setProjectId(value.result.id);
+                    await selectContext({
+                      organizationId: value.result.organizationId,
+                      projectId: value.result.id,
+                    });
                     setToast('Project created.');
                   } catch (e) {
                     setToast((e as Error).message);
@@ -406,7 +437,7 @@ function App() {
               >
                 <label>
                   Project name
-                  <input name="name" required />
+                  <input id="new-project-name" name="name" required />
                 </label>
                 <button className="primary">Create project</button>
               </form>
@@ -427,9 +458,11 @@ function App() {
           </section>
         )}
 
-        {page === 'Project board' && liveRuntime && (
+        {page === 'Project board' && liveRuntime && project && (
           <BoardStudio
+            key={project.id}
             state={liveRuntime}
+            projectId={project.id}
             tickets={tasks as never}
             projectName={projectName}
             onSelectTicket={setSelected}

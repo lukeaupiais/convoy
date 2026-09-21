@@ -24,6 +24,7 @@ type Props = {
   pins: { id: number; title: string }[];
   inspect: (id: number) => void;
   unpin: (id: number) => void;
+  attentionCount: number;
 };
 export function Sidebar({
   page,
@@ -35,6 +36,7 @@ export function Sidebar({
   pins,
   inspect,
   unpin,
+  attentionCount,
 }: Props) {
   const ref = useRef<HTMLElement>(null);
   const [small, setSmall] = useState(() => matchMedia('(max-width:800px)').matches);
@@ -69,14 +71,14 @@ export function Sidebar({
     };
   }, [small, open]);
   const primary = [
-    ['Project board', 'Board', LayoutGrid],
+    ['Project board', 'Projects', LayoutGrid],
     ['Chat', 'Chat', MessageSquare],
-    ['Sessions', 'Sessions', Activity],
+    ['Sessions', 'Live', Activity],
     ['Workflows', 'Workflows', Workflow],
     ['Skills & instructions', 'Library', BookOpen],
   ] as const;
   const settings = [
-    ['Project settings', 'Projects', Folder],
+    ['Project settings', 'Project settings', Folder],
     ['Providers', 'Providers', Cable],
     ['Runners', 'Environments', Server],
   ] as const;
@@ -121,6 +123,14 @@ export function Sidebar({
           >
             <Icon size={17} />
             <span className="nav-label-text">{label}</span>
+            {id === 'Sessions' && attentionCount > 0 && (
+              <span
+                className="sidebar-attention-count"
+                aria-label={`${attentionCount} need attention`}
+              >
+                {attentionCount}
+              </span>
+            )}
           </button>
         ))}
       </nav>
