@@ -1,8 +1,14 @@
-import type { Session } from '../../shared/api/runtime';
+import type { RuntimeState, Session } from '../../shared/api/runtime';
 
-export type SessionBucket = 'active' | 'attention' | 'history' | 'idle';
+export type SessionBucket = 'active' | 'attention' | 'paused' | 'history' | 'idle';
 export function sessionBucket(s: Session): SessionBucket {
-  if (s.pending || s.pendingQuestion || s.assignment?.state === 'uncertain') return 'attention';
+  if (
+    s.pending ||
+    s.pendingQuestion ||
+    s.assignment?.state === 'uncertain' ||
+    s.interruption?.needsReview
+  )
+    return 'attention';
   if (s.terminals?.some((t) => t.state === 'running')) return 'active';
   if (
     [
@@ -13,10 +19,10 @@ export function sessionBucket(s: Session): SessionBucket {
       'awaiting_submission',
       'failed',
       'interrupted',
-      'paused',
     ].includes(s.status)
   )
     return 'attention';
+  if (s.status === 'paused') return 'paused';
   if (['running', 'queued', 'ready'].includes(s.status)) return 'active';
   // A normal chat reply is not a request for operational review.
   if (
@@ -33,6 +39,85 @@ export function sessionBucket(s: Session): SessionBucket {
   )
     return 'history';
   return 'idle';
+}
+
+export function sessionStatus(s: Session, uncertainEffect = false): string {
+  if (uncertainEffect) return 'Effect uncertain';
+  if (s.assignment?.state === 'uncertain' || s.interruption?.needsReview)
+    return 'Outcome uncertain';
+  if (s.pending || s.status === 'waiting_approval') return 'Approval needed';
+  if (s.pendingQuestion || s.status === 'waiting_question') return 'Question';
+  if (s.status === 'waiting_gate' || s.flow?.status === 'waiting_gate') return 'Decision needed';
+  if (s.status === 'awaiting_review') return 'Review needed';
+  if (s.status === 'failed' || s.status === 'interrupted') return 'Inspect failure';
+  if (s.status === 'awaiting_submission' || s.status === 'awaiting_continue')
+    return 'Waiting to continue';
+  if (s.status === 'queued' || s.status === 'ready') return 'Queued';
+  if (s.status === 'paused') return 'Paused';
+  if (s.terminals?.some((t) => t.state === 'running')) return 'Terminal running';
+  return 'Running';
+}
+
+export function sessionProjectId(s: Session, state: RuntimeState): string | undefined {
+  return s.projectId ?? state.tickets.find((ticket) => ticket.id === s.activeTicketId)?.projectId;
+}
+
+export function liveModel(state: RuntimeState, projectFilter = '') {
+  const inProject = (projectId?: string) => !projectFilter || projectId === projectFilter;
+  const sessions = state.sessions.filter((s) => inProject(sessionProjectId(s, state)));
+  const uncertainEffects = (state.workflowEffects ?? []).filter(
+    (effect) => effect.status === 'uncertain',
+  );
+  const effectSession = (effectKey: string) =>
+    sessions.find((s) =>
+      Boolean(s.flow?.id && effectKey.startsWith(`${s.flow.id}:${s.flow.instance}:`)),
+    );
+  const sort = (a: Session, b: Session) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  const attention = sessions
+    .filter(
+      (s) =>
+        sessionBucket(s) === 'attention' ||
+        uncertainEffects.some((effect) => effectSession(effect.effectKey)?.id === s.id),
+    )
+    .sort(sort);
+  const active = sessions
+    .filter((s) => sessionBucket(s) === 'active' && !attention.includes(s))
+    .sort(sort);
+  const paused = sessions
+    .filter((s) => sessionBucket(s) === 'paused' && !attention.includes(s))
+    .sort(sort);
+  const history = sessions
+    .filter((s) => sessionBucket(s) === 'history' && !attention.includes(s))
+    .sort(sort);
+  const triggerFailures = [
+    ...new Map(
+      (state.workflowTriggerFailures ?? [])
+        .filter((failure) => {
+          const current = state.workflowTriggers?.find(
+            (trigger) => trigger.triggerKey === failure.triggerKey,
+          );
+          return !current || current.status === 'failed';
+        })
+        .filter((failure) =>
+          inProject(state.tickets.find((ticket) => ticket.id === failure.ticketId)?.projectId),
+        )
+        .map((failure) => [failure.triggerKey, failure]),
+    ).values(),
+  ];
+  const orphanEffects = uncertainEffects.filter(
+    (effect) => !effectSession(effect.effectKey) && !projectFilter,
+  );
+  return {
+    attention,
+    active,
+    paused,
+    history,
+    triggerFailures,
+    orphanEffects,
+    attentionCount: attention.length + triggerFailures.length + orphanEffects.length,
+    uncertainEffectFor: (s: Session) =>
+      uncertainEffects.some((effect) => effectSession(effect.effectKey)?.id === s.id),
+  };
 }
 
 export function sessionReason(s: Session): string {

@@ -9,7 +9,7 @@ import '../shared/styles/minimal.css';
 import { ChatWorkspace } from '../features/chat/ChatWorkspace';
 import { NewChatDialog } from '../features/chat/ChatWorkspaceContext';
 import { RuntimeSessions } from '../features/sessions/RuntimeViews';
-import { sessionBucket } from '../features/sessions/sessionMonitor';
+import { liveModel } from '../features/sessions/sessionMonitor';
 import { SettingsPage } from './SettingsPage';
 import { command, useRuntime, type ContextRef } from '../shared/api/runtime';
 import { copyText, newId } from '../shared/lib/browser';
@@ -309,10 +309,7 @@ function App() {
           setSelected(id);
         }}
         unpin={togglePin}
-        attentionCount={
-          liveRuntime?.sessions.filter((session) => sessionBucket(session) === 'attention')
-            .length ?? 0
-        }
+        attentionCount={liveRuntime ? liveModel(liveRuntime).attentionCount : 0}
       />
       <main>
         <header className="topbar">
@@ -348,7 +345,7 @@ function App() {
             ) : (
               <strong>{pageTitle}</strong>
             )}
-            {liveRuntime && page !== 'Project board' && (
+            {liveRuntime && page !== 'Project board' && page !== 'Sessions' && (
               <ActiveContext
                 state={liveRuntime}
                 projectId={project?.id}
@@ -473,7 +470,13 @@ function App() {
             }}
           />
         )}
-        {page === 'Sessions' && <RuntimeSessions openChat={inspectConversation} />}
+        {page === 'Sessions' && (
+          <RuntimeSessions
+            openChat={inspectConversation}
+            openTicket={setSelected}
+            openWorkflows={() => navigate('Workflows')}
+          />
+        )}
         {page === 'Chat' && liveRuntime && (
           <ChatWorkspace
             state={liveRuntime}

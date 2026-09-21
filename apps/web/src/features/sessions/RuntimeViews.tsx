@@ -3,8 +3,7 @@ import { command, owns, useRuntime, type RuntimeAction } from '../../shared/api/
 import type { RuntimeState, Session } from '../../shared/api/runtime';
 import './runtime.css';
 import './session-monitor.css';
-import { sessionBucket, sessionReason } from './sessionMonitor';
-import { AgentMark } from '../../shared/ui/AgentMark';
+import { liveModel, sessionProjectId, sessionStatus } from './sessionMonitor';
 import { SessionCapabilities } from '../library';
 
 export function SessionControls({
@@ -515,44 +514,52 @@ export function SessionControls({
   );
 }
 
-export function RuntimeSessions({ openChat }: { openChat: (id: string) => void }) {
+export function RuntimeSessions({
+  openChat,
+  openTicket,
+  openWorkflows,
+}: {
+  openChat: (id: string) => void;
+  openTicket: (id: number) => void;
+  openWorkflows: () => void;
+}) {
   const { state, error } = useRuntime();
-  const [view, setView] = useState<'live' | 'attention' | 'history'>('live');
   const [projectFilter, setProjectFilter] = useState('');
-  const sessionProjectId = (session: Session) =>
-    session.projectId ??
-    state?.tickets.find((ticket) => ticket.id === session.activeTicketId)?.projectId;
-  const all = (state?.sessions ?? []).filter(
-    (session) => !projectFilter || sessionProjectId(session) === projectFilter,
-  );
-  const attention = all.filter((s) => sessionBucket(s) === 'attention');
-  const active = all.filter((s) => sessionBucket(s) === 'active');
-  const history = all.filter((s) => sessionBucket(s) === 'history');
-  const sessions = (
-    view === 'history' ? history : view === 'attention' ? attention : [...attention, ...active]
-  )
-    .slice()
-    .sort((a, b) => {
-      if (view === 'live' && sessionBucket(a) !== sessionBucket(b))
-        return sessionBucket(a) === 'attention' ? -1 : 1;
-      return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
-    });
+  const [showHistory, setShowHistory] = useState(false);
+  const model = state ? liveModel(state, projectFilter) : null;
+  const projectName = (id?: string) =>
+    state?.projects.find((project) => project.id === id)?.name ?? 'Project';
+  const sessionRow = (s: Session, historical = false) => {
+    const ticket = state?.tickets.find((value) => value.id === s.activeTicketId);
+    const label = historical ? 'Completed' : sessionStatus(s, model?.uncertainEffectFor(s));
+    return (
+      <button
+        className="live-row"
+        key={s.id}
+        onClick={() => openChat(s.conversationId ?? s.id)}
+        title={s.title}
+      >
+        <span className="live-row-main">
+          <strong>{ticket?.title ?? s.title}</strong>
+          <small>
+            {projectName(state ? sessionProjectId(s, state) : undefined)}
+            {s.activeTicketId ? ` · CVY-${s.activeTicketId}` : ''}
+          </small>
+        </span>
+        <span className="live-row-state">{label}</span>
+        <span className="live-row-arrow" aria-hidden="true">
+          →
+        </span>
+      </button>
+    );
+  };
   return (
     <section className="runtime-page execution-monitor">
-      <h1 className="sr-only">Execution monitor</h1>
-      <div className="monitor-filters" role="group" aria-label="Session scope">
-        <button aria-pressed={view === 'live'} onClick={() => setView('live')}>
-          Live <span>{active.length + attention.length}</span>
-        </button>
-        <button aria-pressed={view === 'attention'} onClick={() => setView('attention')}>
-          Needs attention <span>{attention.length}</span>
-        </button>
-        <button aria-pressed={view === 'history'} onClick={() => setView('history')}>
-          History <span>{history.length}</span>
-        </button>
+      <h1 className="sr-only">Live execution</h1>
+      <div className="live-toolbar">
         {(state?.projects.length ?? 0) > 1 && (
           <select
-            aria-label="Filter sessions by project"
+            aria-label="Filter Live by project"
             value={projectFilter}
             onChange={(event) => setProjectFilter(event.target.value)}
           >
@@ -564,83 +571,85 @@ export function RuntimeSessions({ openChat }: { openChat: (id: string) => void }
             ))}
           </select>
         )}
+        <button aria-pressed={showHistory} onClick={() => setShowHistory((value) => !value)}>
+          {showHistory ? 'Current work' : 'History'}
+        </button>
       </div>
       {error && <p role="alert">{error}</p>}
       {!state && !error && <p className="muted">Loading execution state…</p>}
-      {state && !sessions.length && (
-        <div className="monitor-empty">
-          <h2>
-            {view === 'history'
-              ? 'No past activity yet'
-              : view === 'attention'
-                ? 'Nothing needs your attention'
-                : 'No active execution'}
-          </h2>
-          <p>
-            {view === 'history'
-              ? 'Finished agent sessions appear here. Empty conversations stay in Chat.'
-              : 'Your conversations are still in Chat. This monitor fills when agents run or need a decision.'}
-          </p>
-        </div>
-      )}
-      {sessions.map((s) => {
-        const ticket = state?.tickets.find((t) => t.id === s.activeTicketId);
-        const runner = state?.runners.find((r) => r.id === (s.assignment?.runnerId ?? s.runnerId));
-        const environment = state?.environments.find((e) => e.id === runner?.environmentId);
-        const label =
-          sessionBucket(s) === 'history' && s.status === 'awaiting_review'
-            ? 'Completed turn'
-            : s.status.replaceAll('_', ' ');
-        return (
-          <article className="monitor-session" key={s.id}>
-            <div className="monitor-session-heading">
-              <div>
-                <strong className="agent-title">
-                  <AgentMark id={s.currentAgentSessionId ?? s.id} active={s.status === 'running'} />
-                  {ticket?.title ?? s.title}
-                </strong>
-                <p>
-                  {state?.projects.find((project) => project.id === sessionProjectId(s))?.name ??
-                    'Project'}{' '}
-                  · {s.activeTicketId ? `CVY-${s.activeTicketId}` : 'Conversation agent'} ·{' '}
-                  {s.model}
-                  {s.workflow && ` · ${s.workflow.name}`}
-                </p>
-              </div>
-              <span
-                className={`run-status ${sessionBucket(s) === 'history' ? 'historical' : s.status}`}
-              >
-                {label}
-              </span>
-            </div>
-            <p className="monitor-reason">{sessionReason(s)}</p>
-            <div className="monitor-location">
-              <span>
-                {runner
-                  ? `${runner.name} · ${environment?.name ?? runner.kind}`
-                  : s.status === 'queued'
-                    ? 'Environment awaiting placement'
-                    : 'Text-only · no workspace'}
-              </span>
-              <time dateTime={s.updatedAt}>Updated {new Date(s.updatedAt).toLocaleString()}</time>
-            </div>
-            {s.status === 'running' && Date.now() - Date.parse(s.updatedAt) > 60000 && (
-              <p className="chat-error">
-                No new output for over a minute. Inspect before restarting.
-              </p>
+      {state &&
+        model &&
+        (showHistory ? (
+          <>
+            {model.history.length ? (
+              model.history.map((s) => sessionRow(s, true))
+            ) : (
+              <p className="live-empty">No completed work</p>
             )}
-            <div className="monitor-actions">
-              <button className="secondary" onClick={() => openChat(s.conversationId ?? s.id)}>
-                Open chat
-              </button>
-            </div>
-            <details className="monitor-inspector">
-              <summary>Inspect session</summary>
-              <SessionControls session={s} state={state!} />
-            </details>
-          </article>
-        );
-      })}
+          </>
+        ) : (
+          <>
+            {model.attentionCount > 0 && (
+              <div className="live-section-label">
+                Needs action <span>{model.attentionCount}</span>
+              </div>
+            )}
+            {model.triggerFailures.map((failure) => {
+              const ticket = state.tickets.find((value) => value.id === failure.ticketId);
+              return (
+                <details className="live-alert" key={`trigger:${failure.triggerKey}`}>
+                  <summary className="live-row">
+                    <span className="live-row-main">
+                      <strong>{ticket?.title ?? `CVY-${failure.ticketId}`}</strong>
+                      <small>
+                        {projectName(ticket?.projectId)} · CVY-{failure.ticketId}
+                      </small>
+                    </span>
+                    <span className="live-row-state">Workflow start failed</span>
+                  </summary>
+                  <div className="live-alert-details">
+                    <p>{failure.message ?? 'The pinned workflow could not start.'}</p>
+                    <button onClick={() => openTicket(failure.ticketId)}>Open ticket</button>
+                  </div>
+                </details>
+              );
+            })}
+            {model.orphanEffects.map((effect) => (
+              <details className="live-alert" key={`effect:${effect.effectKey}`}>
+                <summary className="live-row">
+                  <span className="live-row-main">
+                    <strong>Workflow effect</strong>
+                    <small>{effect.operation}</small>
+                  </span>
+                  <span className="live-row-state">Outcome uncertain</span>
+                </summary>
+                <div className="live-alert-details">
+                  <p>{effect.message ?? 'Inspect the effect before attempting recovery.'}</p>
+                  <small>{effect.effectKey}</small>
+                  <button onClick={openWorkflows}>Open workflows</button>
+                </div>
+              </details>
+            ))}
+            {model.attention.map((s) => sessionRow(s))}
+            {model.active.length > 0 && (
+              <div className="live-section-label">
+                In progress <span>{model.active.length}</span>
+              </div>
+            )}
+            {model.active.map((s) => sessionRow(s))}
+            {model.paused.length > 0 && (
+              <details className="live-paused">
+                <summary>
+                  Paused <span>{model.paused.length}</span>
+                </summary>
+                {model.paused.map((s) => sessionRow(s))}
+              </details>
+            )}
+            {!model.attentionCount && !model.active.length && !model.paused.length && (
+              <p className="live-empty">No work in progress</p>
+            )}
+          </>
+        ))}
     </section>
   );
 }
