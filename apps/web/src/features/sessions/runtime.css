@@ -1,0 +1,267 @@
+.runtime-page {
+  padding: 24px 26px;
+  overflow: auto;
+  min-height: 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.runtime-page h1 {
+  font-size: 17px;
+  font-weight: 550;
+  margin: 0;
+}
+.runtime-page h2 {
+  font-size: 14px;
+  margin-top: 28px;
+}
+.runtime-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.runtime-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.runtime-toolbar select,
+.runtime-form input,
+.runtime-form select,
+.runtime-form textarea {
+  border: 1px solid #dce0e5;
+  background: #fff;
+  border-radius: 5px;
+  padding: 8px;
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+}
+.runtime-toolbar select {
+  max-width: 260px;
+}
+.runtime-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid #e9ebef;
+}
+.runtime-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.runtime-row strong {
+  font-weight: 550;
+}
+.runtime-row small {
+  display: block;
+  color: #7a838f;
+  overflow-wrap: anywhere;
+}
+.run-status {
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #f0f2f4;
+  white-space: nowrap;
+  color: #616b77;
+}
+.run-status.waiting_approval,
+.run-status.awaiting_review {
+  background: #fff5df;
+  color: #896724;
+}
+.run-status.failed,
+.run-status.interrupted {
+  background: #fceeed;
+  color: #a34f45;
+}
+.run-status.accepted {
+  background: #edf5ee;
+  color: #4b7858;
+}
+.runtime-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  max-width: 800px;
+  margin: 20px 0 28px;
+}
+.runtime-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.runtime-form .wide {
+  grid-column: 1/-1;
+}
+.runtime-form button {
+  justify-self: start;
+}
+.runtime-details {
+  font-size: 11px;
+  line-height: 1.6;
+  border-bottom: 1px solid #e9ebef;
+  padding: 10px 0;
+}
+.runtime-details summary {
+  cursor: pointer;
+  color: #66717f;
+}
+.runtime-details p {
+  color: #7a838f;
+}
+.runtime-details pre,
+.approval-card pre,
+.runtime-editor textarea {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 260px;
+  overflow: auto;
+  background: #f8f9fa;
+  border: 1px solid #e8ebef;
+  padding: 12px;
+  border-radius: 5px;
+  font: 11px/1.65 monospace;
+}
+.runtime-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.runtime-editor textarea {
+  max-height: none;
+  height: 440px;
+  resize: vertical;
+  color: inherit;
+}
+.session-controls {
+  font-size: 11px;
+}
+.approval-card {
+  padding: 14px;
+  border: 1px solid #eadbbd;
+  border-radius: 6px;
+  background: #fffcf6;
+  margin: 10px 0;
+}
+.approval-card p {
+  font-size: 10px;
+  color: #857452;
+}
+.session-chat .runtime-details {
+  flex-shrink: 0;
+}
+.session-chat .session-controls {
+  flex-shrink: 0;
+  max-height: 38vh;
+  overflow: auto;
+}
+.runtime-event {
+  font-size: 11px;
+  padding: 9px 0;
+  color: #7a838f;
+  border-bottom: 1px solid #f0f1f3;
+}
+.runtime-event pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+.runtime-info {
+  font-size: 11px;
+  color: #7a838f;
+  padding: 10px 0;
+}
+@media (max-width: 600px) {
+  .runtime-page {
+    padding: 20px 18px;
+  }
+  .runtime-form {
+    grid-template-columns: 1fr;
+  }
+  .runtime-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .runtime-row > div:first-child {
+    flex-basis: 100%;
+  }
+  .runtime-toolbar {
+    gap: 7px;
+  }
+  .runtime-toolbar select {
+    max-width: 210px;
+  }
+  .session-chat .session-controls {
+    max-height: 30vh;
+  }
+  .runtime-details {
+    font-size: 10px;
+  }
+  .runtime-toolbar .secondary,
+  .runtime-toolbar .primary {
+    font-size: 10px;
+  }
+}
+.environment-settings fieldset {
+  min-width: 0;
+  border: 1px solid #e0e4e8;
+  border-radius: 6px;
+  padding: 12px;
+}
+.environment-settings fieldset label {
+  flex-direction: row;
+  align-items: center;
+}
+.environment-settings fieldset input {
+  flex: none;
+}
+.placement-editor,
+.environment-settings {
+  max-width: 900px;
+  overflow-wrap: anywhere;
+}
+.breadcrumb select {
+  max-width: 230px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.runtime-form select[multiple] {
+  min-height: 105px;
+}
+.runtime-form fieldset label {
+  margin: 6px 0;
+}
+.run-status.queued {
+  background: #f1f2fa;
+  color: #605783;
+}
+@media (max-width: 600px) {
+  .breadcrumb select {
+    max-width: 140px;
+  }
+  .runtime-form input:not([type='checkbox']),
+  .runtime-form select,
+  .runtime-form textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  .runtime-form input[type='checkbox'] {
+    min-width: 22px;
+    min-height: 22px;
+  }
+  .environment-settings summary,
+  .placement-editor button {
+    min-height: 44px;
+  }
+  .runtime-form fieldset {
+    max-width: 100%;
+    min-width: 0;
+  }
+}

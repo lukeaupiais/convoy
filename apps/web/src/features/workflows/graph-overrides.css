@@ -1,0 +1,27 @@
+.workflow-canvas-shell {
+  grid-template-columns: 92px minmax(500px, 1fr);
+}
+.workflow-canvas-shell:has(.node-inspector) {
+  grid-template-columns: 92px minmax(500px, 1fr) 250px;
+}
+.workflow-studio-heading .eyebrow {
+  display: none;
+}
+@media (max-width: 900px) {
+  .workflow-canvas-shell,
+  .workflow-canvas-shell:has(.node-inspector) {
+    grid-template-columns: 72px minmax(500px, 1fr);
+  }
+  .workflow-canvas-shell:has(.node-inspector) .node-inspector {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 600px) {
+  .workflow-canvas-shell,
+  .workflow-canvas-shell:has(.node-inspector) {
+    grid-template-columns: 1fr;
+  }
+  .workflow-studio-heading .muted {
+    display: none;
+  }
+}

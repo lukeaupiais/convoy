@@ -1,0 +1,23 @@
+.ticket-custom-fields {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid #e1e5e8;
+  border-radius: 6px;
+  padding: 10px;
+}
+.ticket-custom-fields legend {
+  padding: 0 4px;
+  color: #66717f;
+}
+.ticket-custom-field {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.7fr) minmax(0, 1fr) 32px;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+.ticket-custom-field input {
+  min-width: 0;
+}
+.ticket-custom-field .icon-button {
+  padding: 4px;
+}

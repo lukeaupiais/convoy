@@ -1,0 +1,127 @@
+.execution-monitor {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.monitor-heading p {
+  color: #777f89;
+  font-size: 12px;
+  margin: 7px 0 24px;
+}
+.monitor-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e9ebef;
+}
+.monitor-filters button {
+  padding: 9px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: #707782;
+}
+.monitor-filters button[aria-pressed='true'] {
+  background: #eceff2;
+  color: #343c47;
+}
+.monitor-filters span {
+  margin-left: 6px;
+  font-size: 10px;
+  color: #808995;
+}
+.monitor-session {
+  padding: 22px 0;
+  border-bottom: 1px solid #e9ebef;
+}
+.monitor-session-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.monitor-session-heading > div {
+  min-width: 0;
+}
+.monitor-session-heading strong {
+  font-size: 13px;
+  font-weight: 550;
+  color: #414954;
+  overflow-wrap: anywhere;
+}
+.monitor-session-heading p {
+  font-size: 11px;
+  color: #7b8490;
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+.monitor-reason {
+  color: #5a6470;
+  margin: 12px 0 7px;
+  overflow-wrap: anywhere;
+}
+.monitor-location {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  font-size: 10px;
+  color: #858e99;
+}
+.monitor-actions {
+  margin-top: 14px;
+}
+.monitor-inspector {
+  margin-top: 10px;
+}
+.monitor-inspector > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: #677380;
+  padding: 7px 0;
+}
+.monitor-inspector[open] {
+  background: #fafbfc;
+  border: 1px solid #e7eaf0;
+  border-radius: 8px;
+  padding: 12px;
+}
+.monitor-empty {
+  padding: 45px 0;
+  text-align: center;
+}
+.monitor-empty h2 {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0;
+  color: #535e6b;
+}
+.monitor-empty p,
+.monitor-footnote {
+  font-size: 11px;
+  color: #828c99;
+  line-height: 1.8;
+}
+.monitor-footnote {
+  margin-top: 24px;
+}
+@media (max-width: 600px) {
+  .monitor-filters button {
+    min-height: 44px;
+    padding: 9px 10px;
+  }
+  .monitor-session-heading {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .monitor-session-heading > div {
+    flex-basis: 100%;
+  }
+  .monitor-actions button,
+  .monitor-inspector > summary {
+    min-height: 44px;
+  }
+  .monitor-inspector .runtime-toolbar select {
+    max-width: 100%;
+  }
+}

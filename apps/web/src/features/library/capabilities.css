@@ -1,0 +1,287 @@
+.capability-library {
+  display: grid;
+  gap: 22px;
+  max-width: 1080px;
+}
+.capability-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  gap: 12px;
+  overflow-x: auto;
+}
+.capability-tabs button {
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 12px 8px;
+  cursor: pointer;
+}
+.capability-tabs button[aria-pressed='true'] {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.capability-search {
+  max-width: 400px;
+}
+.tool-library {
+  display: grid;
+  gap: 8px;
+}
+.tool-node {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+.tool-node > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+.tool-node > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.tool-node[open] > summary .tool-chevron {
+  transform: rotate(90deg);
+}
+.tool-node > summary:hover {
+  background: var(--surface);
+}
+.tool-overview {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.tool-overview strong {
+  font-size: 14px;
+  font-weight: 550;
+}
+.tool-overview > span {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.tool-badges {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.tool-badges small {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 10px;
+}
+.tool-node-body {
+  padding: 0 18px 18px 44px;
+}
+.tool-node-body > p {
+  margin: 0 0 16px;
+  max-width: 650px;
+}
+.tool-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 36px;
+  margin: 0 0 16px;
+  font-size: 12px;
+}
+.tool-facts div {
+  display: grid;
+  gap: 5px;
+}
+.tool-facts dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+.tool-facts dd {
+  margin: 0;
+}
+.tool-technical {
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+.tool-rules {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.tool-rules > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.tool-technical summary {
+  cursor: pointer;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+@media (max-width: 600px) {
+  .tool-node > summary {
+    padding: 14px 12px;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .tool-chevron {
+    margin-top: 2px;
+  }
+  .tool-node-body {
+    padding: 0 14px 16px 36px;
+  }
+  .tool-badges {
+    flex-direction: column;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool-chevron {
+    transition: none;
+  }
+}
+.capability-library input:not([type='checkbox']):not([type='file']),
+.capability-library textarea {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.capability-library input:focus-visible,
+.capability-library textarea:focus-visible,
+.capability-library button:focus-visible,
+.capability-library summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.capability-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.capability-cards > details,
+.capability-editor {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px;
+  min-width: 0;
+}
+.capability-cards summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+.capability-library small,
+.capability-list small {
+  color: var(--muted);
+  line-height: 1.6;
+}
+.capability-library p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.capability-library pre {
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.capability-editor {
+  display: grid;
+  gap: 16px;
+}
+details.capability-editor:not([open]) {
+  display: block;
+}
+.capability-editor > summary {
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+.capability-editor label:not(.capability-check),
+.capability-default {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.capability-editor textarea {
+  width: 100%;
+  font-family: monospace;
+  resize: vertical;
+}
+.capability-fields,
+.capability-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.capability-editor fieldset {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
+.capability-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.capability-check input {
+  width: 17px !important;
+  height: 17px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+.capability-library input[type='file'] {
+  max-width: 240px;
+  font-size: 12px;
+}
+.capability-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.capability-list small {
+  text-align: right;
+  max-width: 65%;
+}
+.capability-session .runtime-toolbar {
+  margin: 14px 0;
+}
+@media (max-width: 600px) {
+  .capability-fields,
+  .capability-options {
+    grid-template-columns: 1fr;
+  }
+  .capability-library input:not([type='checkbox']),
+  .capability-library textarea {
+    font-size: 16px;
+  }
+  .capability-library button {
+    min-height: 44px;
+  }
+  .capability-tabs {
+    gap: 4px;
+  }
+}

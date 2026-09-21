@@ -1,0 +1,13 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+const target = process.argv[2] ?? 'bun-linux-x64-baseline';
+if (!['bun-linux-x64-baseline', 'bun-linux-arm64'].includes(target)) throw new Error('Supported worker targets: bun-linux-x64-baseline, bun-linux-arm64');
+const platform = target.includes('arm64') ? 'linux-arm64' : 'linux-x64';
+await mkdir('dist-worker', { recursive: true });
+const file = `convoy-worker-${platform}`;
+const result = spawnSync('bun', ['build', '--compile', `--target=${target}`, 'apps/worker/src/worker.mjs', '--outfile', `dist-worker/${file}`], { stdio: 'inherit' });
+if (result.status !== 0) process.exit(result.status ?? 1);
+const sha256 = createHash('sha256').update(await readFile(`dist-worker/${file}`)).digest('hex');
+await writeFile(`dist-worker/${platform}.json`, JSON.stringify({ protocol: 1, platform, file, sha256 }, null, 2) + '\n');
+console.log(`Worker built: ${platform} ${sha256}`);

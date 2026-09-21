@@ -1,0 +1,50 @@
+.provider-settings > h2 {
+  margin-top: 28px;
+}
+.provider-row {
+  flex-wrap: wrap;
+}
+.provider-actions {
+  display: flex;
+  flex: 1 0 100%;
+  gap: 8px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid #d9dfd9;
+}
+.provider-actions form {
+  display: flex;
+  gap: 6px;
+}
+.provider-actions input {
+  width: min(240px, 40vw);
+}
+.provider-admin {
+  margin: 14px 0 26px;
+  padding: 12px;
+  border: 1px solid #c4cec8;
+  border-radius: 5px;
+  background: #fffdf8;
+}
+.provider-admin > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.provider-admin > .runtime-form {
+  margin-top: 14px;
+}
+.permission-note {
+  padding: 10px 12px;
+  border-left: 3px solid #8d9b95;
+  background: #f1f3ef;
+}
+@media (max-width: 800px) {
+  .provider-actions,
+  .provider-actions form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .provider-actions input {
+    width: 100%;
+  }
+}

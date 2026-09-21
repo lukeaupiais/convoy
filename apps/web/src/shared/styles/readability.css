@@ -1,0 +1,104 @@
+/* Keep the quiet palette without sacrificing essential content contrast. */
+.task-card h3 {
+  font-size: 13px;
+  color: #49424f;
+}
+.task-id,
+.mini-agent,
+.mini-agent.unassigned,
+.session-preview small,
+.session-intro > span:last-child,
+.session-host,
+.column-count,
+.add-card,
+.toolbar-end,
+.board-footer {
+  color: #807487;
+}
+.tag {
+  color: #78628c;
+}
+.tag-integration {
+  color: #57789c;
+}
+.tag-design {
+  color: #985574;
+}
+.tag-skills,
+.tag-core,
+.tag-architecture {
+  color: #7a5c9a;
+}
+.tag-workflow {
+  color: #8c6d38;
+}
+.tag-documentation {
+  color: #547a65;
+}
+.tag-infrastructure {
+  color: #637487;
+}
+.column-4 .task-card {
+  opacity: 1;
+}
+.page-heading p,
+.scope,
+.project-tabs button,
+.search input::placeholder,
+.board-toolbar select {
+  color: #797180;
+}
+.description,
+.detail-properties label,
+.detail-properties > div,
+.detail-properties strong,
+.timeline strong,
+.terminal-preview p,
+.terminal-preview small,
+.notice,
+.muted {
+  color: #81718c;
+}
+.workflow-step h3 {
+  color: #65576d;
+}
+.workflow-step p,
+.info-panel p,
+.info-panel > span:not(.icon-tile),
+.session-large p,
+.session-large dt,
+.session-large dd {
+  color: #80718b;
+}
+.editor textarea {
+  color: #6c567d;
+}
+.editor-heading,
+.skills-list button {
+  color: #7a658b;
+}
+.editor-heading .saved {
+  color: #637b64;
+}
+.skills-list small,
+.timeline small {
+  color: #86758f;
+}
+.terminal-preview code {
+  color: #79518d;
+}
+.detail h2,
+.new-task h2 {
+  color: #56445f;
+}
+.session-large h2 {
+  color: #54445e;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,4 @@
+.board-studio-header > div:first-child > .muted,
+.board-settings-heading .muted {
+  display: none;
+}

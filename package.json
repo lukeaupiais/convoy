@@ -1,0 +1,38 @@
+{
+  "name": "convoy",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "format": "prettier --write apps/web/src packages/contracts/src",
+    "format:check": "prettier --check apps/web/src packages/contracts/src",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:worker": "node scripts/build-worker.mjs",
+    "test:remote": "node scripts/test-remote-worker.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "server": "node apps/daemon/src/bootstrap/index.mjs",
+    "test": "node --test --test-concurrency=1 tests/*/*.test.mjs",
+    "test:acceptance": "node --test --test-concurrency=1 tests/acceptance/*.test.mjs",
+    "test:modules": "node --test --test-concurrency=1 tests/modules/*.test.mjs tests/runner/*.test.mjs tests/web/*.test.mjs",
+    "attach": "node apps/cli/src/cli.mjs attach",
+    "terminal": "node apps/cli/src/cli.mjs terminal",
+    "sessions": "node apps/cli/src/cli.mjs sessions"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "prettier": "^3.6.2",
+    "typescript": "~5.9.2",
+    "vite": "^6.3.5"
+  }
+}

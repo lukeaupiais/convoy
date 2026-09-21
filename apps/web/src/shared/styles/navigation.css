@@ -1,0 +1,248 @@
+.app-navigation {
+  width: 208px;
+  padding: 22px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 30px;
+}
+.app-navigation nav {
+  display: grid;
+  gap: 4px;
+}
+.app-navigation nav button,
+.pinned-row > button:first-child,
+.collapse-sidebar {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 10px;
+  text-align: left;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #69717c;
+  min-width: 0;
+}
+.app-navigation nav button:hover,
+.pinned-row button:hover {
+  background: #eceef1;
+}
+.app-navigation nav button[aria-current='page'] {
+  background: #e8ebef;
+  color: #303943;
+  font-weight: 550;
+}
+.app-navigation svg {
+  flex-shrink: 0;
+}
+.sidebar-pins {
+  margin-top: 32px;
+}
+.nav-section-label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 0 10px;
+  color: #8b929d;
+  font-size: 10px;
+}
+.sidebar-pins p {
+  padding: 0 10px;
+  line-height: 1.7;
+}
+.pinned-row {
+  display: flex;
+  align-items: center;
+  margin-top: 6px;
+}
+.pinned-row > button:first-child {
+  flex: 1;
+  overflow: hidden;
+}
+.pinned-row .nav-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.unpin {
+  padding: 8px;
+  color: #9199a4;
+}
+.navigation-bottom {
+  margin-top: auto;
+  padding-top: 35px;
+}
+.collapse-sidebar {
+  margin-top: 14px;
+  border-top: 1px solid #e4e7eb;
+  border-radius: 0;
+  font-size: 10px;
+}
+.drawer-close {
+  display: none;
+}
+.app > main {
+  margin-left: 208px;
+}
+.nav-collapsed .app-navigation {
+  width: 64px;
+  padding-inline: 8px;
+}
+.nav-collapsed > main {
+  margin-left: 64px;
+}
+.nav-collapsed .app-navigation .nav-label-text {
+  display: none;
+}
+.nav-collapsed .app-navigation .brand {
+  padding-left: 10px;
+}
+.nav-collapsed .app-navigation nav button,
+.nav-collapsed .collapse-sidebar {
+  justify-content: center;
+}
+.board-scope {
+  position: relative;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.board-scope > summary {
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid #e0e4e9;
+  padding: 8px 10px;
+  border-radius: 5px;
+  color: #626d7a;
+}
+.scope-options {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 5px;
+  z-index: 30;
+  width: 260px;
+  max-width: calc(100vw - 40px);
+  max-height: 320px;
+  overflow: auto;
+  background: white;
+  border: 1px solid #dfe3e8;
+  box-shadow: 0 8px 28px #27334818;
+  border-radius: 8px;
+  padding: 10px;
+}
+.scope-options label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 5px;
+  overflow-wrap: anywhere;
+}
+.scope-options input {
+  flex-shrink: 0;
+}
+.scope-options button {
+  padding: 8px 5px;
+  color: #536171;
+}
+.card-project {
+  display: block;
+  font-size: 10px;
+  color: #758396;
+  margin-bottom: 7px;
+  overflow-wrap: anywhere;
+}
+.page-project-scope {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 26px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.page-project-scope select {
+  max-width: 280px;
+  border: 1px solid #e1e4e8;
+  border-radius: 5px;
+  padding: 8px;
+}
+.board-toolbar {
+  flex-wrap: wrap;
+}
+.task-table .list-task-title {
+  display: grid;
+  gap: 5px;
+}
+.task-table .card-project {
+  margin: 0;
+}
+.pin-ticket {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.app .topbar {
+  border-bottom: 1px solid #eceef1;
+}
+.task-table > button {
+  min-width: 0;
+}
+@media (max-width: 800px) {
+  .app > main,
+  .nav-collapsed > main {
+    margin-left: 0;
+  }
+  .app-navigation,
+  .nav-collapsed .app-navigation {
+    width: 248px;
+    padding: 22px 14px;
+    visibility: hidden;
+  }
+  .app-navigation.open {
+    visibility: visible;
+  }
+  .nav-collapsed .app-navigation .nav-label-text {
+    display: initial;
+  }
+  .nav-collapsed .app-navigation nav button {
+    justify-content: flex-start;
+  }
+  .drawer-close {
+    display: inline-flex;
+    padding: 10px;
+  }
+  .collapse-sidebar {
+    display: none;
+  }
+  .scope-options label {
+    min-height: 44px;
+  }
+  .page-project-scope {
+    padding: 10px 18px;
+    flex-wrap: wrap;
+  }
+  .page-project-scope select {
+    max-width: 100%;
+    font-size: 16px;
+  }
+  .app-navigation nav button {
+    min-height: 44px;
+  }
+  .board-scope > summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .board-toolbar .search {
+    flex-basis: 130px;
+  }
+  .app-navigation .sidebar-pins {
+    margin-top: 25px;
+  }
+}

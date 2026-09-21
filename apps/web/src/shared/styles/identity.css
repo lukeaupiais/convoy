@@ -1,0 +1,930 @@
+/* Convoy identity
+   A clear working surface with nautical-chart warmth, signal colors and restrained
+   early-2000s control details. Product state colors remain user-defined. */
+:root {
+  color-scheme: light;
+  --ink: #15363a;
+  --muted: #5c6f6e;
+  --accent: #c95632;
+  --accent-hover: #a94125;
+  --paper: #e9e6d8;
+  --surface: #faf7e9;
+  --surface-2: #f1eddd;
+  --line: #a9b3a8;
+  --line-strong: #728783;
+  --rail: #16383c;
+  --rail-soft: #20474a;
+  --signal: #f0bd45;
+  --sea: #2f7b73;
+  --purple: var(--sea);
+  font-family: Tahoma, Verdana, 'Segoe UI', sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+body {
+  background: var(--paper);
+  color: var(--ink);
+}
+* {
+  scrollbar-color: #82958f #d8d6c8;
+  scrollbar-width: thin;
+}
+::selection {
+  background: #f2cb69;
+  color: #102c31;
+}
+.app > main {
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(#52736c0a 1px, transparent 1px),
+    linear-gradient(90deg, #52736c0a 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.app :is(input, textarea, select) {
+  accent-color: var(--sea);
+}
+.app :is(button, a, summary, input, textarea, select):focus-visible {
+  outline: 2px solid #d65c34;
+  outline-offset: 2px;
+}
+
+/* Fleet rail */
+.app .app-navigation {
+  background: var(--rail);
+  color: #f8f3df;
+  border-right: 1px solid #0c282c;
+  box-shadow: inset -1px 0 #6c938b42;
+}
+.app .app-navigation::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--signal) 0 34%, #e66c3c 34% 67%, #68aaa1 67%);
+}
+.app-navigation .sidebar-brand {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 4px 0 34px;
+  padding: 4px 0 3px;
+  background: var(--rail);
+}
+.app-navigation .brand {
+  gap: 10px;
+  padding: 0 7px;
+  color: #f8f3df;
+  min-width: 0;
+}
+.app-navigation .brand-mark {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  color: #17383c;
+  background: #f4eed8;
+  border: 1px solid #fff8df;
+  border-radius: 4px;
+  box-shadow:
+    inset 0 -2px #cfc8af,
+    0 2px 0 #0c282c;
+  transform: none;
+}
+.app-navigation .brand-mark svg {
+  width: 30px;
+  height: 30px;
+}
+.brand-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.brand-copy strong {
+  font:
+    800 17px/1 Tahoma,
+    Verdana,
+    sans-serif;
+  letter-spacing: 1.7px;
+  text-transform: uppercase;
+}
+.brand-copy small {
+  color: #b9d0c9;
+  font:
+    9px/1.1 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  letter-spacing: 0.25px;
+  white-space: nowrap;
+}
+.app-navigation nav {
+  gap: 5px;
+}
+.app-navigation nav button {
+  color: #dce9e4;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 10px 11px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.app-navigation nav button svg {
+  color: #a8c8c0;
+  opacity: 1;
+  stroke-width: 1.8;
+}
+.app-navigation nav button:hover,
+.app-navigation .pinned-row button:hover {
+  background: #255055;
+  color: #fff9e8;
+}
+.app-navigation nav button[aria-current='page'] {
+  color: #fff9e8;
+  background: linear-gradient(#2c5b5e, #244c50);
+  border-color: #4e7672;
+  box-shadow:
+    inset 3px 0 var(--signal),
+    inset 0 1px #ffffff12,
+    0 1px #0c2629;
+}
+.app-navigation nav button[aria-current='page'] svg {
+  color: var(--signal);
+}
+.app-navigation
+  :is(
+    .collapse-sidebar,
+    .nav-section-label,
+    .pinned-row > button:first-child,
+    .unpin,
+    .drawer-close
+  ) {
+  color: #bdd0ca;
+}
+.app-navigation .navigation-bottom {
+  border-top: 1px solid #31595b;
+  padding-top: 18px;
+}
+.nav-collapsed .app-navigation .brand {
+  padding-left: 6px;
+}
+
+/* Application chrome and controls */
+.app .topbar {
+  min-height: 60px;
+  height: 60px;
+  padding-inline: 30px;
+  background: linear-gradient(#f8f4e4, #ece8d8);
+  border-bottom: 1px solid #879994;
+  box-shadow: inset 0 -1px #fffdf2;
+}
+.breadcrumb strong {
+  color: #183b3f;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.app .primary {
+  background: linear-gradient(#dc6840, #c75331);
+  color: #fffaf0;
+  border: 1px solid #95391f;
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px #f39a77,
+    0 1px 1px #19363830;
+  font-weight: 700;
+  font-size: 11px;
+}
+.app .primary:hover {
+  background: linear-gradient(#e37149, #b94729);
+  border-color: #82301b;
+}
+.app .secondary {
+  background: linear-gradient(#fffdf3, #e9e5d6);
+  color: #274b4d;
+  border: 1px solid #9daba5;
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px #fff,
+    0 1px 1px #17393a18;
+}
+.app .secondary:hover {
+  background: #fffdf2;
+  border-color: #728d88;
+  color: #15383b;
+}
+.app button:disabled {
+  box-shadow: none;
+}
+.app :is(input, textarea, select) {
+  color: var(--ink);
+}
+.app input::placeholder,
+.app textarea::placeholder,
+.select-search input::placeholder {
+  color: #72827e;
+  opacity: 1;
+}
+
+/* Shared panels and custom selects */
+.app
+  :is(.runtime-form, .board-settings, .new-task, .node-inspector, .chat-settings, .placement-editor)
+  :is(input, textarea, select) {
+  background: #fffdf3;
+  color: var(--ink);
+  border-color: #9eaca5;
+  border-radius: 3px;
+}
+.app
+  :is(
+    .board-settings,
+    .board-ticket-list,
+    .monitor-inspector,
+    .runtime-details[open],
+    .settings-card,
+    .approval-card
+  ) {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+.app
+  :is(
+    .muted,
+    .field-hint,
+    .runtime-details summary,
+    .conversation-heading,
+    .linked-work,
+    .chat-settings > summary
+  ) {
+  color: var(--muted);
+}
+.select-control .select-trigger {
+  color: #24494b;
+  background: linear-gradient(#fffdf3, #ece8d9);
+  border-color: #9daba5;
+  border-radius: 4px;
+}
+.select-trigger > svg {
+  color: #4d6e6c;
+}
+.select-control .select-trigger:hover,
+.select-control .select-trigger[aria-expanded='true'] {
+  background: #fffdf3;
+  border-color: #708b86;
+}
+.select-popover {
+  background: #fbf8ea;
+  border: 1px solid #82958f;
+  color: var(--ink);
+  border-radius: 5px;
+  box-shadow: 0 12px 30px #17363830;
+}
+.select-heading,
+.select-heading > button,
+.select-options > p,
+.select-search input,
+.select-options > button {
+  color: var(--ink);
+}
+.select-search {
+  border-color: var(--line);
+}
+.select-options > button[aria-selected='true'] {
+  background: #d6e5dc;
+  color: #173d3e;
+}
+.select-options > button:hover,
+.select-options > button:focus-visible {
+  background: #e2eadf;
+  outline-color: var(--accent);
+}
+
+/* Tickets and runtime */
+.detail.task-detail.ticket-detail,
+.new-task.dialog {
+  background: #faf7e9;
+  border: 1px solid #81958f;
+  border-radius: 7px;
+  box-shadow:
+    0 24px 70px #102d3150,
+    inset 0 1px #fff;
+}
+.modal-backdrop,
+.select-scrim {
+  background: #0c282c85;
+  backdrop-filter: blur(3px);
+}
+.ticket-detail .detail-top {
+  border-bottom: 1px solid #b7c1b7;
+  padding-bottom: 13px;
+}
+.ticket-edit-form .ticket-title-field textarea {
+  background: #fffdf0;
+  border-color: #1f3332;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  color: #17393d;
+}
+.ticket-property-grid {
+  background: #eeeadb;
+  border: 1px solid #b3bdb2;
+  padding: 17px;
+  border-radius: 5px;
+}
+.ticket-edit-form .ticket-property-grid :is(input, select),
+.ticket-detail .ticket-description-field textarea {
+  background: #fffdf3;
+  border-color: #a5b2aa;
+  color: var(--ink);
+}
+.app
+  :is(
+    .ticket-edit-form label,
+    .ticket-extra-fields summary,
+    .ticket-detail .runtime-details > summary,
+    .detail-top .task-id,
+    .monitor-reason,
+    .monitor-location
+  ) {
+  color: #526d69;
+}
+.ticket-detail .inspector-tabs {
+  border-color: #aebbb2;
+}
+.ticket-detail .inspector-tabs button {
+  color: #58726e;
+}
+.ticket-detail .inspector-tabs button.selected {
+  color: #a13f25;
+  border-color: #c85532;
+}
+.app .terminal-preview {
+  background: #153438;
+  color: #e8f1ea;
+  border: 1px solid #0b282b;
+  border-radius: 4px;
+}
+.app .terminal-preview :is(p, small, strong) {
+  color: #d8e6df;
+}
+.app .terminal-preview code {
+  background: #0d292c;
+  color: #f1c45b;
+  border: 1px solid #31585a;
+}
+.runtime-page {
+  color: var(--ink);
+}
+.runtime-page :is(h1, h2, h3, h4, .monitor-session-heading strong) {
+  color: #183b3e;
+}
+.monitor-session {
+  background: #faf7e9;
+  border: 1px solid #9eada5;
+  border-radius: 5px;
+  box-shadow: 0 2px 5px #17393a12;
+}
+.monitor-filters button {
+  color: #506c68;
+  border-radius: 3px;
+}
+.monitor-filters button[aria-pressed='true'] {
+  color: #164b48;
+  background: #d7e4da;
+}
+.run-status {
+  background: #dce3d8;
+  color: #3b5c58;
+  border: 1px solid #c2cdc1;
+  border-radius: 3px;
+}
+.run-status.running {
+  background: #d2e6d7;
+  color: #235c3d;
+}
+.run-status.waiting_approval,
+.run-status.awaiting_review {
+  background: #f3e5bf;
+  color: #73581d;
+}
+.approval-card {
+  background: #fff4d9;
+  border-color: #d4b76b;
+}
+
+/* Stable agent signatures now live in a fleet-friendly spectrum. */
+.agent-mark {
+  filter: saturate(0.72) contrast(1.1);
+}
+
+@media (max-width: 800px) {
+  .app .topbar {
+    min-height: 58px;
+    height: 58px;
+    padding-inline: 18px;
+  }
+  .app-navigation .sidebar-brand {
+    margin-top: 4px;
+  }
+}
+@media (max-width: 600px) {
+  .ticket-edit-form .ticket-title-field textarea {
+    font-size: 24px;
+  }
+  .ticket-property-grid {
+    padding: 12px;
+    gap: 12px;
+  }
+}
+
+/* Convoy 98
+   Deliberately pre-XP: square chrome, hard light/shadow bevels, inset work areas
+   and compact system typography. The palette stays maritime instead of cosplay-grey. */
+:root {
+  --ink: #102f32;
+  --muted: #526765;
+  --accent: #b94527;
+  --paper: #d2d0c1;
+  --surface: #f5f1df;
+  --surface-2: #dedccd;
+  --line: #737f79;
+  --line-strong: #3d5654;
+  font-family: 'MS Sans Serif', Tahoma, Verdana, 'Segoe UI', sans-serif;
+  font-size: 12px;
+}
+.app > main {
+  background-color: #d3d1c2;
+  background-image:
+    linear-gradient(90deg, #ffffff16 1px, transparent 1px),
+    linear-gradient(#ffffff16 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+.app
+  :is(
+    button,
+    input,
+    textarea,
+    select,
+    .select-trigger,
+    .select-popover,
+    .custom-card,
+    .custom-column-cards,
+    .monitor-session,
+    .runtime-details,
+    .settings-card,
+    .approval-card,
+    .workflow-node,
+    .graph-node,
+    .node-inspector,
+    .chat-options-dialog,
+    .attachment-composer,
+    .message-code,
+    .inline-ticket,
+    .terminal-preview
+  ) {
+  border-radius: 0 !important;
+}
+.app :is(button, .select-trigger) {
+  transition: none !important;
+}
+
+/* Classic active title bar. */
+.app .topbar {
+  height: 44px;
+  min-height: 44px;
+  padding: 3px 6px 3px 10px;
+  background: #123d62;
+  border: 2px solid;
+  border-color: #5b7e91 #071f30 #071f30 #5b7e91;
+  box-shadow: inset 1px 1px #2f6380;
+}
+.breadcrumb strong {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-shadow: 1px 1px #071f30;
+}
+.app .mobile-menu {
+  color: #fff;
+}
+.app .topbar .primary {
+  background: #d5d2c7;
+  color: #10292c;
+  border: 1px solid #111;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #686960,
+    1px 1px #050505;
+  padding: 7px 11px;
+  text-shadow: none;
+}
+.app .topbar .primary:hover {
+  background: #e0ddd2;
+  color: #10292c;
+  border-color: #111;
+}
+.app .topbar .primary:active {
+  box-shadow:
+    inset 1px 1px #666,
+    inset -1px -1px #fff;
+  transform: translate(1px, 1px);
+}
+
+/* Raised controls and reverse-bevel input wells. */
+.app .primary,
+.app .secondary,
+.app .palette-toggle,
+.app .workflow-mode button,
+.app .view-toggle button,
+.app .icon-button {
+  background: #d5d2c7;
+  color: #15383a;
+  border: 1px solid #1e2827;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #77776e;
+  font-weight: 700;
+}
+.app .primary:hover,
+.app .secondary:hover {
+  background: #e1ded3;
+  color: #102f32;
+  border-color: #1e2827;
+}
+.app :is(.primary, .secondary, .view-toggle button, .icon-button):active {
+  box-shadow:
+    inset 1px 1px #77776e,
+    inset -1px -1px #fff;
+  transform: translate(1px, 1px);
+}
+.app :is(input, textarea, select),
+.select-control .select-trigger,
+.app .board-search,
+.app .conversation-search {
+  background: #fffdf0;
+  border: 1px solid #1f3332;
+  box-shadow:
+    inset 1px 1px #6f7771,
+    inset 2px 2px #a9aca3,
+    inset -1px -1px #fff;
+}
+.select-popover {
+  background: #f4f0df;
+  border: 2px solid;
+  border-color: #fff #414844 #414844 #fff;
+  box-shadow: 2px 2px #111;
+}
+.select-options > button[aria-selected='true'],
+.select-options > button:hover,
+.select-options > button:focus-visible {
+  background: #123d62;
+  color: #fff;
+}
+
+/* The fleet rail behaves like a permanent shell/task strip. */
+.app .app-navigation {
+  background: #174649;
+  border-right: 2px solid #071f21;
+  box-shadow: inset -1px 0 #76918a;
+}
+.app-navigation .sidebar-brand {
+  background: #174649;
+  margin-bottom: 24px;
+}
+.app-navigation .brand-mark {
+  border-radius: 0;
+  border: 1px solid #111;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #777,
+    1px 1px #071f21;
+}
+.brand-copy strong {
+  font-size: 16px;
+  letter-spacing: 1.8px;
+}
+.brand-copy small {
+  font-size: 9px;
+}
+.app-navigation nav button {
+  border-radius: 0;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+.app-navigation nav button[aria-current='page'] {
+  background: #d5d2c7;
+  color: #102f32;
+  border: 1px solid #111;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #6b6b63,
+    1px 1px #071f21;
+}
+.app-navigation nav button[aria-current='page'] svg {
+  color: #9d3b21;
+}
+.app-navigation nav button:hover,
+.app-navigation .pinned-row button:hover {
+  background: #2b5b5d;
+}
+.app-navigation nav button[aria-current='page']:hover {
+  background: #dddacf;
+  color: #102f32;
+}
+
+/* Dialogs and monitors use classic window frames. */
+.detail.task-detail.ticket-detail,
+.new-task.dialog,
+.chat-options-dialog {
+  background: #d5d2c7;
+  border: 2px solid;
+  border-color: #fff #343b38 #343b38 #fff;
+  box-shadow: 2px 2px #101616;
+}
+.ticket-detail .detail-top,
+.new-task > .section-top {
+  background: #123d62;
+  color: #fff;
+  border: 0;
+}
+.ticket-detail .detail-top {
+  margin: -20px -28px 14px;
+  padding: 4px 5px;
+}
+.ticket-detail .detail-top .task-id,
+.ticket-detail .detail-top > button {
+  color: #fff;
+}
+.new-task > .section-top {
+  margin: -24px -24px 15px;
+  padding: 4px 5px;
+}
+.new-task > .section-top h2 {
+  color: #fff;
+  font-size: 12px;
+  margin: 0;
+}
+.ticket-property-grid,
+.monitor-session,
+.app :is(.runtime-details[open], .settings-card, .approval-card) {
+  background: #dddacd;
+  border: 1px solid;
+  border-color: #777d77 #fff #fff #777d77;
+  border-radius: 0;
+  box-shadow: none;
+}
+.monitor-filters button[aria-pressed='true'],
+.ticket-detail .inspector-tabs button.selected {
+  background: #123d62;
+  color: #fff;
+  border-color: #071f30;
+}
+.run-status {
+  border-radius: 0;
+}
+
+@media (max-width: 800px) {
+  .app .topbar {
+    height: 48px;
+    min-height: 48px;
+    padding-inline: 6px;
+  }
+}
+@media (max-width: 600px) {
+  .ticket-detail .detail-top {
+    margin: -14px -14px 12px;
+  }
+  .new-task > .section-top {
+    margin: -18px -18px 14px;
+  }
+}
+
+/* Convoy 98 launcher
+   The previous dark SaaS rail is replaced with a compact Start-menu/Explorer shell. */
+.app .app-navigation {
+  width: 220px;
+  padding: 8px 9px 8px 40px;
+  background: #d5d2c7;
+  color: #102f32;
+  border: 2px solid;
+  border-color: #fff #252d2b #252d2b #fff;
+  box-shadow:
+    inset 1px 1px #eceae1,
+    inset -1px -1px #777a72;
+  overflow-x: hidden;
+}
+.app .app-navigation::before {
+  content: 'SHIP · SHIP A LOT';
+  position: absolute;
+  inset: 4px auto 4px 3px;
+  width: 29px;
+  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px 5px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  color: #c9ddd7;
+  background: #123d62;
+  border: 1px solid;
+  border-color: #52738a #071f30 #071f30 #52738a;
+  box-sizing: border-box;
+  font:
+    700 9px/1 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  letter-spacing: 1.3px;
+  white-space: nowrap;
+}
+.app > main {
+  margin-left: 220px;
+}
+.app-navigation .sidebar-brand {
+  position: relative;
+  top: auto;
+  min-height: 52px;
+  margin: 0 0 17px;
+  padding: 5px 3px 9px;
+  background: #d5d2c7;
+  border-bottom: 2px solid;
+  border-color: transparent transparent #fff transparent;
+  box-shadow: 0 1px #72766f;
+}
+.app-navigation .brand {
+  gap: 8px;
+  padding: 0;
+  color: #143638;
+}
+.app-navigation .brand-mark {
+  width: 34px;
+  height: 34px;
+  flex-basis: 34px;
+  background: #f4f0df;
+  color: #143f42;
+}
+.app-navigation .brand-mark svg {
+  width: 28px;
+  height: 28px;
+}
+.brand-copy strong {
+  color: #123d62;
+  font-size: 15px;
+  letter-spacing: 1.4px;
+  text-shadow: 1px 1px #fff;
+}
+.brand-copy small {
+  color: #4d6462;
+  font-size: 8px;
+  letter-spacing: 0;
+}
+.app-navigation nav {
+  gap: 2px;
+}
+.app-navigation nav button,
+.app-navigation .pinned-row > button:first-child,
+.app-navigation .collapse-sidebar {
+  min-height: 38px;
+  gap: 8px;
+  padding: 5px 6px;
+  color: #17383a;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  font-size: 11px;
+  text-align: left;
+}
+.app-navigation nav button svg,
+.app-navigation .pinned-row > button:first-child svg,
+.app-navigation .collapse-sidebar > svg {
+  width: 25px;
+  height: 25px;
+  padding: 4px;
+  color: #1d5f5d;
+  background: #d5d2c7;
+  border: 1px solid #222;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #777;
+  box-sizing: border-box;
+  opacity: 1;
+}
+.app-navigation nav button:hover,
+.app-navigation .pinned-row button:hover,
+.app-navigation .collapse-sidebar:hover {
+  color: #fff;
+  background: #123d62;
+  border-color: #071f30;
+}
+.app-navigation nav button:hover svg,
+.app-navigation .collapse-sidebar:hover > svg {
+  color: #9e3d23;
+}
+.app-navigation nav button[aria-current='page'] {
+  color: #fff;
+  background: #123d62;
+  border: 1px dotted #fff;
+  box-shadow: 0 0 0 1px #071f30;
+  font-weight: 700;
+}
+.app-navigation nav button[aria-current='page'] svg {
+  color: #9e3d23;
+  background: #e2dfd4;
+  border-color: #111;
+}
+.app-navigation .navigation-bottom {
+  margin-top: auto;
+  padding-top: 7px;
+  border-top: 1px solid #777c75;
+  box-shadow: inset 0 1px #fff;
+}
+.app-navigation .navigation-bottom nav {
+  gap: 1px;
+}
+.app-navigation .collapse-sidebar {
+  width: 100%;
+  color: #415452;
+}
+.app-navigation .nav-section-label {
+  color: #4f6360;
+  padding: 7px 5px 3px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.app-navigation .pinned-row {
+  color: #17383a;
+}
+.app-navigation .pinned-row .unpin {
+  color: #4f6360;
+}
+.app-navigation .drawer-close {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px;
+  color: #172e2f;
+  background: #d5d2c7;
+  border: 1px solid #111;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #777,
+    1px 1px #222;
+}
+
+.nav-collapsed .app-navigation {
+  width: 58px;
+  padding: 8px 7px;
+}
+.nav-collapsed > main {
+  margin-left: 58px;
+}
+.nav-collapsed .app-navigation::before {
+  display: none;
+}
+.nav-collapsed .app-navigation .sidebar-brand {
+  justify-content: center;
+}
+.nav-collapsed .app-navigation .brand {
+  padding: 0;
+}
+.nav-collapsed .app-navigation nav button,
+.nav-collapsed .collapse-sidebar {
+  justify-content: center;
+  padding-inline: 4px;
+}
+
+@media (max-width: 800px) {
+  .app > main,
+  .nav-collapsed > main {
+    margin-left: 0;
+  }
+  .app .app-navigation,
+  .nav-collapsed .app-navigation {
+    width: 272px;
+    padding: 8px 10px 8px 42px;
+  }
+  .app .app-navigation::before,
+  .nav-collapsed .app-navigation::before {
+    display: flex;
+  }
+  .app-navigation .sidebar-brand {
+    min-height: 54px;
+  }
+  .nav-collapsed .app-navigation .sidebar-brand {
+    justify-content: space-between;
+  }
+  .nav-collapsed .app-navigation .brand-copy {
+    display: flex;
+    overflow: hidden;
+  }
+  .nav-collapsed .app-navigation nav button {
+    justify-content: flex-start;
+  }
+}

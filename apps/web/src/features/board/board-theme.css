@@ -1,0 +1,301 @@
+/* Board: a working manifest, not a dark dashboard */
+.board-studio {
+  padding-top: 25px;
+}
+.board-studio-header {
+  margin-bottom: 27px;
+  align-items: center;
+}
+.board-studio .board-picker .select-trigger {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: #15383b;
+  letter-spacing: -0.5px;
+}
+.board-studio .board-picker .icon-button {
+  color: #4f6d69;
+}
+.board-studio .view-toggle {
+  background: #dcdacc;
+  border: 1px solid #aab4aa;
+  padding: 3px;
+  border-radius: 4px;
+}
+.board-studio .view-toggle button {
+  border-radius: 2px;
+}
+.board-studio .view-toggle button.chosen {
+  background: #fffdf2;
+  color: #205d58;
+  box-shadow:
+    inset 0 1px #fff,
+    0 1px 2px #15393a21;
+}
+.board-studio .board-search {
+  background: #f7f3e5;
+  border: 1px solid #a9b4aa;
+  border-radius: 4px;
+  color: #5d7773;
+  padding: 9px 12px;
+}
+.board-studio .board-search:focus-within {
+  background: #fffdf3;
+  border-color: #5b817a;
+  box-shadow: 0 0 0 2px #397a6e1c;
+}
+.board-studio .custom-column > header {
+  border-bottom: 1px solid #869a95;
+  padding: 0 3px 10px;
+  margin-bottom: 11px;
+}
+.board-studio .custom-column > header h2 {
+  color: #274d4e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.65px;
+  text-transform: uppercase;
+}
+.board-studio .custom-column > header > span:not(.column-swatch) {
+  color: #4b6967;
+  background: #d7dbce;
+  border: 1px solid #bdc5ba;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font:
+    9px ui-monospace,
+    monospace;
+}
+.board-studio .column-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  box-shadow: 0 0 0 2px #f3efdf;
+}
+.board-studio .custom-column-cards {
+  background: transparent;
+  border-top: 0;
+  padding: 0 1px;
+}
+.board-studio .custom-card {
+  border: 1px solid #9fada6;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #fffdf3, #f3efdf);
+  box-shadow:
+    inset 0 1px #fff,
+    0 2px 3px #18383a14;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.board-studio .custom-card-open {
+  padding: 14px 13px 11px;
+  gap: 11px;
+}
+.board-studio .custom-card strong {
+  color: #18383b;
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 700;
+  letter-spacing: -0.1px;
+}
+.ticket-card-heading .task-id {
+  color: #436562;
+  font:
+    10px ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  letter-spacing: 0.35px;
+}
+.ticket-priority {
+  font-size: 10px;
+  color: #667d77;
+}
+.ticket-priority.priority-high {
+  color: #a74327;
+}
+.ticket-label {
+  color: #315b59;
+  background: #dfe7dc;
+  border: 1px solid #c0cec3;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+}
+.ticket-card-footer {
+  border-top: 1px solid #c8cec2;
+  padding-top: 10px;
+  color: #526c68;
+  font-size: 10px;
+}
+.ticket-assignee svg {
+  box-sizing: content-box;
+  padding: 3px;
+  border-radius: 2px;
+  background: #d8e5dc;
+  color: #26625d;
+  border: 1px solid #b7c8bd;
+}
+.board-studio .custom-card .card-move {
+  margin-left: 13px;
+  background: #eeeadb;
+  border: 1px solid #aeb8ae;
+  color: #355654;
+  border-radius: 3px;
+}
+.board-ticket-list,
+.board-list-row {
+  border-color: #aab5aa;
+}
+.board-list-row:hover,
+.board-ticket-list > button:hover {
+  background: #f8f4e5;
+}
+
+/* Board resembles a set of compact utility windows. */
+.board-studio {
+  padding-top: 18px;
+}
+.board-studio-header {
+  margin-bottom: 17px;
+}
+.board-studio .board-picker .select-trigger {
+  min-height: 34px;
+  padding: 5px 8px;
+  font-family: Tahoma, Verdana, sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0;
+  background: #d5d2c7;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #777,
+    1px 1px #1b2928;
+}
+.board-studio .view-toggle {
+  padding: 2px;
+  background: #bdbbb1;
+  border: 1px solid #222;
+  border-radius: 0;
+  box-shadow:
+    inset 1px 1px #777,
+    inset -1px -1px #fff;
+}
+.board-studio .view-toggle button.chosen {
+  background: #f4f0df;
+  color: #123d62;
+  box-shadow:
+    inset 1px 1px #686960,
+    inset -1px -1px #fff;
+}
+.board-studio .custom-column > header {
+  min-height: 31px;
+  margin: 0;
+  padding: 5px 6px;
+  background: #d5d2c7;
+  border: 1px solid;
+  border-color: #fff #66685f #66685f #fff;
+}
+.board-studio .custom-column > header h2 {
+  color: #15383a;
+  font-size: 11px;
+}
+.board-studio .custom-column-cards {
+  min-height: 160px;
+  padding: 7px;
+  background: #c5c4b8;
+  border: 1px solid;
+  border-color: #5c635e #fff #fff #5c635e;
+}
+.board-studio .custom-card {
+  background: #f3efdd;
+  border: 1px solid #151c1c;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #77796f,
+    2px 2px #6b756f;
+  margin-bottom: 9px;
+}
+.board-studio .custom-card-open {
+  padding: 0 10px 10px;
+  gap: 9px;
+}
+.board-studio .custom-card:hover {
+  transform: none;
+  border-color: #111;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #77796f,
+    2px 2px #3d5552;
+}
+.board-studio .ticket-card-heading {
+  width: calc(100% + 20px);
+  margin: 0 -10px 2px;
+  padding: 4px 5px;
+  background: #123d62;
+  color: #fff;
+  border-bottom: 1px solid #061f30;
+}
+.board-studio .ticket-card-heading .task-id,
+.board-studio .ticket-priority,
+.board-studio .ticket-priority.priority-high {
+  color: #fff;
+}
+.board-studio .custom-card strong {
+  color: #102f32;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ticket-label {
+  background: #d9dfd5;
+  border: 1px solid #71817a;
+  border-radius: 0;
+  color: #244846;
+}
+.ticket-card-footer {
+  border-top: 1px solid #9ea79e;
+}
+.ticket-assignee svg {
+  border-radius: 0;
+  background: #c8dad1;
+  border-color: #728b82;
+}
+.board-studio .custom-card .card-move {
+  background: #d5d2c7;
+  border: 1px solid #222;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px #777;
+  padding: 4px 7px;
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .board-studio .custom-card {
+    transition:
+      transform 0.14s ease,
+      box-shadow 0.14s ease,
+      border-color 0.14s ease;
+  }
+  .board-studio .custom-card:hover {
+    transform: translateY(-2px);
+    border-color: #62877f;
+    box-shadow: 0 6px 14px #17383a20;
+  }
+}
+
+@media (max-width: 600px) {
+  .board-studio {
+    padding-top: 18px;
+  }
+  .board-studio .board-picker .select-trigger {
+    max-width: 220px;
+    font-size: 17px;
+  }
+  .board-studio-header {
+    align-items: stretch;
+    margin-bottom: 22px;
+  }
+  .board-studio .board-search {
+    font-size: 16px;
+  }
+}
