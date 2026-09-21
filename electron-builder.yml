@@ -1,0 +1,38 @@
+appId: dev.convoy.desktop
+productName: Convoy
+artifactName: Convoy-${version}-${os}-${arch}.${ext}
+directories:
+  buildResources: build
+  output: desktop-dist
+asar: true
+files:
+  - package.json
+  - apps/desktop/**
+  - apps/daemon/src/**
+  - packages/runner/src/**
+  - dist/**
+  - '!**/*.md'
+extraResources:
+  - from: dist-worker
+    to: dist-worker
+    filter:
+      - '**/*'
+linux:
+  target:
+    - AppImage
+    - pacman
+  category: Development
+  syncDesktopName: true
+  icon: build/icon.svg
+pacman:
+  synopsis: Local-first control plane for coding agents
+  depends:
+    - git
+    - bubblewrap
+    - tmux
+win:
+  target: nsis
+  icon: build/icon.png
+mac:
+  target: dmg
+  icon: build/icon.png

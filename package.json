@@ -18,7 +18,11 @@
     "test:modules": "node --test --test-concurrency=1 tests/modules/*.test.mjs tests/runner/*.test.mjs tests/web/*.test.mjs",
     "attach": "node apps/cli/src/cli.mjs attach",
     "terminal": "node apps/cli/src/cli.mjs terminal",
-    "sessions": "node apps/cli/src/cli.mjs sessions"
+    "sessions": "node apps/cli/src/cli.mjs sessions",
+    "desktop:install": "node node_modules/electron/install.js",
+    "desktop:dev": "npm run desktop:install && node scripts/desktop-dev.mjs",
+    "desktop": "npm run build && npm run desktop:install && electron .",
+    "package:desktop": "npm run build && npm run build:worker && npm run build:worker -- bun-linux-arm64 && npm run desktop:install && electron-builder --publish never"
   },
   "dependencies": {
     "ajv": "^8.20.0",
@@ -33,6 +37,21 @@
     "@vitejs/plugin-react": "^4.7.0",
     "prettier": "^3.6.2",
     "typescript": "~5.9.2",
-    "vite": "^6.3.5"
-  }
+    "vite": "^6.3.5",
+    "electron": "44.4.3",
+    "electron-builder": "26.15.3"
+  },
+  "main": "apps/desktop/main.mjs",
+  "description": "Local-first control plane for coding agents.",
+  "author": {
+    "name": "Luke Aupiais",
+    "email": "luke.aupiais@gmail.com"
+  },
+  "homepage": "https://github.com/lukeaupiais/convoy",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lukeaupiais/convoy.git"
+  },
+  "license": "Apache-2.0",
+  "desktopName": "convoy.desktop"
 }

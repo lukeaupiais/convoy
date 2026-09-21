@@ -11,3 +11,7 @@ reachable daemon must require authenticated device sessions and an explicit host
 origin, and secure-cookie policy. Provider login under `/api/auth/*` is separate
 from Convoy deployment login under `/auth/*` and must never establish a Convoy
 principal.
+
+When the desktop bootstrap supplies a built static directory, this boundary serves
+only the UI entry point and Vite assets after the same host/origin checks. API
+routes keep their existing authentication and command policy.

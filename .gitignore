@@ -1,6 +1,7 @@
 node_modules
 dist/
 dist-worker/
+desktop-dist/
 *.tsbuildinfo
 .DS_Store
 .convoy/

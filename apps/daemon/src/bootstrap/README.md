@@ -19,3 +19,8 @@ sets the discovery label. Setting a minimum 24-byte
 remove it after the first client signs in. Remote mode always requires Convoy
 identity authentication and secure browser cookies. TLS may terminate at a
 trusted reverse proxy, but the advertised public origin remains HTTPS.
+
+An installed desktop build sets absolute `CONVOY_DATA_DIR`, `CONVOY_STATIC_DIR`,
+and `CONVOY_WORKER_ARTIFACT_DIR` paths. The bootstrap reports readiness to its
+Electron utility-process parent and handles a graceful shutdown request. Without
+these settings, source daemon behavior retains repository state and worker paths.

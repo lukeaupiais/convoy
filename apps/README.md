@@ -9,6 +9,7 @@ modules; they do not expose reusable internals to one another.
 | `daemon` | Durable coordination, policy enforcement, HTTP and SSE |
 | `worker` | Portable runner-side request processor |
 | `cli` | Native access to daemon sessions and real terminals |
+| `desktop` | Electron window and supervised daemon lifecycle |
 
 Shared data shapes belong in `packages/contracts`. Reusable execution machinery
 belongs in `packages/runner`. An app-to-app source import is an architecture error.

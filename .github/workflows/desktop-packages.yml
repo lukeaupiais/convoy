@@ -1,0 +1,65 @@
+name: Desktop package checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-workers:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+      - run: npm run build:worker
+      - run: npm run build:worker -- bun-linux-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-workers
+          path: dist-worker/
+
+  packages:
+    needs: linux-workers
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-workers
+          path: dist-worker/
+      - run: npm ci
+      - run: npm run check:architecture
+      - run: npm run build
+      - run: npm run desktop:install
+      - run: npx electron-builder --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: convoy-${{ matrix.name }}-unsigned
+          path: |
+            desktop-dist/*.AppImage
+            desktop-dist/*.pacman
+            desktop-dist/*.exe
+            desktop-dist/*.dmg
+          if-no-files-found: error

@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { sessionStream } from './session-stream.mjs';
+import { createStaticAssets } from './static-assets.mjs';
 import {
   clearSessionCookie,
   resolveRequestIdentity,
@@ -18,12 +19,14 @@ export function createApp({
   runnerEnrollment,
   deployment,
   access = { host: localHost, origin: localOrigin },
+  staticDirectory,
 }) {
   if (!runtime || !auth) throw new Error('HTTP transport requires runtime and auth ports.');
   if (!(access.host instanceof RegExp) || !(access.origin instanceof RegExp))
     throw new Error('HTTP access policy requires host and origin regular expressions.');
   if (access.requireAuthentication && !identitySessions?.authenticate)
     throw new Error('Remote HTTP access requires an identity session port.');
+  const serveStatic = staticDirectory ? createStaticAssets(staticDirectory) : null;
   return createServer(async (req, res) => {
     const json = (status, data, headers = {}) => {
       res.writeHead(status, {
@@ -41,6 +44,7 @@ export function createApp({
     if (req.method === 'POST' && req.headers['content-type'] !== 'application/json')
       return json(415, { error: 'JSON required.' });
     try {
+      if (serveStatic && (await serveStatic(req, res))) return;
       if (req.url === '/.well-known/convoy' && req.method === 'GET') {
         if (!deployment) return json(404, { error: 'Deployment discovery is not configured.' });
         return json(200, deployment, { 'Cache-Control': 'public, max-age=300' });

@@ -15,8 +15,9 @@ work, as long as you can keep track of their tasks, permissions, and results.
 projects, conversations, tickets, versioned workflows, and local or SSH runners.
 The web UI and native terminal client show the same durable sessions.
 
-Convoy is an **early, Linux-first alpha**. It does not automatically merge, push,
-or deploy code.
+Convoy is an **early, Linux-first alpha**. Desktop packaging targets Linux,
+Windows, and macOS; contained local execution still needs Linux runner tools.
+It does not automatically merge, push, or deploy code.
 
 ## What you can do
 
@@ -64,6 +65,8 @@ npm run terminal -- CVY-16
 `attach` is a line-oriented Convoy client. `terminal` connects your real
 terminal to a sandboxed `tmux` session on the selected runner.
 
+For a desktop window or installer, see [desktop builds](docs/desktop.md).
+
 ## Repository map
 
 ```text
@@ -72,6 +75,7 @@ apps/
   daemon/    durable control plane, policy, and HTTP/SSE API
   worker/    process that runs on local or SSH runners
   cli/       native session and terminal client
+  desktop/   Electron host and daemon lifecycle
 packages/
   contracts/ shared data shapes
   runner/    execution and supervision primitives

@@ -13,6 +13,7 @@ shared contracts when changing code or UI copy.
 - [Extension contract](architecture/extensions.md)
 - [Command execution](command-execution.md)
 - [Portable local and SSH workers](portable-workers.md)
+- [Desktop builds](desktop.md)
 
 Architecture documents describe current boundaries and note unfinished work
 where relevant. The nearest source README describes ownership within a directory;

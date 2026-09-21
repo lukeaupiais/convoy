@@ -35,3 +35,18 @@ jobs:
       - run: sudo install -m 0755 "$(command -v node)" /usr/bin/node
       - run: bwrap --ro-bind / / -- /usr/bin/node --version
       - run: npm test
+
+  desktop:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - run: npm ci
+      - run: npm run build
+      - run: npm run desktop:install
+      - run: test -x node_modules/electron/dist/electron && command -v xvfb-run
+      - run: node --test --test-concurrency=1 tests/acceptance/desktop-entry.test.mjs tests/acceptance/desktop-dev.test.mjs
