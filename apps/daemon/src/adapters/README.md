@@ -14,5 +14,6 @@ inject adapters so module and acceptance tests can use deterministic fakes.
 | `auth` | Convoy-owned ChatGPT subscription login and refresh lifecycle |
 | `persistence` | SQLite or PostgreSQL keyed state rows, attachment bytes, and bounded command logs |
 | `providers` | direct provider HTTP protocol, model catalog, and streaming normalization |
+| `linear-tickets` | Linear GraphQL issue import, creation, lookup, and update |
 | `runners` | local process or SSH worker transport |
 | `deployment` | durable deployment identity and fail-closed server configuration |

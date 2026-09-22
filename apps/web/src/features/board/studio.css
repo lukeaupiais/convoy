@@ -750,6 +750,38 @@ textarea:focus-visible {
   font-size: 11px;
   padding: 0 4px;
 }
+.board-integrations {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+}
+.board-integrations label,
+.board-integrations details {
+  display: grid;
+  gap: 6px;
+}
+.board-integration-connection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.board-integration-connection label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.board-integration-connection input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+}
+.board-external-link {
+  display: inline-block;
+  margin: 4px 10px 8px;
+  color: var(--accent);
+  font-size: 11px;
+  text-transform: capitalize;
+}
 .board-project-checks {
   display: flex;
   flex-wrap: wrap;

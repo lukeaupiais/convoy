@@ -22,6 +22,28 @@ export type Project = {
   executionProfile: ExecutionProfileId;
 };
 export type TicketScalar = string | number | boolean | null;
+export type ExternalTicketLink = {
+  connectionId: string;
+  provider: string;
+  remoteId: string;
+  remoteKey: string;
+  url: string;
+  syncState: 'linked' | 'error' | 'outcome-unknown';
+  message?: string;
+  remoteTitle?: string;
+  remoteDescription?: string;
+  fieldOwnership?: { title: 'convoy' | 'external'; description: 'convoy' | 'external' };
+};
+export type TicketConnection = {
+  id: string;
+  organizationId: string;
+  provider: 'linear';
+  name: string;
+  teamId: string;
+  credentialEnv: string;
+  enabled: boolean;
+  revision: number;
+};
 export type Ticket = {
   id: number;
   executionSessionId?: string;
@@ -33,6 +55,14 @@ export type Ticket = {
   agent: string;
   priority: string;
   customFields?: Record<string, TicketScalar>;
+  origin?: 'convoy' | 'external' | 'browser-import' | 'session-migration';
+  externalLinks?: ExternalTicketLink[];
+  externalPublish?: {
+    connectionId: string;
+    requestId: string;
+    state: 'pending' | 'outcome-unknown';
+    message?: string;
+  };
   attachments?: ContextFile[];
   revision: number;
   placement: Placement;
@@ -97,6 +127,8 @@ export type Board = {
   filters: BoardFilters;
   cardFields: string[];
   grouping: BoardGrouping;
+  creationPolicy?: { mode: 'convoy' | 'ask' | 'connection'; connectionId?: string };
+  destinationConnectionIds?: string[];
   density: 'compact' | 'comfortable' | 'spacious';
   revision: number;
   tickets: BoardPlacement[];

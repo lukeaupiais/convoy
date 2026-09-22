@@ -101,6 +101,7 @@ function App() {
   const [page, setPage] = useState('Project board');
   const [selected, setSelected] = useState<number | null>(null);
   const [newTask, setNewTask] = useState<Status | null>(null);
+  const [newTaskDestination, setNewTaskDestination] = useState('');
   const [newTaskPlacement, setNewTaskPlacement] = useState<{
     boardId: string;
     columnId: string;
@@ -148,7 +149,10 @@ function App() {
       setPendingPlacement((p) => (p ? { ...p, revision: ticket.revision } : p));
   }, [liveRuntime, pendingPlacement]);
   useEffect(() => {
-    if (newTask === null) setNewTaskPlacement(null);
+    if (newTask === null) {
+      setNewTaskPlacement(null);
+      setNewTaskDestination('');
+    }
   }, [newTask]);
   useEffect(() => {
     if (selected === null && newTask === null) return;
@@ -286,6 +290,10 @@ function App() {
   const placementBoard = newTaskPlacement
     ? liveRuntime?.boards.find((board) => board.id === newTaskPlacement.boardId)
     : undefined;
+  const boardDefaultConnection = placementBoard?.creationPolicy?.mode === 'connection'
+    ? liveRuntime?.ticketConnections?.find((connection) => connection.id === placementBoard.creationPolicy?.connectionId && connection.enabled)
+    : undefined;
+  const selectedDestination = newTaskDestination || boardDefaultConnection?.id || 'convoy';
   return (
     <div className={`app ${collapsed ? 'nav-collapsed' : ''}`}>
       {mobile && <div className="scrim" onClick={() => setMobile(false)} />}
@@ -468,6 +476,7 @@ function App() {
               setNewTaskPlacement({ boardId, columnId });
               setNewTask('Backlog');
             }}
+            onManageIntegrations={() => navigate('Integrations')}
           />
         )}
         {page === 'Sessions' && (
@@ -489,6 +498,7 @@ function App() {
         {page === 'Workflows' && <SettingsPage key="workflow-settings" view="Workflows" />}
         {page === 'Runners' && <SettingsPage key="runner-settings" view="Runners" />}
         {page === 'Providers' && <SettingsPage key="provider-settings" view="Providers" />}
+        {page === 'Integrations' && <SettingsPage key="integration-settings" view="Integrations" />}
         {page === 'Skills & instructions' && (
           <SettingsPage
             key={project?.id ?? 'instruction-settings'}
@@ -636,6 +646,8 @@ function App() {
                   projectId: String(data.get('projectId')),
                   requestId: createRequest.current,
                   title: String(data.get('title')).trim(),
+                  boardId: newTaskPlacement?.boardId,
+                  destination: String(data.get('destination') ?? 'convoy'),
                   description: String(data.get('description')),
                   status: newTask,
                   label: String(data.get('label')),
@@ -669,7 +681,9 @@ function App() {
                 }
                 createRequest.current = '';
                 setNewTask(null);
-                setToast('Ticket saved for all clients.');
+                setToast(createdTicket.externalPublish
+                  ? `Ticket CVY-${createdTicket.id} was saved, but remote creation needs review.`
+                  : 'Ticket saved for all clients.');
               } catch (e) {
                 setToast((e as Error).message);
               } finally {
@@ -737,6 +751,28 @@ function App() {
                 </Select>
               </label>
             </div>
+            {placementBoard && (
+              <label>
+                Create in
+                <Select
+                  name="destination"
+                  required
+                  onChange={(event) => setNewTaskDestination(event.target.value)}
+                  defaultValue={placementBoard.creationPolicy?.mode === 'connection'
+                    ? boardDefaultConnection?.id ?? 'convoy'
+                    : placementBoard.creationPolicy?.mode === 'ask' ? '' : 'convoy'}
+                >
+                  {placementBoard.creationPolicy?.mode === 'ask' && <option value="" disabled>Choose destination</option>}
+                  <option value="convoy">Convoy only</option>
+                  {(liveRuntime?.ticketConnections ?? [])
+                    .filter((connection) => connection.enabled && placementBoard.destinationConnectionIds?.includes(connection.id) && liveRuntime?.projects.some((project) =>
+                      placementBoard.projectIds.includes(project.id) && project.organizationId === connection.organizationId))
+                    .map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
+                </Select>
+                {placementBoard.creationPolicy?.mode === 'connection' && !boardDefaultConnection &&
+                  <small role="alert">The board’s external connection is unavailable. Choose an available destination.</small>}
+              </label>
+            )}
             <p className="muted">
               Uses project placement by default. Configure an override in ticket details.
             </p>
@@ -746,7 +782,9 @@ function App() {
               </span>
               <button className="primary" type="submit" disabled={saving}>
                 <Plus size={16} />
-                Create ticket
+                {selectedDestination !== 'convoy'
+                  ? `Create in ${(liveRuntime?.ticketConnections ?? []).find((value) => value.id === selectedDestination)?.name ?? 'external source'}`
+                  : 'Create ticket'}
               </button>
             </div>
           </form>

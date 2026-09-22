@@ -15,6 +15,7 @@ const projectWrite = new Set([
   'importTickets',
   'removeTicketFile',
   'updateTicket',
+  'importExternalTickets',
 ]);
 
 /**
@@ -125,6 +126,41 @@ export function createCommandAuthorization({
         denied();
       return;
     }
+
+    if (command.action === 'saveTicketConnection') {
+      const existing = command.id ? state.ticketConnections?.find((value) => value.id === command.id) : undefined;
+      if (command.id && !existing) denied();
+      if (existing && existing.organizationId !== command.organizationId) denied();
+      await organization(command.organizationId, 'organization.manage', command, actor);
+      return;
+    }
+    if (command.action === 'deleteTicketConnection' || command.action === 'probeTicketConnection') {
+      const existing = state.ticketConnections?.find((value) => value.id === command.id);
+      if (!existing) denied();
+      await organization(existing.organizationId, 'organization.manage', command, actor);
+      return;
+    }
+    if (command.action === 'publishTicket') {
+      const value = await ticketId(command.ticketId, 'project.write', command, actor);
+      const connection = state.ticketConnections?.find((item) => item.id === command.connectionId);
+      if (!connection || project(value.projectId)?.organizationId !== connection.organizationId) denied();
+      return;
+    }
+    if (command.action === 'reconcileTicketPublish') {
+      const value = await ticketId(command.ticketId, 'project.write', command, actor);
+      await organization(project(value.projectId).organizationId, 'organization.manage', command, actor);
+      return;
+    }
+    if (command.action === 'syncExternalTicket') {
+      await ticketId(command.ticketId, 'project.write', command, actor);
+      return;
+    }
+    if (command.action === 'importExternalTickets') {
+      const value = await projectId(command.projectId, 'project.write', command, actor);
+      const connection = state.ticketConnections?.find((item) => item.id === command.connectionId);
+      if (!connection || value.organizationId !== connection.organizationId) denied();
+      return;
+    }
     if (projectWrite.has(command.action)) {
       const id = command.projectId ?? ticket(command.taskId)?.projectId;
       await projectId(id, 'project.write', command, actor);
@@ -155,6 +191,14 @@ export function createCommandAuthorization({
         actor,
       );
       if (command.projectIds) await projectIds(command.projectIds, 'project.write', command, actor);
+      const policyChanged = command.creationPolicy &&
+        JSON.stringify(command.creationPolicy) !== JSON.stringify(existing?.creationPolicy ?? { mode: 'convoy' });
+      const destinationsChanged = command.destinationConnectionIds &&
+        JSON.stringify([...command.destinationConnectionIds].sort()) !== JSON.stringify([...(existing?.destinationConnectionIds ?? [])].sort());
+      if (policyChanged || destinationsChanged) await projectIds(
+        existing?.projectIds ?? requestedProjectIds,
+        'project.manage', command, actor,
+      );
       return;
     }
     if (command.action === 'deleteBoard') {

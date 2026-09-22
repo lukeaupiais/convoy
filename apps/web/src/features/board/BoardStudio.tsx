@@ -26,6 +26,7 @@ type Props = {
   projectName: (id?: string) => string;
   onSelectTicket: (id: number) => void;
   onNewTicket: (boardId: string, columnId: string) => void;
+  onManageIntegrations: () => void;
 };
 const starter: Board = {
   id: 'new-board',
@@ -74,6 +75,7 @@ export function BoardStudio({
   projectName,
   onSelectTicket,
   onNewTicket,
+  onManageIntegrations,
 }: Props) {
   const boards = boardData(state).filter((value) => value.projectIds.includes(projectId));
   const templates = templateData(state);
@@ -107,6 +109,8 @@ export function BoardStudio({
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [templateId, setTemplateId] = useState('');
+  const organizationId = state.projects.find((project) => project.id === projectId)?.organizationId;
+  const connections = (state.ticketConnections ?? []).filter((value) => value.organizationId === organizationId);
   useEffect(() => {
     if (!editing) setDraft(board);
   }, [boardId, board, editing]);
@@ -340,6 +344,51 @@ export function BoardStudio({
             </button>
           </div>
           <div className="board-settings-grid">
+            <fieldset className="board-integrations">
+              <legend>Integrations</legend>
+              <label>
+                New tickets on this board
+                <Select
+                  value={draft.creationPolicy?.mode === 'connection' ? `connection:${draft.creationPolicy.connectionId}` : draft.creationPolicy?.mode ?? 'convoy'}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    patch({ creationPolicy: value.startsWith('connection:')
+                      ? { mode: 'connection', connectionId: value.slice(11) }
+                      : { mode: value as 'convoy' | 'ask' } });
+                  }}
+                >
+                  <option value="convoy">Convoy only</option>
+                  {draft.creationPolicy?.mode === 'connection' && !connections.some((value) => value.enabled && value.id === draft.creationPolicy?.connectionId) &&
+                    <option value={`connection:${draft.creationPolicy.connectionId}`} disabled>Connection unavailable</option>}
+                  {(draft.destinationConnectionIds?.length ?? 0) > 0 && <option value="ask">Ask each time</option>}
+                  {connections.filter((value) => value.enabled && draft.destinationConnectionIds?.includes(value.id)).map((value) => <option key={value.id} value={`connection:${value.id}`}>Create in {value.name}</option>)}
+                </Select>
+              </label>
+              {connections.map((value) => (
+                <div key={value.id} className="board-integration-connection">
+                  <label>
+                    <input type="checkbox" checked={draft.destinationConnectionIds?.includes(value.id) ?? false} disabled={!value.enabled && !draft.destinationConnectionIds?.includes(value.id)} onChange={(event) => {
+                      const ids = draft.destinationConnectionIds ?? [];
+                      patch({ destinationConnectionIds: event.target.checked ? [...ids, value.id] : ids.filter((id) => id !== value.id),
+                        creationPolicy: !event.target.checked && draft.creationPolicy?.connectionId === value.id ? { mode: 'convoy' } : draft.creationPolicy });
+                    }} />
+                    {value.name}{!value.enabled && ' · Disabled'}
+                  </label>
+                  <button className="secondary" type="button" disabled={saving || !value.enabled} onClick={async () => {
+                    setSaving(true);
+                    try {
+                      const response = await command('importExternalTickets', { connectionId: value.id, projectId, limit: 50 });
+                      setMessage(`Imported ${response.result.imported} and updated ${response.result.updated} tickets.`);
+                    } catch (error) {
+                      setMessage(`Import failed: ${(error as Error).message}`);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}>Import tickets</button>
+                </div>
+              ))}
+              <button className="secondary" type="button" onClick={onManageIntegrations}>Manage connections</button>
+            </fieldset>
             <label>
               Board name
               <input value={draft.name} onChange={(e) => patch({ name: e.target.value })} />
@@ -707,7 +756,9 @@ export function BoardStudio({
               <button onClick={() => onSelectTicket(t.id)}>
                 <span>CVY-{t.id}</span>
                 <strong>{t.title}</strong>
+                {t.externalPublish && <span aria-label="External creation needs review">⚠</span>}
               </button>
+              {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
               <Select
                 aria-label={`Move CVY-${t.id}`}
                 value={columnFor(board, t)}
@@ -777,6 +828,7 @@ export function BoardStudio({
                             >
                               <span className="ticket-card-heading">
                                 <span className="task-id">CVY-{t.id}</span>
+                                {t.externalPublish && <span className="task-id" aria-label="External creation needs review">⚠</span>}
                                 {board.cardFields.includes('priority') && (
                                   <span
                                     className={`ticket-priority priority-${t.priority.toLowerCase()}`}
@@ -819,6 +871,7 @@ export function BoardStudio({
                                 )}
                               </span>
                             </button>
+                            {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
                             <Select
                               className="card-move"
                               aria-label={`Move CVY-${t.id}`}

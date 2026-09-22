@@ -3,6 +3,13 @@ import { createCatalog } from './catalog.mjs';
 const commands = [
   'saveProject',
   'createTicket',
+  'saveTicketConnection',
+  'deleteTicketConnection',
+  'probeTicketConnection',
+  'publishTicket',
+  'reconcileTicketPublish',
+  'syncExternalTicket',
+  'importExternalTickets',
   'updateTicket',
   'attachTicketFile',
   'removeTicketFile',
@@ -39,6 +46,9 @@ export function createWork({ afterCommand = async (_command, result) => result, 
       return {
         projects: value.projects.filter((project) => projectIds.has(project.id)),
         tickets: value.tickets.filter((ticket) => projectIds.has(ticket.projectId)),
+        ticketConnections: value.ticketConnections.filter((connection) =>
+          value.projects.some((project) => projectIds.has(project.id) && project.organizationId === connection.organizationId),
+        ),
         boards: value.boards
           .filter(
             (board) =>

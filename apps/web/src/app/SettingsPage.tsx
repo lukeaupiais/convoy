@@ -9,8 +9,9 @@ import { CapabilityLibrary } from '../features/library/CapabilityLibrary';
 import { EnvironmentSettings } from '../features/runners/EnvironmentSettings';
 import { WorkflowEditor } from '../features/workflows/WorkflowEditor';
 import { ProviderSettings } from '../features/providers';
+import { IntegrationSettings } from '../features/integrations';
 
-type SettingsView = 'Providers' | 'Runners' | 'Workflows' | 'Skills & instructions';
+type SettingsView = 'Providers' | 'Integrations' | 'Runners' | 'Workflows' | 'Skills & instructions';
 
 function InstructionPublisher({
   state,
@@ -170,6 +171,7 @@ export function SettingsPage({ view, projectId }: { view: SettingsView; projectI
       {message && <p role="status">{message}</p>}
       {view === 'Runners' && state && <EnvironmentSettings state={state} />}{' '}
       {view === 'Providers' && state && <ProviderSettings state={state} />}{' '}
+      {view === 'Integrations' && state && <IntegrationSettings state={state} />}{' '}
       {view === 'Workflows' && state && <WorkflowEditor state={state} />}
       {view === 'Skills & instructions' && state && (
         <CapabilityLibrary state={state} projectId={projectId}>
