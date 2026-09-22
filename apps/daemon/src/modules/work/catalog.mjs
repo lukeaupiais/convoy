@@ -7,7 +7,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
   for (const value of state.projects) value.organizationId ??= 'personal';
   state.tickets ??= []; state.ticketRequests ??= {};
   state.ticketConnections ??= [];
-  for (const value of state.ticketConnections) value.enabled ??= true;
+  for (const value of state.ticketConnections) {
+    value.enabled ??= true;
+    value.capabilities ??= { import: true, create: value.provider === 'linear', update: value.provider === 'linear' };
+  }
   for (const value of state.tickets) {
     value.origin ??= value.source === 'browser-import' ? 'browser-import' : value.source === 'session-migration' ? 'session-migration' : 'convoy';
     if (value.externalPublish?.state === 'pending') value.externalPublish.state = 'outcome-unknown';
@@ -24,12 +27,15 @@ export function createCatalog({ state, save, execution, externalTickets, context
     if (!value.enabled) throw new Error('Ticket connection is disabled.');
     return value;
   };
+  const normalizedRemote = item => item?.remoteId ? item : item && ({ remoteId: item.id, remoteKey: item.identifier, url: item.url, title: item.title, description: item.description ?? '', sourceScope: item.team?.id, fieldOwnership: { title: 'external', description: 'external' } });
   const link = (source, remote) => {
     if (typeof remote.remoteId !== 'string' || !remote.remoteId || typeof remote.remoteKey !== 'string' || !remote.remoteKey) throw new Error('External issue identity is incomplete.');
-    const url = new URL(remote.url);
-    if (url.protocol !== 'https:' || url.hostname !== 'linear.app') throw new Error('Linear issue URL is invalid.');
+    const fallbackUrl = source.provider === 'linear' ? `https://linear.app/issue/${encodeURIComponent(remote.remoteKey)}` : source.manifest?.connection?.baseUrl;
+    const url = new URL(remote.url ?? fallbackUrl);
+    if (!['https:', 'http:'].includes(url.protocol)) throw new Error('External issue URL is invalid.');
+    if (source.provider === 'linear' && url.hostname !== 'linear.app') throw new Error('Linear issue URL is invalid.');
     return { connectionId: source.id, provider: source.provider, remoteId: remote.remoteId,
-      remoteKey: remote.remoteKey, url: url.href, syncState: 'linked' };
+      remoteKey: remote.remoteKey, url: url.href, syncState: 'linked', ...(remote.remoteVersion ? { remoteVersion: remote.remoteVersion } : {}) };
   };
   const attachmentOwner = t => ({
     id: `ticket-${t.id}`,
@@ -63,6 +69,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
   const boards = createBoards({ state, save, projects: state.projects, ticket, referencedColumn, referencedBoard });
   async function publish(t, source, requestId) {
     if (!externalTickets) throw new Error('External ticket adapter is unavailable.');
+    if (source.capabilities?.create === false) throw new Error('This ticket source is read-only.');
     if (t.externalLinks?.some(item => item.connectionId === source.id)) return t;
     if (t.externalLinks?.length) throw new Error('This ticket is already linked to an external issue.');
     if (t.externalPublish) throw new Error('A previous external creation needs reconciliation.');
@@ -82,6 +89,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
   }
   async function pushContent(t, externalLink) {
     const source = activeConnection(externalLink.connectionId);
+    if (source.capabilities?.update === false) throw new Error('This ticket source is read-only.');
     if (!externalTickets?.updateIssue) throw new Error('External ticket update adapter is unavailable.');
     if (externalLink.fieldOwnership?.title !== 'convoy' || externalLink.fieldOwnership?.description !== 'convoy') throw new Error('This ticket has external-owned content.');
     externalLink.syncState = 'error';
@@ -112,12 +120,23 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const old = c.id ? connection(c.id) : null;
         if (old && c.revision !== old.revision) throw new Error('Ticket connection changed in another client.');
         if (old && old.organizationId !== c.organizationId) throw new Error('Connection organization cannot change.');
-        if (old && old.teamId !== c.teamId && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) throw new Error('A connection with linked tickets cannot change Linear teams.');
-        if (c.provider !== 'linear') throw new Error('Only Linear ticket connections are supported.');
-        if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(c.teamId)) throw new Error('Linear team ID must be a UUID.');
-        if (!/^CONVOY_LINEAR_TOKEN_[A-Z0-9_]{1,60}$/.test(c.credentialEnv)) throw new Error('Credential environment variable must start with CONVOY_LINEAR_TOKEN_.');
+        if (old && old.provider !== c.provider) throw new Error('Connection provider cannot change.');
+        if (!['linear', 'custom-http'].includes(c.provider)) throw new Error('Ticket connection provider is unsupported.');
+        if (c.provider === 'linear') {
+          if (old && old.teamId !== c.teamId && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) throw new Error('A connection with linked tickets cannot change Linear teams.');
+          if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(c.teamId)) throw new Error('Linear team ID must be a UUID.');
+          if (!/^CONVOY_LINEAR_TOKEN_[A-Z0-9_]{1,60}$/.test(c.credentialEnv)) throw new Error('Credential environment variable must start with CONVOY_LINEAR_TOKEN_.');
+        }
+        const manifest = c.provider === 'custom-http' ? structuredClone(c.manifest) : undefined;
+        if (c.provider === 'custom-http') {
+          if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw new Error('Custom ticket source manifest must be an object.');
+          externalTickets?.validateConnection?.({ provider: c.provider, manifest });
+        }
+        if (old && c.provider === 'custom-http' && JSON.stringify(old.manifest) !== JSON.stringify(manifest) && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) throw new Error('A connection with linked tickets cannot replace its source manifest. Create another connection.');
         if (c.enabled !== undefined && typeof c.enabled !== 'boolean') throw new Error('Connection enabled must be a boolean.');
-        const value = { id: old?.id ?? randomUUID(), organizationId: c.organizationId, provider: 'linear', name: text(c.name, 'Connection name', 100), teamId: c.teamId, credentialEnv: c.credentialEnv, enabled: c.enabled ?? old?.enabled ?? true, revision: (old?.revision ?? 0) + 1 };
+        const providerFields = c.provider === 'linear' ? { teamId: c.teamId, credentialEnv: c.credentialEnv } : { manifest };
+        const capabilities = { import: true, create: c.provider === 'linear', update: c.provider === 'linear' };
+        const value = { id: old?.id ?? randomUUID(), organizationId: c.organizationId, provider: c.provider, name: text(c.name, 'Connection name', 100), ...providerFields, capabilities, enabled: c.enabled ?? old?.enabled ?? true, revision: (old?.revision ?? 0) + 1 };
         if (old) Object.assign(old, value); else state.ticketConnections.push(value);
         await save(); return value;
       }
@@ -179,12 +198,33 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (c.remoteId) {
           const source = connection(t.externalPublish.connectionId);
           if (!externalTickets) throw new Error('External ticket adapter is unavailable.');
-          const remote = await externalTickets.getIssue(source, text(c.remoteId, 'Remote issue ID', 100));
-          if (!remote || remote.team?.id !== source.teamId) throw new Error('Issue was not found in the configured Linear team.');
-          if (state.tickets.some(other => other.id !== t.id && other.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === remote.id))) throw new Error('Linear issue is already linked to another ticket.');
-          t.externalLinks = [...(t.externalLinks ?? []), { ...link(source, { remoteId: remote.id, remoteKey: remote.identifier, url: remote.url }), remoteTitle: remote.title, remoteDescription: remote.description ?? '', fieldOwnership: { title: 'convoy', description: 'convoy' } }];
+          const remote = normalizedRemote(await externalTickets.getIssue(source, text(c.remoteId, 'Remote issue ID', 100)));
+          if (!remote || source.provider === 'linear' && remote.sourceScope !== source.teamId) throw new Error('Issue was not found in the configured ticket source.');
+          if (state.tickets.some(other => other.id !== t.id && other.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === remote.remoteId))) throw new Error('External issue is already linked to another ticket.');
+          t.externalLinks = [...(t.externalLinks ?? []), { ...link(source, remote), remoteTitle: remote.title, remoteDescription: remote.description ?? '', fieldOwnership: { title: 'convoy', description: 'convoy' } }];
         }
         delete t.externalPublish; t.revision++; await save(); return t;
+      }
+      if (c.action === 'previewExternalTickets') {
+        const owner = project(c.projectId); const source = activeConnection(c.connectionId);
+        if (source.organizationId !== owner.organizationId) throw new Error('Connection is not available to this project.');
+        if (!externalTickets?.listIssues) throw new Error('External ticket adapter is unavailable.');
+        const limit = c.limit ?? 10;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 25) throw new Error('Preview limit must be 1–25.');
+        const remote = await externalTickets.listIssues(source, limit);
+        let wouldImport = 0; let wouldUpdate = 0; let unchanged = 0;
+        let sample;
+        for (const item of remote) {
+          const normalized = normalizedRemote(item);
+          if (!normalized?.remoteId || !normalized.remoteKey || !normalized.title) throw new Error('Ticket source returned an incomplete issue.');
+          sample ??= { remoteId: normalized.remoteId, remoteKey: normalized.remoteKey, title: normalized.title, description: normalized.description ?? '' };
+          const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
+          if (!existing) { wouldImport++; continue; }
+          const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === normalized.remoteId);
+          if (previous.remoteTitle !== normalized.title || previous.remoteDescription !== (normalized.description ?? '') || previous.remoteVersion !== normalized.remoteVersion) wouldUpdate++;
+          else unchanged++;
+        }
+        return { wouldImport, wouldUpdate, unchanged, ...(sample ? { sample } : {}) };
       }
       if (c.action === 'importExternalTickets') {
         const owner = project(c.projectId); const source = activeConnection(c.connectionId);
@@ -195,24 +235,29 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const remote = await externalTickets.listIssues(source, limit);
         const planned = []; let imported = 0; let updated = 0;
         for (const item of remote) {
-          if (!item?.id || !item.identifier || !item.url || !item.title) throw new Error('Linear returned an incomplete issue.');
-          const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === item.id));
-          const remoteLink = { ...link(source, { remoteId: item.id, remoteKey: item.identifier, url: item.url }), remoteTitle: item.title, remoteDescription: item.description ?? '', fieldOwnership: { title: 'external', description: 'external' } };
+          const normalized = normalizedRemote(item);
+          if (!normalized?.remoteId || !normalized.remoteKey || !normalized.title) throw new Error('Ticket source returned an incomplete issue.');
+          const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
+          const ownership = normalized.fieldOwnership ?? { title: 'external', description: 'external' };
+          const remoteLink = { ...link(source, normalized), remoteTitle: normalized.title, remoteDescription: normalized.description ?? '', fieldOwnership: ownership };
           if (existing) {
-            const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === item.id);
+            const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === normalized.remoteId);
             remoteLink.fieldOwnership = previous.fieldOwnership ?? remoteLink.fieldOwnership;
-            const changed = previous.remoteTitle !== item.title || previous.remoteDescription !== (item.description ?? '');
+            const changed = previous.remoteTitle !== normalized.title || previous.remoteDescription !== (normalized.description ?? '') || previous.remoteVersion !== normalized.remoteVersion;
             const localChanged = existing.title !== previous.remoteTitle || existing.description !== previous.remoteDescription;
             const next = { ...existing, externalLinks: existing.externalLinks.map(value => value === previous ? remoteLink : value) };
-            if (changed && (localChanged || remoteLink.fieldOwnership.title === 'convoy' && previous.remoteTitle !== item.title || remoteLink.fieldOwnership.description === 'convoy' && previous.remoteDescription !== (item.description ?? ''))) {
-              remoteLink.syncState = 'error'; remoteLink.message = 'Local and Linear content changed. Review this ticket.';
+            if (changed && (localChanged || remoteLink.fieldOwnership.title === 'convoy' && previous.remoteTitle !== normalized.title || remoteLink.fieldOwnership.description === 'convoy' && previous.remoteDescription !== (normalized.description ?? ''))) {
+              remoteLink.syncState = 'error'; remoteLink.message = 'Local and external content changed. Review this ticket.';
             } else if (changed) {
-              next.title = item.title; next.description = item.description ?? ''; next.revision++; updated++;
+              next.title = normalized.title; next.description = normalized.description ?? '';
+              if (normalized.status !== undefined) next.status = normalized.status;
+              if (normalized.priority !== undefined) next.priority = normalized.priority;
+              next.revision++; updated++;
             }
             planned.push({ old: existing, next });
           } else {
             const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...planned.map(v => Number(v.next.id)), ...execution.reservedTicketIds()) + 1;
-            const next = { id, projectId: c.projectId, ...fields({ title: item.title, description: item.description ?? '' }), revision: 1, origin: 'external', externalLinks: [remoteLink], placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+            const next = { id, projectId: c.projectId, ...fields({ title: normalized.title, description: normalized.description ?? '', status: normalized.status, priority: normalized.priority }), revision: 1, origin: 'external', externalLinks: [remoteLink], placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
             planned.push({ next }); imported++;
           }
         }
@@ -231,8 +276,8 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (c.resolution && !['local', 'remote'].includes(c.resolution)) throw new Error('Unknown sync resolution.');
         if (c.resolution === 'remote') {
           if (!externalTickets?.getIssue) throw new Error('External ticket read adapter is unavailable.');
-          const remote = await externalTickets.getIssue(connection(c.connectionId), externalLink.remoteId);
-          if (!remote || remote.team?.id !== connection(c.connectionId).teamId) throw new Error('Linear issue is no longer in the configured team.');
+          const remote = normalizedRemote(await externalTickets.getIssue(connection(c.connectionId), externalLink.remoteId));
+          if (!remote || connection(c.connectionId).provider === 'linear' && remote.sourceScope !== connection(c.connectionId).teamId) throw new Error('External issue is no longer in the configured source.');
           const patch = { title: remote.title, description: remote.description ?? '' };
           boards.validateTicketUpdate(t, patch);
           Object.assign(t, patch, { revision: t.revision + 1 });

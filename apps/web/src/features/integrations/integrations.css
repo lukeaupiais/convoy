@@ -13,7 +13,7 @@
   margin: 0;
   font-size: 20px;
   font-weight: 650;
-  letter-spacing: -.03em;
+  letter-spacing: -0.03em;
 }
 .integration-workspace,
 .integration-list {
@@ -41,7 +41,10 @@
   display: flex;
   align-items: center;
 }
-.integration-card-title { min-width: 0; gap: 9px; }
+.integration-card-title {
+  min-width: 0;
+  gap: 9px;
+}
 .integration-card-title strong {
   overflow: hidden;
   font-size: 13px;
@@ -57,13 +60,19 @@
   border: 1px solid #fff;
   box-shadow: 0 0 0 1px #69746e;
 }
-.integration-status-light.is-enabled { background: #2c9463; }
+.integration-status-light.is-enabled {
+  background: #2c9463;
+}
 .integration-status {
   color: #6b756f;
   font-size: 11px;
 }
-.integration-status.is-enabled { color: #296747; }
-.integration-actions { gap: 7px; }
+.integration-status.is-enabled {
+  color: #296747;
+}
+.integration-actions {
+  gap: 7px;
+}
 .integration-card-body {
   gap: 7px;
   margin: 7px 0 0 17px;
@@ -98,7 +107,7 @@
   color: #56615b;
   font-size: 11px;
 }
-.app .integration-settings input {
+.app .integration-settings :is(input, textarea) {
   width: 100%;
   min-height: 36px;
   padding: 8px 10px;
@@ -109,6 +118,11 @@
   box-shadow: inset 1px 1px 0 #e2e6e3;
   font: inherit;
   font-size: 12px;
+}
+.app .integration-settings textarea {
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  line-height: 1.45;
 }
 .app .integration-settings :is(.primary, .secondary) {
   min-height: 32px;
@@ -127,7 +141,7 @@
   background: #326c5e;
   border: 1px solid #245247;
 }
-.app .integration-settings :is(button, input, summary):focus-visible {
+.app .integration-settings :is(button, input, textarea, summary):focus-visible {
   outline: 2px solid #326c5e;
   outline-offset: 2px;
 }
@@ -147,11 +161,23 @@
   font-size: 12px;
   font-weight: 650;
 }
-.integration-add[open] summary { border-bottom: 1px solid var(--line); }
-.integration-add form { padding: 15px; }
-.integration-add form > .primary { justify-self: start; }
+.integration-add[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+.integration-add form {
+  padding: 15px;
+}
+.integration-add form > .primary {
+  justify-self: start;
+}
 @media (max-width: 600px) {
-  .integration-card header { align-items: flex-start; }
-  .integration-status { display: none; }
-  .integration-card-body { margin-left: 17px; }
+  .integration-card header {
+    align-items: flex-start;
+  }
+  .integration-status {
+    display: none;
+  }
+  .integration-card-body {
+    margin-left: 17px;
+  }
 }

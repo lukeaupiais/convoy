@@ -6,6 +6,7 @@ const commands = [
   'saveTicketConnection',
   'deleteTicketConnection',
   'probeTicketConnection',
+  'previewExternalTickets',
   'publishTicket',
   'reconcileTicketPublish',
   'syncExternalTicket',

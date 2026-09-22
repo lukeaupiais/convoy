@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.mjs';
 import { normalizeWorkflow, createWorkflowEngine } from '../../apps/daemon/src/modules/workflows/workflows.mjs';
+import { createCustomTicketSource } from '../../apps/daemon/src/adapters/custom-ticket-source.mjs';
+import { createTicketSources } from '../../apps/daemon/src/adapters/ticket-sources.mjs';
 
 async function until(read) {
   for (let i = 0; i < 300; i++) { const result = await read(); if (result) return result; await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -58,6 +60,43 @@ test('acceptance: a board can mix local and Linear tickets without publishing lo
   const disabled = await f.act('saveTicketConnection', { ...source, revision: source.revision, enabled: false });
   assert.equal(disabled.enabled, false);
   await assert.rejects(f.act('deleteTicketConnection', { id: source.id, revision: disabled.revision }), /Remove this connection from boards/);
+});
+
+test('acceptance: a mapped HTTP source previews, imports once, and survives restart', async t => {
+  const previous = process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE;
+  process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE = 'fixture-secret';
+  t.after(() => { if (previous === undefined) delete process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE; else process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE = previous; });
+  let requests = 0;
+  const custom = createCustomTicketSource({
+    resolver: async () => [{ address: '203.0.113.20', family: 4 }],
+    fetcher: async (_url, options) => {
+      requests++;
+      assert.equal(options.headers.Authorization, 'Bearer fixture-secret');
+      return new Response(JSON.stringify({ items: [{ id: 'case-9', number: 'CASE-9', subject: 'Mapped ticket', details: 'Remote details', state: 'open', severity: 'urgent', revision: 'r1', url: 'https://support.example.com/tickets/9' }] }), { headers: { 'content-type': 'application/json' } });
+    },
+  });
+  const f = await fixture(t, { externalTickets: createTicketSources({ 'custom-http': custom }) });
+  const manifest = {
+    apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+    connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE' } },
+    operations: { list: { method: 'GET', path: '/tickets', response: { items: '$.items' } } },
+    mapping: { remoteId: '$.id', remoteKey: '$.number', title: '$.subject', description: '$.details', status: '$.state', priority: '$.severity', remoteVersion: '$.revision', url: '$.url' },
+    values: { status: { open: 'Backlog' }, priority: { urgent: 'High' } },
+  };
+  const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Mapped support', manifest });
+  const preview = await f.act('previewExternalTickets', { connectionId: source.id, projectId: 'agent-platform' });
+  assert.equal(preview.wouldImport, 1);
+  assert.equal((await f.snapshot()).tickets.length, 0);
+  assert.deepEqual(await f.act('importExternalTickets', { connectionId: source.id, projectId: 'agent-platform' }), { imported: 1, updated: 0 });
+  assert.deepEqual(await f.act('importExternalTickets', { connectionId: source.id, projectId: 'agent-platform' }), { imported: 0, updated: 0 });
+  await f.restart();
+  const state = await f.snapshot();
+  const imported = state.tickets.find(ticket => ticket.externalLinks?.[0]?.remoteId === 'case-9');
+  assert.equal(imported.title, 'Mapped ticket');
+  assert.equal(imported.priority, 'High');
+  assert.equal(imported.externalLinks[0].provider, 'custom-http');
+  assert.equal(state.ticketConnections.find(connection => connection.id === source.id).manifest.mapping.remoteId, '$.id');
+  assert.equal(requests, 3);
 });
 
 test('acceptance: a conversation can execute and approve a workflow without creating a ticket', async t => {

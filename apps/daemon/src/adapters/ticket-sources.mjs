@@ -1,0 +1,24 @@
+export function createTicketSources(adapters) {
+  function adapter(connection) {
+    const value = adapters[connection?.provider];
+    if (!value) throw new Error(`Ticket source provider ${connection?.provider ?? 'unknown'} is unavailable.`);
+    return value;
+  }
+  return {
+    validateConnection(connection) { return adapter(connection).validateConnection?.(connection); },
+    assertReady(connection) { return adapter(connection).assertReady?.(connection); },
+    probe(connection) { return adapter(connection).probe(connection); },
+    listIssues(connection, limit) { return adapter(connection).listIssues(connection, limit); },
+    getIssue(connection, remoteId) { return adapter(connection).getIssue(connection, remoteId); },
+    createIssue(connection, ticket) {
+      const value = adapter(connection);
+      if (!value.createIssue) throw new Error('This ticket source is read-only.');
+      return value.createIssue(connection, ticket);
+    },
+    updateIssue(connection, remoteId, fields) {
+      const value = adapter(connection);
+      if (!value.updateIssue) throw new Error('This ticket source is read-only.');
+      return value.updateIssue(connection, remoteId, fields);
+    },
+  };
+}

@@ -32,18 +32,78 @@ export type ExternalTicketLink = {
   message?: string;
   remoteTitle?: string;
   remoteDescription?: string;
-  fieldOwnership?: { title: 'convoy' | 'external'; description: 'convoy' | 'external' };
+  remoteVersion?: string;
+  fieldOwnership?: {
+    title: 'convoy' | 'external';
+    description: 'convoy' | 'external';
+    status?: 'convoy' | 'external';
+    priority?: 'convoy' | 'external';
+  };
 };
-export type TicketConnection = {
+export type TicketSourceManifest = {
+  apiVersion: 'convoy.dev/v1alpha1';
+  kind: 'TicketSource';
+  metadata?: { name: string };
+  connection: {
+    baseUrl: string;
+    authentication:
+      | { type: 'bearer'; credential: string }
+      | { type: 'header'; credential: string; header: string };
+  };
+  operations: {
+    list: {
+      method: 'GET';
+      path: string;
+      query?: Record<string, string>;
+      response: { items: string; nextCursor?: string };
+    };
+    get?: {
+      method: 'GET';
+      path: string;
+      query?: Record<string, string>;
+      response: { item: string };
+    };
+  };
+  mapping: {
+    remoteId: string;
+    remoteKey: string;
+    title: string;
+    description?: string;
+    status?: string;
+    priority?: string;
+    remoteVersion: string;
+    updatedAt?: string;
+    url?: string;
+  };
+  values?: {
+    status?: Record<string, string>;
+    priority?: Record<string, string>;
+  };
+  ownership?: {
+    title?: 'convoy' | 'external';
+    description?: 'convoy' | 'external';
+    status?: 'convoy' | 'external';
+    priority?: 'convoy' | 'external';
+  };
+};
+type TicketConnectionBase = {
   id: string;
   organizationId: string;
-  provider: 'linear';
   name: string;
-  teamId: string;
-  credentialEnv: string;
   enabled: boolean;
+  capabilities?: { import: true; create: boolean; update: boolean };
   revision: number;
 };
+export type TicketConnection = TicketConnectionBase &
+  (
+    | { provider: 'linear'; teamId: string; credentialEnv: string; manifest?: never }
+    | {
+        provider: 'custom-http';
+        manifest: TicketSourceManifest;
+        teamId?: never;
+        credentialEnv?: never;
+      }
+  );
 export type Ticket = {
   id: number;
   executionSessionId?: string;

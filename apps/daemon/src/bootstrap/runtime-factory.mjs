@@ -3,6 +3,8 @@ import { createRuntime as createControlPlaneRuntime } from '../control-plane/run
 import { initialControlPlaneState } from '../control-plane/state-schema.mjs';
 import { defaultWorkflowDefinition } from '../modules/workflows/index.mjs';
 import { createLinearTickets } from '../adapters/linear-tickets.mjs';
+import { createCustomTicketSource } from '../adapters/custom-ticket-source.mjs';
+import { createTicketSources } from '../adapters/ticket-sources.mjs';
 
 /**
  * Filesystem composition for production, tests, and smoke scripts.
@@ -19,5 +21,11 @@ export async function createRuntime({ directory, legacyDirectory, persistenceBac
     importLegacy,
     onFatal: onPersistenceFailure,
   });
-  return createControlPlaneRuntime({ externalTickets: createLinearTickets(), ...dependencies, persistence });
+  const externalTickets = createTicketSources({
+    linear: createLinearTickets(),
+    'custom-http': createCustomTicketSource({
+      allowedPrivateOrigins: (process.env.CONVOY_TICKET_SOURCE_PRIVATE_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean),
+    }),
+  });
+  return createControlPlaneRuntime({ externalTickets, ...dependencies, persistence });
 }

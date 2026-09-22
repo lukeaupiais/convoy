@@ -22,6 +22,16 @@ async function graphql(connection, query, variables, fetcher = fetch) {
 
 export function createLinearTickets({ fetcher = fetch } = {}) {
   const call = (connection, query, variables) => graphql(connection, query, variables, fetcher);
+  const normalize = (issue) => issue && ({
+    remoteId: issue.id,
+    remoteKey: issue.identifier,
+    url: issue.url,
+    title: issue.title,
+    description: issue.description ?? '',
+    remoteVersion: issue.updatedAt ?? `${issue.title}\n${issue.description ?? ''}`,
+    fieldOwnership: { title: 'external', description: 'external' },
+    ...(issue.team ? { sourceScope: issue.team.id } : {}),
+  });
   return {
     assertReady(connection) { credential(connection); },
     async probe(connection) {
@@ -29,7 +39,7 @@ export function createLinearTickets({ fetcher = fetch } = {}) {
         'query($id: String!) { team(id: $id) { id name } }',
         { id: connection.teamId });
       if (data.team?.id !== connection.teamId) throw new Error('Linear team is unavailable to this credential.');
-      return { teamName: data.team.name };
+      return { sourceName: data.team.name, teamName: data.team.name, itemCount: undefined };
     },
     async createIssue(connection, ticket) {
       const data = await call(connection,
@@ -37,27 +47,27 @@ export function createLinearTickets({ fetcher = fetch } = {}) {
         { input: { teamId: connection.teamId, title: ticket.title, description: ticket.description } });
       const issue = data.issueCreate?.issue;
       if (!data.issueCreate?.success || !issue?.id || !issue?.identifier || !issue?.url) throw new Error('Linear did not confirm issue creation.');
-      return { remoteId: issue.id, remoteKey: issue.identifier, url: issue.url };
+      return normalize(issue);
     },
     async getIssue(connection, remoteId) {
       const data = await call(connection,
-        'query($id: String!) { issue(id: $id) { id identifier url title description team { id } } }',
+        'query($id: String!) { issue(id: $id) { id identifier url title description updatedAt team { id } } }',
         { id: remoteId });
-      return data.issue;
+      return normalize(data.issue);
     },
     async updateIssue(connection, remoteId, fields) {
       const data = await call(connection,
         'mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id identifier url title description } } }',
         { id: remoteId, input: fields });
       if (!data.issueUpdate?.success || data.issueUpdate.issue?.id !== remoteId) throw new Error('Linear did not confirm the issue update.');
-      return data.issueUpdate.issue;
+      return normalize(data.issueUpdate.issue);
     },
     async listIssues(connection, limit) {
       const data = await call(connection,
-        'query($id: String!, $first: Int!) { team(id: $id) { issues(first: $first) { nodes { id identifier url title description } } } }',
+        'query($id: String!, $first: Int!) { team(id: $id) { issues(first: $first) { nodes { id identifier url title description updatedAt } } } }',
         { id: connection.teamId, first: limit });
       if (!data.team?.issues?.nodes) throw new Error('Linear team or issues unavailable.');
-      return data.team.issues.nodes;
+      return data.team.issues.nodes.map(normalize);
     },
   };
 }

@@ -361,7 +361,7 @@ export function BoardStudio({
                   {draft.creationPolicy?.mode === 'connection' && !connections.some((value) => value.enabled && value.id === draft.creationPolicy?.connectionId) &&
                     <option value={`connection:${draft.creationPolicy.connectionId}`} disabled>Connection unavailable</option>}
                   {(draft.destinationConnectionIds?.length ?? 0) > 0 && <option value="ask">Ask each time</option>}
-                  {connections.filter((value) => value.enabled && draft.destinationConnectionIds?.includes(value.id)).map((value) => <option key={value.id} value={`connection:${value.id}`}>Create in {value.name}</option>)}
+                  {connections.filter((value) => value.enabled && value.capabilities?.create !== false && draft.destinationConnectionIds?.includes(value.id)).map((value) => <option key={value.id} value={`connection:${value.id}`}>Create in {value.name}</option>)}
                 </Select>
               </label>
               {connections.map((value) => (
@@ -374,6 +374,17 @@ export function BoardStudio({
                     }} />
                     {value.name}{!value.enabled && ' · Disabled'}
                   </label>
+                  <button className="secondary" type="button" disabled={saving || !value.enabled} onClick={async () => {
+                    setSaving(true);
+                    try {
+                      const response = await command('previewExternalTickets', { connectionId: value.id, projectId, limit: 10 });
+                      setMessage(`Preview: ${response.result.wouldImport} new, ${response.result.wouldUpdate} changed, ${response.result.unchanged} unchanged.`);
+                    } catch (error) {
+                      setMessage(`Preview failed: ${(error as Error).message}`);
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}>Preview</button>
                   <button className="secondary" type="button" disabled={saving || !value.enabled} onClick={async () => {
                     setSaving(true);
                     try {

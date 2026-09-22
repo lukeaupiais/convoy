@@ -15,5 +15,7 @@ inject adapters so module and acceptance tests can use deterministic fakes.
 | `persistence` | SQLite or PostgreSQL keyed state rows, attachment bytes, and bounded command logs |
 | `providers` | direct provider HTTP protocol, model catalog, and streaming normalization |
 | `linear-tickets` | Linear GraphQL issue import, creation, lookup, and update |
+| `custom-ticket-source` | bounded declarative HTTP/JSON ticket normalization |
+| `ticket-sources` | provider routing behind one normalized ticket interface |
 | `runners` | local process or SSH worker transport |
 | `deployment` | durable deployment identity and fail-closed server configuration |

@@ -129,3 +129,26 @@ test('connections can be tested, disabled, and deleted only when unused', async 
   await catalog.command({ action: 'saveBoard', ...board, revision: board.revision, destinationConnectionIds: [] });
   assert.deepEqual(await catalog.command({ action: 'deleteTicketConnection', id: source.id, revision: disabled.revision }), { id: source.id, deleted: true });
 });
+
+test('custom HTTP connections remain provider-neutral and preview without mutation', async () => {
+  const remote = [{ remoteId: 'support-1', remoteKey: 'SUP-1', url: 'https://support.example.com/tickets/1', title: 'Customer report', description: 'Details', status: 'Ready', priority: 'High', remoteVersion: 'v1', fieldOwnership: { title: 'external', description: 'external', status: 'external', priority: 'external' } }];
+  const { catalog, state } = fixture({ probe: async source => ({ sourceName: source.name, sample: remote[0] }), listIssues: async () => remote });
+  const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource', connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TOKEN_TEST' } }, operations: { list: { method: 'GET', path: '/tickets', response: { items: '$.items' } } }, mapping: { remoteId: '$.id', remoteKey: '$.key', title: '$.title', description: '$.description', remoteVersion: '$.updatedAt', url: '$.url' } };
+  const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Customer support', manifest });
+  assert.equal(source.provider, 'custom-http');
+  assert.deepEqual(source.capabilities, { import: true, create: false, update: false });
+  assert.equal(source.manifest.connection.baseUrl, 'https://support.example.com/api');
+  assert.equal((await catalog.command({ action: 'probeTicketConnection', id: source.id })).sample.remoteKey, 'SUP-1');
+  const preview = await catalog.command({ action: 'previewExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  assert.deepEqual(preview, { wouldImport: 1, wouldUpdate: 0, unchanged: 0, sample: { remoteId: 'support-1', remoteKey: 'SUP-1', title: 'Customer report', description: 'Details' } });
+  assert.equal(state.tickets.length, 0);
+  await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  assert.equal(state.tickets[0].title, 'Customer report');
+  assert.equal(state.tickets[0].status, 'Ready');
+  assert.equal(state.tickets[0].priority, 'High');
+  assert.equal(state.tickets[0].externalLinks[0].provider, 'custom-http');
+  const board = await catalog.command({ action: 'saveBoard', name: 'Support', projectIds: ['alpha'], columns: [{ id: 'todo', name: 'Todo' }], destinationConnectionIds: [source.id] });
+  const local = await catalog.command({ action: 'createTicket', requestId: 'custom-local', boardId: board.id, projectId: 'alpha', title: 'Local' });
+  await assert.rejects(catalog.command({ action: 'publishTicket', requestId: 'custom-publish', ticketId: local.id, revision: local.revision, connectionId: source.id }), /read-only/);
+  assert.equal(local.externalPublish, undefined);
+});

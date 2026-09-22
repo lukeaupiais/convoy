@@ -282,14 +282,28 @@ export type RuntimeCommandInputMap = {
     priority?: 'Low' | 'Medium' | 'High';
     customFields?: Record<string, string | number | boolean | null>;
   };
-  saveTicketConnection: Partial<Pick<TicketConnection, 'id' | 'revision'>> &
-    Pick<TicketConnection, 'organizationId' | 'name' | 'provider' | 'teamId' | 'credentialEnv'> &
-    Partial<Pick<TicketConnection, 'enabled'>>;
+  saveTicketConnection: Partial<Pick<TicketConnection, 'id' | 'revision' | 'enabled'>> &
+    Pick<TicketConnection, 'organizationId' | 'name'> &
+    (
+      | { provider: 'linear'; teamId: string; credentialEnv: string }
+      | { provider: 'custom-http'; manifest: import('./model/work').TicketSourceManifest }
+    );
   deleteTicketConnection: { id: string; revision: number };
   probeTicketConnection: { id: string };
+  previewExternalTickets: { connectionId: string; projectId: string; limit?: number };
   publishTicket: RequestIdentity & { ticketId: number; revision: number; connectionId: string };
-  reconcileTicketPublish: { ticketId: number; revision: number; remoteId?: string; confirmNotCreated?: true };
-  syncExternalTicket: { ticketId: number; revision: number; connectionId: string; resolution?: 'local' | 'remote' };
+  reconcileTicketPublish: {
+    ticketId: number;
+    revision: number;
+    remoteId?: string;
+    confirmNotCreated?: true;
+  };
+  syncExternalTicket: {
+    ticketId: number;
+    revision: number;
+    connectionId: string;
+    resolution?: 'local' | 'remote';
+  };
   importExternalTickets: { connectionId: string; projectId: string; limit?: number };
   decide: SessionTarget & {
     approvalId: string;
@@ -521,7 +535,17 @@ type RuntimeCommandKnownResults = {
   createTicket: Ticket;
   saveTicketConnection: TicketConnection;
   deleteTicketConnection: { id: string; deleted: true };
-  probeTicketConnection: { teamName: string };
+  probeTicketConnection: {
+    sourceName: string;
+    itemCount?: number;
+    sample?: { remoteId: string; remoteKey: string; title: string; description: string };
+  };
+  previewExternalTickets: {
+    wouldImport: number;
+    wouldUpdate: number;
+    unchanged: number;
+    sample?: { remoteId: string; remoteKey: string; title: string; description: string };
+  };
   publishTicket: Ticket;
   reconcileTicketPublish: Ticket;
   syncExternalTicket: Ticket;

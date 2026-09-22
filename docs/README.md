@@ -11,6 +11,7 @@ shared contracts when changing code or UI copy.
 - [Tool and approval contract](architecture/tool-harness.md)
 - [Workflow selection and start automations](architecture/workflow-selection-and-automation-spec.md)
 - [Board integrations product and behavior spec](board-integrations-spec.md)
+- [Custom ticket source product and architecture spec](custom-ticket-source-spec.md)
 - [Extension contract](architecture/extensions.md)
 - [Command execution](command-execution.md)
 - [Portable local and SSH workers](portable-workers.md)
