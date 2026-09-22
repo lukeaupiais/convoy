@@ -263,36 +263,40 @@ export function TicketDetails({
             }}>No issue was created</button>
           </div>
         )}
-        {ticket.externalLinks?.filter((link) => link.syncState === 'error').map((link) => (
-          <div key={link.connectionId} className="ticket-sync-issue" role="alert">
+        {ticket.externalLinks?.filter((link) => link.syncState === 'error').map((link) => {
+          const connection = state.ticketConnections?.find((item) => item.id === link.connectionId);
+          const sourceName = connection?.name ?? 'external source';
+          return <div key={link.connectionId} className="ticket-sync-issue" role="alert">
             <p>{link.message ?? 'Sync needs review.'}</p>
             <details>
               <summary>Compare content</summary>
               <dl>
                 <dt>Title in Convoy</dt><dd>{ticket.title}</dd>
-                <dt>Last observed title in Linear</dt><dd>{link.remoteTitle ?? 'Unknown'}</dd>
+                <dt>Last observed title in {sourceName}</dt><dd>{link.remoteTitle ?? 'Unknown'}</dd>
                 <dt>Description in Convoy</dt><dd>{ticket.description || 'Empty'}</dd>
-                <dt>Last observed description in Linear</dt><dd>{link.remoteDescription || 'Empty'}</dd>
+                <dt>Last observed description in {sourceName}</dt><dd>{link.remoteDescription || 'Empty'}</dd>
+                {link.remoteStatus !== undefined && <><dt>Status in Convoy</dt><dd>{ticket.status}</dd><dt>Last observed status in {sourceName}</dt><dd>{link.remoteStatus}</dd></>}
+                {link.remotePriority !== undefined && <><dt>Priority in Convoy</dt><dd>{ticket.priority}</dd><dt>Last observed priority in {sourceName}</dt><dd>{link.remotePriority}</dd></>}
               </dl>
             </details>
-            <button className="secondary" disabled={publishing} onClick={async () => {
+            {connection?.capabilities?.update && <button className="secondary" disabled={publishing} onClick={async () => {
               setPublishing(true);
               try {
                 const result = await command('syncExternalTicket', { ticketId: ticket.id, revision: ticket.revision, connectionId: link.connectionId, resolution: 'local' });
-                setMessage(result.result.externalLinks?.[0]?.syncState === 'linked' ? 'Linear updated.' : 'Sync still needs review.');
+                setMessage(result.result.externalLinks?.[0]?.syncState === 'linked' ? `${sourceName} updated.` : 'Sync still needs review.');
               } catch (error) { setMessage((error as Error).message); }
               finally { setPublishing(false); }
-            }}>Use Convoy values</button>
+            }}>Use Convoy values</button>}
             <button className="secondary" disabled={publishing} onClick={async () => {
               setPublishing(true);
               try {
                 await command('syncExternalTicket', { ticketId: ticket.id, revision: ticket.revision, connectionId: link.connectionId, resolution: 'remote' });
-                setMessage('Linear values applied.');
+                setMessage(`${sourceName} values applied.`);
               } catch (error) { setMessage((error as Error).message); }
               finally { setPublishing(false); }
-            }}>Use Linear values</button>
-          </div>
-        ))}
+            }}>Use {sourceName} values</button>
+          </div>;
+        })}
         {!ticket.externalLinks?.length && !ticket.externalPublish && availableConnections.length > 0 && (
           <label>
             Publish to

@@ -1,9 +1,10 @@
 # Custom ticket source: product and architecture spec
 
-Status: Slice 1 implemented for versioned manifest validation, connection probe,
-sample preview, dry run, and manual read-only import. Scheduling, webhook hints,
-outbound operations, durable cursors, and transformation extensions remain
-future slices.
+Status: Manual read-only import foundation implemented: versioned manifest
+validation, connection probe, normalized sample preview, dry run, and bounded
+manual import. Guided mapping, durable cursors, per-record diagnostics,
+scheduling, webhook hints, outbound operations, and transformation extensions
+remain future slices.
 
 ## Purpose
 
@@ -117,9 +118,10 @@ remove its controls rather than show a control that always fails.
 
 ## Source manifest
 
-The manifest is YAML or JSON parsed into one versioned contract. Unknown fields
-fail validation. A manifest is immutable after publication; edits create a new
-revision. A connection pins one published revision.
+The current UI accepts a JSON manifest parsed into one versioned contract.
+Unknown fields fail validation. YAML import/export and published manifest
+revisions remain future configuration tooling. A connection stores one
+validated manifest and cannot replace it after tickets have been linked.
 
 Example:
 
@@ -133,22 +135,20 @@ connection:
   baseUrl: https://support.example.com/api/v1
   authentication:
     type: bearer
-    credential: SUPPORT_API_TOKEN
+    credential: CONVOY_TICKET_SOURCE_SUPPORT_MAIN
 
 operations:
   list:
     method: GET
-    path: /tickets
+    path: tickets
     query:
-      updated_after: "${cursor}"
       limit: "${limit}"
     response:
       items: $.items
-      nextCursor: $.nextCursor
 
   get:
     method: GET
-    path: /tickets/${remoteId}
+    path: tickets/${remoteId}
     response:
       item: $.ticket
 
@@ -171,7 +171,7 @@ values:
   priority:
     low: Low
     normal: Medium
-    urgent: Critical
+    urgent: High
 
 ownership:
   title: external
@@ -180,9 +180,10 @@ ownership:
   priority: external
 ```
 
-`credential` is a broker reference, not an environment-variable requirement or
-secret value. Development composition may resolve it from an environment
-variable; installed and hosted deployments may use another credential adapter.
+`credential` is a reference, never a secret value. The current manual slice
+requires a `CONVOY_TICKET_SOURCE_*` environment-variable reference. Encrypted
+credential-broker storage for installed and hosted deployments remains future
+work.
 
 ### Allowed HTTP description
 
@@ -414,7 +415,9 @@ or audit history.
 - Declarative field and enum mapping.
 - Probe, sample preview, dry run, and manual import.
 - Stable identity, remote version, external links, and remote-owned fields.
-- Per-record diagnostics and page-level atomic cursor commit.
+
+The current manual slice rejects a malformed or duplicate page atomically. It
+does not yet persist per-record diagnostics or cursors.
 
 ### Slice 2: scheduled reconciliation
 

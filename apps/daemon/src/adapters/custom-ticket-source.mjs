@@ -1,5 +1,6 @@
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import { Agent } from 'undici';
 
 const selectorPattern = /^\$(?:\.[A-Za-z_][\w-]*|\[\d+\])*$/;
 const allowedPriorities = new Set(['Low', 'Medium', 'High']);
@@ -27,7 +28,9 @@ function selector(value, name) {
 }
 
 function endpointUrl(baseUrl, path, variables = {}) {
-  const rendered = requiredString(path, 'Operation path', 1000).replace(
+  const template = requiredString(path, 'Operation path', 1000);
+  if (template.startsWith('/')) throw new Error('Operation path must be relative to the configured base URL.');
+  const rendered = template.replace(
     /\$\{(remoteId|cursor|limit)\}/g,
     (_match, key) => encodeURIComponent(String(variables[key] ?? '')),
   );
@@ -37,22 +40,50 @@ function endpointUrl(baseUrl, path, variables = {}) {
   return url;
 }
 
+const blockedIpv4Destinations = new BlockList();
+const blockedIpv6Destinations = new BlockList();
+for (const [network, prefix] of [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24],
+  ['224.0.0.0', 4], ['240.0.0.0', 4],
+]) blockedIpv4Destinations.addSubnet(network, prefix, 'ipv4');
+for (const [network, prefix] of [
+  ['::', 128], ['::1', 128], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48],
+  ['2001:db8::', 32], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8],
+]) blockedIpv6Destinations.addSubnet(network, prefix, 'ipv6');
+
 function addressIsPrivate(address) {
-  if (address === '::1' || address === '::' || address.startsWith('fe80:') || address.startsWith('fc') || address.startsWith('fd')) return true;
-  if (!address.includes('.')) return false;
-  const [a, b] = address.split('.').map(Number);
-  return a === 10 || a === 127 || a === 0 || a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168;
+  const family = isIP(address);
+  return family === 0 || (family === 4
+    ? blockedIpv4Destinations.check(address, 'ipv4')
+    : blockedIpv6Destinations.check(address, 'ipv6'));
 }
 
 async function assertDestination(url, resolver, allowedPrivateOrigins) {
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))
     throw new Error('Custom ticket sources require HTTPS outside loopback development.');
-  if (allowedPrivateOrigins.has(url.origin)) return;
-  if (url.hostname === 'localhost' || isIP(url.hostname) && addressIsPrivate(url.hostname.replace(/^\[|\]$/g, '')))
-    throw new Error('Custom ticket source destination is private and is not allowed by this deployment.');
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  if (url.hostname === 'localhost' || isIP(hostname)) {
+    if ((url.hostname === 'localhost' || addressIsPrivate(hostname)) && !allowedPrivateOrigins.has(url.origin))
+      throw new Error('Custom ticket source destination is private and is not allowed by this deployment.');
+    return [];
+  }
   const addresses = await resolver(url.hostname, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some((entry) => addressIsPrivate(entry.address)))
+  if (!addresses.length || !allowedPrivateOrigins.has(url.origin) && addresses.some((entry) => addressIsPrivate(entry.address)))
     throw new Error('Custom ticket source resolved to a private or unavailable destination.');
+  return addresses;
+}
+
+function pinnedDispatcher(hostname, addresses) {
+  if (!addresses.length) return undefined;
+  let next = 0;
+  return new Agent({ connect: { lookup(requested, options, callback) {
+    if (requested !== hostname) return callback(new Error('Ticket source connection changed destination hostname.'));
+    if (options?.all) return callback(null, addresses);
+    const selected = addresses[next++ % addresses.length];
+    callback(null, selected.address, selected.family);
+  } } });
 }
 
 function readSelector(input, expression) {
@@ -185,7 +216,7 @@ function normalize(manifest, item) {
   };
 }
 
-export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, allowedPrivateOrigins = [] } = {}) {
+export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, allowedPrivateOrigins = [], dispatcherFactory = pinnedDispatcher } = {}) {
   const privateOrigins = new Set(allowedPrivateOrigins);
   async function readJson(response) {
     const chunks = []; let size = 0;
@@ -209,17 +240,22 @@ export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, a
       const value = variables[variable];
       if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
     }
-    await assertDestination(url, resolver, privateOrigins);
+    const addresses = await assertDestination(url, resolver, privateOrigins);
     const secret = credential(connection, manifest);
     const auth = manifest.connection.authentication;
     const headers = { Accept: 'application/json' };
     headers[auth.type === 'bearer' ? 'Authorization' : auth.header] = auth.type === 'bearer' ? `Bearer ${secret}` : secret;
-    const response = await fetcher(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(`Ticket source request failed (${response.status}).`);
-    const type = response.headers?.get?.('content-type') ?? 'application/json';
-    if (!type.toLowerCase().startsWith('application/json')) throw new Error('Ticket source returned a non-JSON response.');
-    const body = await readJson(response);
-    return { manifest, operation, body };
+    const dispatcher = dispatcherFactory(url.hostname, addresses);
+    try {
+      const response = await fetcher(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(15000), ...(dispatcher ? { dispatcher } : {}) });
+      if (!response.ok) throw new Error(`Ticket source request failed (${response.status}).`);
+      const type = response.headers?.get?.('content-type') ?? 'application/json';
+      if (!type.toLowerCase().startsWith('application/json')) throw new Error('Ticket source returned a non-JSON response.');
+      const body = await readJson(response);
+      return { manifest, operation, body };
+    } finally {
+      await dispatcher?.close();
+    }
   }
   return {
     validateConnection(connection) { return validateCustomTicketSourceManifest(connection.manifest); },

@@ -16,11 +16,11 @@ function manifest(overrides = {}) {
     operations: {
       list: {
         method: 'GET',
-        path: '/tickets',
+        path: 'tickets',
         query: { limit: '${limit}' },
         response: { items: '$.data.items' },
       },
-      get: { method: 'GET', path: '/tickets/${remoteId}', response: { item: '$.data' } },
+      get: { method: 'GET', path: 'tickets/${remoteId}', response: { item: '$.data' } },
     },
     mapping: {
       remoteId: '$.id',
@@ -47,7 +47,7 @@ function manifest(overrides = {}) {
   };
 }
 
-const resolver = async () => [{ address: '203.0.113.10', family: 4 }];
+const resolver = async () => [{ address: '8.8.8.8', family: 4 }];
 function credential(t, value) {
   const previous = process.env.CONVOY_TICKET_SOURCE_TOKEN_TEST;
   process.env.CONVOY_TICKET_SOURCE_TOKEN_TEST = value;
@@ -105,7 +105,7 @@ test('custom ticket source maps a conventional JSON API into normalized tickets'
       },
     },
   ]);
-  assert.equal(requests[0].url, 'https://tickets.example.com/tickets?limit=10');
+  assert.equal(requests[0].url, 'https://tickets.example.com/api/tickets?limit=10');
   assert.equal(requests[0].options.headers.Authorization, 'Bearer secret');
   assert.equal(requests[0].options.redirect, 'error');
 });
@@ -151,6 +151,35 @@ test('manifest validation rejects executable selectors and arbitrary authenticat
     header: 'Authorization',
   };
   assert.throws(() => validateCustomTicketSourceManifest(header), /X- prefixed/);
+  const absolutePath = manifest();
+  absolutePath.operations.list.path = '/tickets';
+  assert.throws(() => validateCustomTicketSourceManifest(absolutePath), /relative to the configured base URL/);
+});
+
+test('validated DNS addresses are pinned into the request dispatcher', async (t) => {
+  credential(t, 'secret');
+  const pinned = { close: async () => {} };
+  let binding;
+  let requestOptions;
+  const adapter = createCustomTicketSource({
+    resolver: async () => [{ address: '8.8.4.4', family: 4 }],
+    dispatcherFactory: (hostname, addresses) => {
+      binding = { hostname, addresses };
+      return pinned;
+    },
+    fetcher: async (_url, options) => {
+      requestOptions = options;
+      return new Response(JSON.stringify({ data: { items: [] } }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  await adapter.listIssues({ manifest: manifest() }, 1);
+  assert.deepEqual(binding, {
+    hostname: 'tickets.example.com',
+    addresses: [{ address: '8.8.4.4', family: 4 }],
+  });
+  assert.equal(requestOptions.dispatcher, pinned);
 });
 
 test('adapter blocks private destinations unless the deployment explicitly allows the exact origin', async (t) => {
@@ -163,6 +192,16 @@ test('adapter blocks private destinations unless the deployment explicitly allow
     },
   });
   await assert.rejects(blocked.listIssues({ manifest: manifest() }, 1), /private or unavailable/);
+  const rebound = createCustomTicketSource({
+    resolver: async () => [{ address: '::ffff:127.0.0.1', family: 6 }],
+    fetcher: async () => { throw new Error('must not fetch'); },
+  });
+  await assert.rejects(rebound.listIssues({ manifest: manifest() }, 1), /private or unavailable/);
+  const hexadecimalMappedLoopback = createCustomTicketSource({
+    resolver: async () => [{ address: '::ffff:7f00:1', family: 6 }],
+    fetcher: async () => { throw new Error('must not fetch'); },
+  });
+  await assert.rejects(hexadecimalMappedLoopback.listIssues({ manifest: manifest() }, 1), /private or unavailable/);
   let called = false;
   const allowed = createCustomTicketSource({
     resolver: privateResolver,

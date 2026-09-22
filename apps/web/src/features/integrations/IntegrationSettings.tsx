@@ -17,13 +17,13 @@ const starterManifest = `{
   "operations": {
     "list": {
       "method": "GET",
-      "path": "/tickets",
+      "path": "tickets",
       "query": { "limit": "\${limit}" },
       "response": { "items": "$.items" }
     },
     "get": {
       "method": "GET",
-      "path": "/tickets/\${remoteId}",
+      "path": "tickets/\${remoteId}",
       "response": { "item": "$.ticket" }
     }
   },
