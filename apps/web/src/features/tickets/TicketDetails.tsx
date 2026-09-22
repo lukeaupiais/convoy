@@ -191,6 +191,11 @@ export function TicketDetails({
   const [newFieldName, setNewFieldName] = useState('');
   const [newFieldValue, setNewFieldValue] = useState('');
   const [fieldError, setFieldError] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [remoteIssueId, setRemoteIssueId] = useState('');
+  const availableConnections = (state.ticketConnections ?? []).filter((connection) =>
+    connection.enabled && connection.organizationId === state.projects.find((project) => project.id === ticket.projectId)?.organizationId &&
+    state.boards.some((board) => board.projectIds.includes(ticket.projectId) && board.destinationConnectionIds?.includes(connection.id)));
   useEffect(() => {
     if (!editing) {
       setRevision(ticket.revision);
@@ -230,6 +235,90 @@ export function TicketDetails({
             Edit
           </button>
         </header>
+        {(ticket.externalLinks ?? []).map((link) => (
+          <a key={`${link.connectionId}:${link.remoteId}`} href={link.url} target="_blank" rel="noopener noreferrer">
+            {link.provider === 'linear' ? 'Linear' : link.provider} · {link.remoteKey} ↗
+          </a>
+        ))}
+        {ticket.externalPublish && <p role="alert">External creation needs review: {ticket.externalPublish.message ?? 'The result is unknown.'}</p>}
+        {ticket.externalPublish && (
+          <div className="ticket-publish-recovery">
+            <label>Linear issue ID, if created<input value={remoteIssueId} onChange={(event) => setRemoteIssueId(event.target.value)} /></label>
+            <button className="secondary" disabled={publishing || !remoteIssueId.trim()} onClick={async () => {
+              setPublishing(true);
+              try {
+                await command('reconcileTicketPublish', { ticketId: ticket.id, revision: ticket.revision, remoteId: remoteIssueId.trim() });
+                setMessage('Linear issue linked.');
+              } catch (error) { setMessage((error as Error).message); }
+              finally { setPublishing(false); }
+            }}>Link issue</button>
+            <button className="secondary" disabled={publishing} onClick={async () => {
+              if (!window.confirm('Confirm you checked Linear and no issue was created?')) return;
+              setPublishing(true);
+              try {
+                await command('reconcileTicketPublish', { ticketId: ticket.id, revision: ticket.revision, confirmNotCreated: true });
+                setMessage('Creation cleared. You can publish again.');
+              } catch (error) { setMessage((error as Error).message); }
+              finally { setPublishing(false); }
+            }}>No issue was created</button>
+          </div>
+        )}
+        {ticket.externalLinks?.filter((link) => link.syncState === 'error').map((link) => (
+          <div key={link.connectionId} className="ticket-sync-issue" role="alert">
+            <p>{link.message ?? 'Sync needs review.'}</p>
+            <details>
+              <summary>Compare content</summary>
+              <dl>
+                <dt>Title in Convoy</dt><dd>{ticket.title}</dd>
+                <dt>Last observed title in Linear</dt><dd>{link.remoteTitle ?? 'Unknown'}</dd>
+                <dt>Description in Convoy</dt><dd>{ticket.description || 'Empty'}</dd>
+                <dt>Last observed description in Linear</dt><dd>{link.remoteDescription || 'Empty'}</dd>
+              </dl>
+            </details>
+            <button className="secondary" disabled={publishing} onClick={async () => {
+              setPublishing(true);
+              try {
+                const result = await command('syncExternalTicket', { ticketId: ticket.id, revision: ticket.revision, connectionId: link.connectionId, resolution: 'local' });
+                setMessage(result.result.externalLinks?.[0]?.syncState === 'linked' ? 'Linear updated.' : 'Sync still needs review.');
+              } catch (error) { setMessage((error as Error).message); }
+              finally { setPublishing(false); }
+            }}>Use Convoy values</button>
+            <button className="secondary" disabled={publishing} onClick={async () => {
+              setPublishing(true);
+              try {
+                await command('syncExternalTicket', { ticketId: ticket.id, revision: ticket.revision, connectionId: link.connectionId, resolution: 'remote' });
+                setMessage('Linear values applied.');
+              } catch (error) { setMessage((error as Error).message); }
+              finally { setPublishing(false); }
+            }}>Use Linear values</button>
+          </div>
+        ))}
+        {!ticket.externalLinks?.length && !ticket.externalPublish && availableConnections.length > 0 && (
+          <label>
+            Publish to
+            <Select defaultValue="" disabled={publishing} onChange={async (event) => {
+              if (!event.target.value) return;
+              setPublishing(true);
+              try {
+                const result = await command('publishTicket', {
+                  requestId: crypto.randomUUID(), ticketId: ticket.id,
+                  revision: ticket.revision, connectionId: event.target.value,
+                });
+                setMessage(result.result.externalPublish
+                  ? 'External creation needs review.' : 'Ticket published.');
+              } catch (error) {
+                setMessage((error as Error).message);
+              } finally {
+                setPublishing(false);
+              }
+            }}>
+              <option value="">Choose destination…</option>
+              {availableConnections.map((connection) =>
+                <option key={connection.id} value={connection.id}>{connection.name}</option>)}
+            </Select>
+          </label>
+        )}
+        {message && <p role="status">{message}</p>}
         <div className="ticket-summary-properties">
           <span>{ticket.status}</span>
           <span>{ticket.priority}</span>

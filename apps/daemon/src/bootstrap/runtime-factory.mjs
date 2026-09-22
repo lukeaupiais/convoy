@@ -2,6 +2,7 @@ import { createPersistence } from '../adapters/persistence/index.mjs';
 import { createRuntime as createControlPlaneRuntime } from '../control-plane/runtime.mjs';
 import { initialControlPlaneState } from '../control-plane/state-schema.mjs';
 import { defaultWorkflowDefinition } from '../modules/workflows/index.mjs';
+import { createLinearTickets } from '../adapters/linear-tickets.mjs';
 
 /**
  * Filesystem composition for production, tests, and smoke scripts.
@@ -18,5 +19,5 @@ export async function createRuntime({ directory, legacyDirectory, persistenceBac
     importLegacy,
     onFatal: onPersistenceFailure,
   });
-  return createControlPlaneRuntime({ ...dependencies, persistence });
+  return createControlPlaneRuntime({ externalTickets: createLinearTickets(), ...dependencies, persistence });
 }

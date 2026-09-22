@@ -72,6 +72,14 @@ function filters(input = {}, projectIds) {
   return result;
 }
 
+function creationPolicy(input = { mode: 'convoy' }) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Board creation policy is invalid.');
+  const mode = input.mode ?? 'convoy';
+  if (!['convoy', 'ask', 'connection'].includes(mode)) throw new Error('Unknown board creation policy.');
+  if (mode !== 'connection') return { mode };
+  return { mode, connectionId: safeId(input.connectionId, 'Connection ID') };
+}
+
 function boardInput(input, projects, old) {
   const projectIds = uniqueList(input.projectIds ?? projects.map(p => p.id), 'Board projects');
   const knownProjects = new Set(projects.map(p => p.id));
@@ -86,6 +94,8 @@ function boardInput(input, projects, old) {
     filters: filters(input.filters, projectIds.length ? projectIds : projects.map(p => p.id)),
     cardFields: uniqueList(input.cardFields ?? ['priority', 'label', 'agent', 'project'], 'Card fields', 30),
     grouping: { mode: input.grouping?.mode ?? 'local' },
+    creationPolicy: creationPolicy(input.creationPolicy ?? old?.creationPolicy),
+    destinationConnectionIds: uniqueList(input.destinationConnectionIds ?? old?.destinationConnectionIds ?? [], 'Board destinations', 30),
     density: input.density ?? 'comfortable',
     revision: (old?.revision ?? 0) + 1,
   };
@@ -112,6 +122,8 @@ function templateInput(input, old) {
     filters: filters(input.filters),
     cardFields: uniqueList(input.cardFields ?? ['priority', 'label', 'agent', 'project'], 'Card fields', 30),
     grouping: { mode: input.grouping?.mode ?? 'local' },
+    creationPolicy: creationPolicy(input.creationPolicy ?? old?.creationPolicy),
+    destinationConnectionIds: uniqueList(input.destinationConnectionIds ?? old?.destinationConnectionIds ?? [], 'Board destinations', 30),
     density: input.density ?? 'comfortable',
     revision: (old?.revision ?? 0) + 1,
   };
@@ -303,6 +315,14 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
         const old = c.id ? state.boards.find(value => value.id === c.id) : null;
         if (old && c.revision !== old.revision) throw new Error('Board changed in another client. Reload before saving.');
         const value = boardInput(c, projects, old); if (old) assertColumnReferences(old, value);
+        if (value.destinationConnectionIds.some(id => {
+          const source = state.ticketConnections?.find(item => item.id === id);
+          return !source || value.projectIds.some(projectId => projects.find(project => project.id === projectId)?.organizationId !== source.organizationId);
+        })) throw new Error('Board destination is unavailable to its projects.');
+        if (value.creationPolicy.mode === 'connection') {
+          const source = state.ticketConnections?.find(item => item.id === value.creationPolicy.connectionId);
+          if (!source || !value.destinationConnectionIds.includes(source.id)) throw new Error('Board creation connection must be enabled as a destination.');
+        }
         if (old) Object.assign(old, value); else state.boards.push(value);
         await save(); return clone(value);
       }
@@ -322,6 +342,7 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
       }
       if (c.action === 'createBoardFromTemplate') {
         const source = template(c.templateId); const value = boardInput({ ...source, ...c, id: c.id ?? randomUUID(), name: c.name ?? source.name, columns: c.columns ?? source.columns, swimlanes: c.swimlanes ?? source.swimlanes, filters: c.filters ?? source.filters, cardFields: c.cardFields ?? source.cardFields, grouping: c.grouping ?? source.grouping, density: c.density ?? source.density }, projects, null);
+        if (value.destinationConnectionIds.length || value.creationPolicy.mode === 'connection') throw new Error('Choose integration destinations when creating a board from a template.');
         state.boards.push(value); await save(); return clone(value);
       }
       if (c.action === 'setBoardPlacement') {

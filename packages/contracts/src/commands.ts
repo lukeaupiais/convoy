@@ -37,6 +37,7 @@ import type {
   Placement,
   Project,
   Ticket,
+  TicketConnection,
 } from './model/work';
 import type { WorkflowDefinition, WorkflowStartRule } from './model/workflows';
 
@@ -56,6 +57,8 @@ type BoardDefinition = Pick<Board, 'name' | 'columns'> &
       | 'filters'
       | 'cardFields'
       | 'grouping'
+      | 'creationPolicy'
+      | 'destinationConnectionIds'
       | 'density'
     >
   >;
@@ -70,6 +73,8 @@ type BoardTemplateDefinition = Pick<BoardTemplate, 'name' | 'columns'> &
       | 'filters'
       | 'cardFields'
       | 'grouping'
+      | 'creationPolicy'
+      | 'destinationConnectionIds'
       | 'density'
     >
   >;
@@ -268,6 +273,8 @@ export type RuntimeCommandInputMap = {
   createTicket: RequestIdentity & {
     projectId: string;
     title: string;
+    boardId?: string;
+    destination?: string;
     description?: string;
     status?: string;
     label?: string;
@@ -275,6 +282,15 @@ export type RuntimeCommandInputMap = {
     priority?: 'Low' | 'Medium' | 'High';
     customFields?: Record<string, string | number | boolean | null>;
   };
+  saveTicketConnection: Partial<Pick<TicketConnection, 'id' | 'revision'>> &
+    Pick<TicketConnection, 'organizationId' | 'name' | 'provider' | 'teamId' | 'credentialEnv'> &
+    Partial<Pick<TicketConnection, 'enabled'>>;
+  deleteTicketConnection: { id: string; revision: number };
+  probeTicketConnection: { id: string };
+  publishTicket: RequestIdentity & { ticketId: number; revision: number; connectionId: string };
+  reconcileTicketPublish: { ticketId: number; revision: number; remoteId?: string; confirmNotCreated?: true };
+  syncExternalTicket: { ticketId: number; revision: number; connectionId: string; resolution?: 'local' | 'remote' };
+  importExternalTickets: { connectionId: string; projectId: string; limit?: number };
   decide: SessionTarget & {
     approvalId: string;
     decision?: 'allow_once' | 'allow_always' | 'deny';
@@ -503,6 +519,13 @@ type RuntimeCommandKnownResults = {
   };
   revokeServicePrincipal: ServicePrincipal;
   createTicket: Ticket;
+  saveTicketConnection: TicketConnection;
+  deleteTicketConnection: { id: string; deleted: true };
+  probeTicketConnection: { teamName: string };
+  publishTicket: Ticket;
+  reconcileTicketPublish: Ticket;
+  syncExternalTicket: Ticket;
+  importExternalTickets: { imported: number; updated: number };
   exportSkill: { files: Record<string, string>; source: string };
   importTickets: { imported: number; conflicts: number[] };
   openTicketConversation: Conversation;

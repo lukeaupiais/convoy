@@ -10,6 +10,7 @@ Each folder owns one operator capability:
 | `library`   | tools, skills, profiles, and instructions                  |
 | `projects`  | project settings and placement defaults                    |
 | `providers` | provider connection and model route presentation           |
+| `integrations` | organization project management connections              |
 | `runners`   | environments, repository runners, pools, and health        |
 | `sessions`  | cross-session monitoring and attention queues              |
 | `tickets`   | conventional ticket details and execution controls         |

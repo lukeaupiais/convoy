@@ -130,6 +130,7 @@ export async function createRuntime({
   auth,
   runners,
   boards,
+  externalTickets,
   credentialBroker,
   credentialBrokerFactory,
   enterpriseIdentity = {},
@@ -222,6 +223,7 @@ export async function createRuntime({
     save: () => store.save(),
     contextFiles,
     execution: workExecution,
+    externalTickets,
     referencedColumn: workflowReferences.column,
     referencedBoard: (boardId) =>
       workflowReferences.board(boardId) ||

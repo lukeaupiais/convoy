@@ -8,6 +8,7 @@ import {
   Folder,
   Server,
   Cable,
+  Plug,
   Pin,
   PanelLeftClose,
   PanelLeftOpen,
@@ -79,6 +80,7 @@ export function Sidebar({
   ] as const;
   const settings = [
     ['Project settings', 'Project settings', Folder],
+    ['Integrations', 'Integrations', Plug],
     ['Providers', 'Providers', Cable],
     ['Runners', 'Environments', Server],
   ] as const;

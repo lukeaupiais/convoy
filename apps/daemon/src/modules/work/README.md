@@ -12,3 +12,8 @@ triggers, but Work never imports or traverses workflow state.
 approval-gated agent moves, and explicit workflow actions. A move on a local
 board changes presentation only. A move on a field-backed board also changes its
 configured authoritative ticket field; the command result reports that effect.
+
+Work also owns ticket origin, external issue links, board creation destinations,
+and sync conflict decisions. An injected adapter speaks the external issue API;
+Work persists outbound intent before asking it to create an issue. Board
+placement alone never publishes a ticket.

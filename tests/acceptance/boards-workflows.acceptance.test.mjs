@@ -11,12 +11,13 @@ async function until(read) {
   throw new Error('Acceptance condition did not become true');
 }
 
-async function fixture(t) {
+async function fixture(t, injected = {}) {
   const options = {
     directory: await mkdtemp(join(tmpdir(), 'convoy-independent-acceptance-')),
     models: [{ id: 'fixture' }],
     auth: { token: async () => 'fixture', status: async () => ({ connected: true }) },
     generate: async function* () { throw new Error('Acceptance fixture must not invoke an agent'); },
+    ...injected,
   };
   let runtime = await createRuntime(options);
   t.after(() => runtime.close());
@@ -34,6 +35,30 @@ async function fixture(t) {
     },
   };
 }
+
+test('acceptance: a board can mix local and Linear tickets without publishing local creation', async t => {
+  let creates = 0;
+  const f = await fixture(t, { externalTickets: {
+    createIssue: async () => { creates++; return { remoteId: 'linear-1', remoteKey: 'LIN-1', url: 'https://linear.app/acme/issue/LIN-1' }; },
+    listIssues: async () => [{ id: 'linear-2', identifier: 'LIN-2', url: 'https://linear.app/acme/issue/LIN-2', title: 'Imported', description: '' }],
+    probe: async () => ({ teamName: 'Product' }),
+  } });
+  const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'linear', name: 'Product', teamId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', credentialEnv: 'CONVOY_LINEAR_TOKEN_TEST' });
+  assert.equal((await f.act('probeTicketConnection', { id: source.id })).teamName, 'Product');
+  const board = await f.act('saveBoard', { name: 'Mixed', projectIds: ['agent-platform'], columns: [{ id: 'todo', name: 'Todo' }], destinationConnectionIds: [source.id], creationPolicy: { mode: 'convoy' } });
+  await f.act('importExternalTickets', { connectionId: source.id, projectId: 'agent-platform' });
+  const local = await f.act('createTicket', { requestId: 'local-mixed', boardId: board.id, projectId: 'agent-platform', title: 'Local' });
+  assert.equal(creates, 0);
+  await f.restart();
+  const state = await f.snapshot();
+  assert.equal(state.ticketConnections.length, 1);
+  assert.equal(state.tickets.find(value => value.id === local.id).externalLinks, undefined);
+  assert.equal(state.tickets.find(value => value.title === 'Imported').externalLinks[0].remoteKey, 'LIN-2');
+  assert.equal(state.boards.find(value => value.id === board.id).tickets.length, 2);
+  const disabled = await f.act('saveTicketConnection', { ...source, revision: source.revision, enabled: false });
+  assert.equal(disabled.enabled, false);
+  await assert.rejects(f.act('deleteTicketConnection', { id: source.id, revision: disabled.revision }), /Remove this connection from boards/);
+});
 
 test('acceptance: a conversation can execute and approve a workflow without creating a ticket', async t => {
   const f = await fixture(t);
