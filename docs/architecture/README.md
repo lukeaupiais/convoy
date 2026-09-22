@@ -39,6 +39,8 @@ and the presence of strategic README files.
 
 The exact subscription/provider seam is documented in
 [`provider-boundary.md`](provider-boundary.md).
+The provider-neutral prompt structure and adapter-owned cache controls are
+documented in [`prompt-caching.md`](prompt-caching.md).
 The target multi-provider, organization, client-connection, credential, routing,
 and remote-resource model is specified in
 [`model-providers-organizations-and-client-access.md`](model-providers-organizations-and-client-access.md).

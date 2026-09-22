@@ -28,7 +28,7 @@ async function fixture(t, generate, runners) {
 
 test('queue is FIFO, removable and idempotent; delivery preserves conversation identity',async t=>{
   let first;const prompts=[];
-  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.messages));if(prompts.length===1){first=gate(input.signal);await first.promise;}yield reply('Done');});
+  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.prompt?.messages ?? input.messages));if(prompts.length===1){first=gate(input.signal);await first.promise;}yield reply('Done');});
   await f.send('Original');await until(()=>first);const identity=(await f.session()).currentAgentSessionId;
   await f.send('Second');await f.send('Second');await f.send('Remove');await f.chat('discardMessage',{requestId:'Remove'});await f.send('Third');
   assert.equal((await f.session()).pendingMessages.length,2);
@@ -42,7 +42,7 @@ test('queue is FIFO, removable and idempotent; delivery preserves conversation i
 
 test('stop holds queued messages; explicit resume retains context and interrupted text',async t=>{
   let first;const prompts=[];
-  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.messages));if(prompts.length===1){yield {type:'delta',text:'Partial thought'};first=gate(input.signal);await first.promise;}yield reply('Finished');});
+  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.prompt?.messages ?? input.messages));if(prompts.length===1){yield {type:'delta',text:'Partial thought'};first=gate(input.signal);await first.promise;}yield reply('Finished');});
   await f.send('Remember this');await until(()=>first);await f.send('Next direction');await f.chat('stop');
   let s=await f.session();assert.equal(s.status,'interrupted');assert.equal(s.pendingMessages[0].held,true);assert.equal(prompts.length,1);
   assert.ok(s.events.some(e=>e.type==='assistant_interrupted'&&e.text==='Partial thought'));
@@ -52,7 +52,7 @@ test('stop holds queued messages; explicit resume retains context and interrupte
 
 test('interrupt and send resumes the same agent once; late provider replies are fenced',async t=>{
   let started=false;const prompts=[];
-  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.messages));if(prompts.length===1){started=true;await new Promise(r=>input.signal.addEventListener('abort',r,{once:true}));yield reply('Obsolete reply');}else yield reply('New direction applied');});
+  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.prompt?.messages ?? input.messages));if(prompts.length===1){started=true;await new Promise(r=>input.signal.addEventListener('abort',r,{once:true}));yield reply('Obsolete reply');}else yield reply('New direction applied');});
   await f.send('Old direction');await until(()=>started);const identity=(await f.session()).currentAgentSessionId;
   await f.send('New direction','interrupt');await f.done();await f.send('New direction','interrupt');
   const s=await f.session();assert.equal(s.currentAgentSessionId,identity);assert.equal(prompts.length,2);assert.ok(!s.events.some(e=>e.type==='assistant'&&e.text==='Obsolete reply'));
@@ -116,7 +116,7 @@ test('Stop overrides an interrupt while the old provider is winding down',async 
 
 test('workflow guidance is consumed before submission without changing the agent or bypassing a gate',async t=>{
   let first;let turn=0;const prompts=[];
-  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.messages));if(++turn===1){first=gate(input.signal);await first.promise;}yield result([{type:'toolCall',id:'submit-'+turn,name:'submit_step',arguments:{summary:'Done',artifacts:[]}}]);});
+  const f=await fixture(t,async function*(input){prompts.push(structuredClone(input.prompt?.messages ?? input.messages));if(++turn===1){first=gate(input.signal);await first.promise;}yield result([{type:'toolCall',id:'submit-'+turn,name:'submit_step',arguments:{summary:'Done',artifacts:[]}}]);});
   await f.act('saveWorkflow',{workflow:{id:'guided',name:'Guided',steps:[{id:'work',kind:'agent',name:'Work',prompt:'Do work'},{id:'review',kind:'human',name:'Review',prompt:'Review work'}]}});
   await f.chat('configure',{workflow:'guided'});await f.chat('startWorkflow');await until(()=>first);
   const s=await f.session();await f.send('Apply this constraint');first.release();
@@ -127,7 +127,7 @@ test('workflow guidance is consumed before submission without changing the agent
 
 test('stopping during provisioning retains the original input for explicit resume',async t=>{
   let provisioning;let provisions=0;const prompts=[];
-  const f=await fixture(t,async function*(input){prompts.push(input.messages);yield reply('Done');},{execute:async(_r,c,signal)=>{
+  const f=await fixture(t,async function*(input){prompts.push(input.prompt?.messages ?? input.messages);yield reply('Done');},{execute:async(_r,c,signal)=>{
     if(c.action==='probe')return {repository:'/fixture',tools:['read_file'],shell:false};
     if(c.action==='provision'){if(++provisions===1){provisioning=gate(signal);await provisioning.promise;}return {path:'/fixture/work',branch:'test'};}
     if(c.action==='diff')return {digest:'same'};

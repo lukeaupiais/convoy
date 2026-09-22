@@ -311,6 +311,8 @@ test('uncertain provider outcomes block fallback and connection revocation inval
     usage: {
       inputTokens: 100,
       outputTokens: 20,
+      cachedInputTokens: 60,
+      cacheWriteTokens: 0,
       upstreamCostUsd: 0.08,
       gatewayCostUsd: 0.01,
       costUsd: 0.09,
@@ -318,6 +320,8 @@ test('uncertain provider outcomes block fallback and connection revocation inval
   });
   assert.equal(outcome.fallbackAllowed, false);
   assert.equal(outcome.reconciliationRequired, true);
+  assert.equal(outcome.usage.cachedInputTokens, 60);
+  assert.equal(outcome.usage.cacheWriteTokens, 0);
   await assert.rejects(
     providers.routing.recordOutcome(grant.id, { classification: 'completed' }),
     /already has terminal outcome/,

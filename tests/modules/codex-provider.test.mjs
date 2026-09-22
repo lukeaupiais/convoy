@@ -33,7 +33,7 @@ test('native subscription adapter owns request encoding, SSE streaming and tool 
       { type: 'response.output_item.added', output_index: 1, item: { ...call, arguments: '' } },
       { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"path":"README.md"}' },
       { type: 'response.output_item.done', output_index: 1, item: call },
-      { type: 'response.completed', response: { status: 'completed', output: [message, call] } },
+      { type: 'response.completed', response: { status: 'completed', output: [message, call], usage: { input_tokens: 2000, output_tokens: 20, input_tokens_details: { cached_tokens: 1024, cache_write_tokens: 0 } } } },
     ]);
   } });
   const output = [];
@@ -50,10 +50,42 @@ test('native subscription adapter owns request encoding, SSE streaming and tool 
   assert.equal(request.options.headers['session-id'], 'session-1');
   assert.equal(request.body.instructions, 'System');
   assert.equal(request.body.store, false);
+  assert.equal(request.body.prompt_cache_key, 'session-1');
+  assert.equal('prompt_cache_options' in request.body, false);
   assert.equal(request.body.tools[0].name, 'read_file');
   assert.deepEqual(output[0], { type: 'delta', text: 'Ready' });
   assert.equal(output[1].message.stopReason, 'toolUse');
+  assert.deepEqual(output[1].usage, { inputTokens: 2000, outputTokens: 20, cachedInputTokens: 1024, cacheWriteTokens: 0 });
   assert.deepEqual(output[1].message.content[1], { type: 'toolCall', id: 'call_1|fc_1', name: 'read_file', arguments: { path: 'README.md' } });
+});
+
+test('turn-specific instructions follow the stable cacheable instruction prefix', async () => {
+  const requests = [];
+  const generate = createCodexSubscriptionGenerate({ fetch: async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return sse([{ type: 'response.completed', response: { status: 'completed', output: [] } }]);
+  } });
+  const base = { model: 'gpt-5.6-sol', token, sessionId: 'session-1' };
+  const turns = [
+    { update: 'Tool policy A', messages: [{ role: 'user', content: 'First' }] },
+    { update: 'Tool policy B', messages: [
+      { role: 'user', content: 'First' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Done', textSignature: 'msg_1' }] },
+      { role: 'user', content: 'Second' },
+    ] },
+  ];
+  for (const { update, messages } of turns) {
+    for await (const _ of generate({ ...base, prompt: {
+      stableInstructions: 'Published instructions',
+      turnInstructions: update,
+      messages,
+    } })) void _;
+  }
+  assert.equal(requests[0].instructions, 'Published instructions');
+  assert.equal(requests[1].instructions, requests[0].instructions);
+  assert.deepEqual(requests.map(request => request.input.at(-1).content[0].text), ['Tool policy A', 'Tool policy B']);
+  assert.deepEqual(requests[0].input[0], requests[1].input[0]);
+  assert.equal(requests[0].input.at(-1).role, 'developer');
 });
 
 test('native adapter replays assistant, reasoning and tool results without a harness model', () => {

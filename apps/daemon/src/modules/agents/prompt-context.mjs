@@ -141,6 +141,8 @@ export function createPromptContext({ digest, now = () => new Date().toISOString
     return {
       epoch,
       updates: updates.map((update) => ({ kind: update.kind, hash: digest(update.content) })),
+      stableInstructions: epoch.baseline,
+      turnInstructions: appended,
       systemPrompt,
       hash: digest(systemPrompt),
     };

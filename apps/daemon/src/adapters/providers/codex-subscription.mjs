@@ -130,13 +130,19 @@ export function encodeTools(tools = []) {
   }));
 }
 
-function requestBody({ model, messages, systemPrompt, tools, sessionId }) {
+function requestBody({ model, prompt, messages, systemPrompt, tools, sessionId }) {
+  const instructions = prompt?.stableInstructions ?? systemPrompt;
+  const input = encodeMessages(prompt?.messages ?? messages ?? []);
+  if (prompt?.turnInstructions) input.push({
+    role: 'developer',
+    content: [{ type: 'input_text', text: prompt.turnInstructions }],
+  });
   const body = {
     model,
     store: false,
     stream: true,
-    instructions: systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-    input: encodeMessages(messages),
+    instructions: instructions ?? DEFAULT_SYSTEM_PROMPT,
+    input,
     text: { verbosity: 'low' },
     include: ['reasoning.encrypted_content'],
     tool_choice: 'auto',
@@ -235,10 +241,21 @@ function finalizeResponse(state, response) {
     ? 'length'
     : state.content.some(item => item.type === 'toolCall') ? 'toolUse' : 'stop';
   state.terminal = true;
+  if (response?.usage) {
+    const usage = response.usage;
+    state.usage = {
+      ...(Number.isFinite(usage.input_tokens) ? { inputTokens: usage.input_tokens } : {}),
+      ...(Number.isFinite(usage.output_tokens) ? { outputTokens: usage.output_tokens } : {}),
+      ...(Number.isFinite(usage.input_tokens_details?.cached_tokens)
+        ? { cachedInputTokens: usage.input_tokens_details.cached_tokens } : {}),
+      ...(Number.isFinite(usage.input_tokens_details?.cache_write_tokens)
+        ? { cacheWriteTokens: usage.input_tokens_details.cache_write_tokens } : {}),
+    };
+  }
 }
 
 export function createCodexSubscriptionGenerate({ fetch: request = globalThis.fetch, endpoint = ENDPOINT } = {}) {
-  return async function* generate({ model, messages, signal, token, systemPrompt, tools, sessionId }) {
+  return async function* generate({ model, prompt, messages, signal, token, systemPrompt, tools, sessionId }) {
     if (!codexSubscriptionModels.some(item => item.id === model)) {
       const error = new Error(`Unknown ChatGPT subscription model: ${model}`);
       error.providerOutcome = 'not-sent';
@@ -260,7 +277,7 @@ export function createCodexSubscriptionGenerate({ fetch: request = globalThis.fe
     try {
       response = await request(endpoint, {
         method: 'POST', headers,
-        body: JSON.stringify(requestBody({ model, messages, systemPrompt, tools, sessionId })),
+        body: JSON.stringify(requestBody({ model, prompt, messages, systemPrompt, tools, sessionId })),
         signal: combined,
       });
     } catch (caught) {
@@ -300,6 +317,7 @@ export function createCodexSubscriptionGenerate({ fetch: request = globalThis.fe
     yield {
       type: 'result',
       message: { role: 'assistant', content: state.content, stopReason: state.stopReason, timestamp: Date.now() },
+      ...(state.usage ? { usage: state.usage } : {}),
     };
   };
 }

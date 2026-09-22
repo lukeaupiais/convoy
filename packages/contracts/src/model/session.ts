@@ -79,6 +79,13 @@ export type SessionEvent = {
   reason?: string;
 };
 export type Session = {
+  modelUsage?: {
+    requests: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+    cacheWriteTokens?: number;
+  };
   commands?: {
     commandId: string;
     callId?: string;

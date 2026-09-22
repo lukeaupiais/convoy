@@ -439,11 +439,12 @@ test('organization, user and project instructions form a stable epoch while runt
   assert.ok(request.sessionId);
   assert.equal(request.sessionId, session.currentAgentSessionId);
   assert.match(
-    request.systemPrompt,
+    [request.prompt.stableInstructions, request.prompt.turnInstructions].filter(Boolean).join('\n\n'),
     /Organization rules[\s\S]*User preferences[\s\S]*Project rules/,
   );
-  assert.doesNotMatch(request.systemPrompt, /Inspect context|convoy_runtime_snapshot/);
-  assert.match(JSON.stringify(request.messages), /convoy_runtime_snapshot/);
+  assert.equal(request.prompt.stableInstructions, session.contextEpoch.baseline);
+  assert.doesNotMatch(request.prompt.stableInstructions + request.prompt.turnInstructions, /Inspect context|convoy_runtime_snapshot/);
+  assert.match(JSON.stringify(request.prompt.messages), /convoy_runtime_snapshot/);
   assert.equal(session.provenance.contextEpoch.id, session.contextEpoch.id);
 });
 
@@ -666,11 +667,10 @@ test('stopping at an approval never executes the pending tool', async () => {
 test('brief, approval, implementation, independent review and revision preserve intended sessions', async () => {
   const prompts = [];
   const { runtime, act, session, options } = await fixture(async function* ({
-    messages,
-    systemPrompt,
+    prompt,
     tools,
   }) {
-    prompts.push({ messages: structuredClone(messages), systemPrompt, tools });
+    prompts.push({ messages: structuredClone(prompt.messages), systemPrompt: [prompt.stableInstructions, prompt.turnInstructions].filter(Boolean).join('\n\n'), tools });
     yield {
       type: 'result',
       message: assistant([

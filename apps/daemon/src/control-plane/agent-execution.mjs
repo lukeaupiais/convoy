@@ -1,6 +1,6 @@
 import { runAgentLoop } from '../../../../packages/runner/src/index.mjs';
 import { ensureAgentSessions } from '../modules/workflows/index.mjs';
-import { CONTINUE_INPUT } from '../modules/conversations/index.mjs';
+import { CONTINUE_INPUT, recordModelUsage } from '../modules/conversations/index.mjs';
 import { conversationTools } from '../modules/library/index.mjs';
 
 /** Owns one provider turn, including context preparation and tool dispatch. */
@@ -53,12 +53,15 @@ export function createAgentExecution({
         s.model = model;
       }
       let systemPrompt = '';
+      let stableInstructions = '';
+      let turnInstructions = '';
       let availableTools;
       let declaredTools;
       let prepared;
       let routeContext;
       let providerRounds = { generation: 0, compaction: 0 };
       let providerTurnKey;
+      let routedGenerate;
       let execute = (...args) => runners.execute(...args);
       const handlers = {
         setExecutor: (value) => {
@@ -89,6 +92,8 @@ export function createAgentExecution({
             capabilityText: capabilities.prompt(s, step),
           });
           systemPrompt = compiled.systemPrompt;
+          stableInstructions = compiled.stableInstructions;
+          turnInstructions = compiled.turnInstructions;
           const previousHash = s.provenance?.hash;
           s.provenance = {
             hash: compiled.hash,
@@ -141,14 +146,18 @@ export function createAgentExecution({
               userTimestamp: s.messages[latestUserIndex]?.timestamp,
             }),
           );
-          const routedGenerate = (request, phase = 'generation') =>
-            providerGateway.generate({
+          routedGenerate = async function* (request, phase = 'generation') {
+            for await (const item of providerGateway.generate({
               ...request,
               context: routeContext,
               purpose: 'coding',
               sessionId: s.currentAgentSessionId ?? s.id,
               turnId: `${providerTurnKey}:${phase}:${providerRounds[phase]++}`,
-            });
+            })) {
+              if (item.type === 'result' && recordModelUsage(s, item.usage)) await store.save();
+              yield item;
+            }
+          };
           const contextMessages = await contextFiles.hydrate(
             s,
             await agentTurns.compactContext(s, token, signal, (request) =>
@@ -157,8 +166,11 @@ export function createAgentExecution({
           );
           prepared = {
             model: s.model,
-            messages: contextMessages,
-            systemPrompt,
+            prompt: {
+              stableInstructions,
+              turnInstructions,
+              messages: contextMessages,
+            },
             tools: declaredTools,
             token,
             signal,
@@ -168,13 +180,7 @@ export function createAgentExecution({
         generate: async () => {
           let result;
           let persisted = Date.now();
-          for await (const item of providerGateway.generate({
-            ...prepared,
-            context: routeContext,
-            purpose: 'coding',
-            sessionId: s.currentAgentSessionId ?? s.id,
-            turnId: `${providerTurnKey}:generation:${providerRounds.generation++}`,
-          })) {
+          for await (const item of routedGenerate(prepared)) {
             if (item.type === 'delta') {
               partial(s, s.partial + item.text);
               if (Date.now() - persisted > 500) {
