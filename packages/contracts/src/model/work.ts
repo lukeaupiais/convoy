@@ -32,6 +32,8 @@ export type ExternalTicketLink = {
   message?: string;
   remoteTitle?: string;
   remoteDescription?: string;
+  remoteStatus?: string;
+  remotePriority?: 'Low' | 'Medium' | 'High';
   remoteVersion?: string;
   fieldOwnership?: {
     title: 'convoy' | 'external';

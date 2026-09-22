@@ -133,7 +133,7 @@ test('connections can be tested, disabled, and deleted only when unused', async 
 test('custom HTTP connections remain provider-neutral and preview without mutation', async () => {
   const remote = [{ remoteId: 'support-1', remoteKey: 'SUP-1', url: 'https://support.example.com/tickets/1', title: 'Customer report', description: 'Details', status: 'Ready', priority: 'High', remoteVersion: 'v1', fieldOwnership: { title: 'external', description: 'external', status: 'external', priority: 'external' } }];
   const { catalog, state } = fixture({ probe: async source => ({ sourceName: source.name, sample: remote[0] }), listIssues: async () => remote });
-  const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource', connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TOKEN_TEST' } }, operations: { list: { method: 'GET', path: '/tickets', response: { items: '$.items' } } }, mapping: { remoteId: '$.id', remoteKey: '$.key', title: '$.title', description: '$.description', remoteVersion: '$.updatedAt', url: '$.url' } };
+  const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource', connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TOKEN_TEST' } }, operations: { list: { method: 'GET', path: 'tickets', response: { items: '$.items' } } }, mapping: { remoteId: '$.id', remoteKey: '$.key', title: '$.title', description: '$.description', remoteVersion: '$.updatedAt', url: '$.url' } };
   const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Customer support', manifest });
   assert.equal(source.provider, 'custom-http');
   assert.deepEqual(source.capabilities, { import: true, create: false, update: false });
@@ -151,4 +151,87 @@ test('custom HTTP connections remain provider-neutral and preview without mutati
   const local = await catalog.command({ action: 'createTicket', requestId: 'custom-local', boardId: board.id, projectId: 'alpha', title: 'Local' });
   await assert.rejects(catalog.command({ action: 'publishTicket', requestId: 'custom-publish', ticketId: local.id, revision: local.revision, connectionId: source.id }), /read-only/);
   assert.equal(local.externalPublish, undefined);
+});
+
+test('an import rejects duplicate remote identities atomically', async () => {
+  const duplicate = { remoteId: 'same', remoteKey: 'SUP-1', title: 'One', description: '', remoteVersion: 'v1' };
+  const f = fixture({ listIssues: async () => [duplicate, { ...duplicate, title: 'Two' }] });
+  const { source } = await setup(f.catalog);
+  const savesBeforeImport = f.saved;
+  await assert.rejects(
+    f.catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' }),
+    /duplicate remote identity: same/,
+  );
+  assert.equal(f.state.tickets.length, 0);
+  assert.equal(f.saved, savesBeforeImport);
+});
+
+test('reconciliation preserves Convoy-owned status and priority while recording remote observations', async () => {
+  let version = 1;
+  const remote = () => [{
+    remoteId: 'support-owned', remoteKey: 'SUP-OWNED', title: 'Remote', description: '',
+    status: version === 1 ? 'Backlog' : 'Done', priority: version === 1 ? 'Low' : 'High',
+    remoteVersion: `v${version}`,
+    fieldOwnership: { title: 'external', description: 'external', status: 'convoy', priority: 'convoy' },
+  }];
+  const { catalog, state } = fixture({ listIssues: async () => remote() });
+  const { source } = await setup(catalog);
+  await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  const ticket = state.tickets[0];
+  ticket.status = 'In progress';
+  ticket.priority = 'Medium';
+  version = 2;
+  assert.deepEqual(
+    await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' }),
+    { imported: 0, updated: 1 },
+  );
+  assert.equal(ticket.status, 'In progress');
+  assert.equal(ticket.priority, 'Medium');
+  assert.equal(ticket.externalLinks[0].remoteStatus, 'Done');
+  assert.equal(ticket.externalLinks[0].remotePriority, 'High');
+});
+
+test('list-only conflict resolution applies every observed external-owned field and rejects local resolution', async () => {
+  let current = {
+    remoteId: 'support-conflict', remoteKey: 'SUP-CONFLICT', title: 'First', description: 'First details',
+    status: 'Backlog', priority: 'Low', remoteVersion: 'v1',
+    fieldOwnership: { title: 'external', description: 'external', status: 'external', priority: 'external' },
+  };
+  const { catalog, state } = fixture({ listIssues: async () => [current] });
+  const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource', connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TOKEN_TEST' } }, operations: { list: { method: 'GET', path: 'tickets', response: { items: '$.items' } } }, mapping: { remoteId: '$.id', remoteKey: '$.key', title: '$.title', remoteVersion: '$.version' } };
+  const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Support source', manifest });
+  await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  const ticket = state.tickets[0];
+  ticket.title = 'Local edit';
+  ticket.status = 'Ready';
+  current = { ...current, title: 'Remote edit', description: 'Remote details', status: 'Done', priority: 'High', remoteVersion: 'v2' };
+  await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  assert.equal(ticket.externalLinks[0].syncState, 'error');
+  await assert.rejects(
+    catalog.command({ action: 'syncExternalTicket', ticketId: ticket.id, revision: ticket.revision, connectionId: source.id, resolution: 'local' }),
+    /read-only/,
+  );
+  await catalog.command({ action: 'syncExternalTicket', ticketId: ticket.id, revision: ticket.revision, connectionId: source.id, resolution: 'remote' });
+  assert.deepEqual(
+    { title: ticket.title, description: ticket.description, status: ticket.status, priority: ticket.priority },
+    { title: 'Remote edit', description: 'Remote details', status: 'Done', priority: 'High' },
+  );
+  assert.equal(ticket.externalLinks[0].remoteVersion, 'v2');
+  assert.equal(ticket.externalLinks[0].syncState, 'linked');
+});
+
+test('first import after adding status observations establishes a baseline without overwriting legacy local values', async () => {
+  const remote = { remoteId: 'legacy', remoteKey: 'LEG-1', title: 'Remote', description: '', status: 'Done', priority: 'High', remoteVersion: 'v1' };
+  const { catalog, state } = fixture({ listIssues: async () => [remote] });
+  const { source } = await setup(catalog);
+  state.tickets.push({
+    id: 1, projectId: 'alpha', title: 'Remote', description: '', status: 'In progress', priority: 'Low',
+    label: 'Core', agent: 'Unassigned', revision: 1, origin: 'external', placement: { mode: 'inherit' }, executionProfile: 'inherit',
+    externalLinks: [{ connectionId: source.id, provider: 'linear', remoteId: 'legacy', remoteKey: 'LEG-1', url: 'https://linear.app/issue/LEG-1', syncState: 'linked', remoteTitle: 'Remote', remoteDescription: '', remoteVersion: 'v1', fieldOwnership: { title: 'external', description: 'external' } }],
+  });
+  assert.deepEqual(await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' }), { imported: 0, updated: 0 });
+  assert.equal(state.tickets[0].status, 'In progress');
+  assert.equal(state.tickets[0].priority, 'Low');
+  assert.equal(state.tickets[0].externalLinks[0].remoteStatus, 'Done');
+  assert.equal(state.tickets[0].externalLinks[0].remotePriority, 'High');
 });

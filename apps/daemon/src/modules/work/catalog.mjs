@@ -28,6 +28,16 @@ export function createCatalog({ state, save, execution, externalTickets, context
     return value;
   };
   const normalizedRemote = item => item?.remoteId ? item : item && ({ remoteId: item.id, remoteKey: item.identifier, url: item.url, title: item.title, description: item.description ?? '', sourceScope: item.team?.id, fieldOwnership: { title: 'external', description: 'external' } });
+  const normalizedRemotePage = remote => {
+    const identities = new Set();
+    return remote.map(item => {
+      const normalized = normalizedRemote(item);
+      if (!normalized?.remoteId || !normalized.remoteKey || !normalized.title) throw new Error('Ticket source returned an incomplete issue.');
+      if (identities.has(normalized.remoteId)) throw new Error(`Ticket source returned duplicate remote identity: ${normalized.remoteId}.`);
+      identities.add(normalized.remoteId);
+      return normalized;
+    });
+  };
   const link = (source, remote) => {
     if (typeof remote.remoteId !== 'string' || !remote.remoteId || typeof remote.remoteKey !== 'string' || !remote.remoteKey) throw new Error('External issue identity is incomplete.');
     const fallbackUrl = source.provider === 'linear' ? `https://linear.app/issue/${encodeURIComponent(remote.remoteKey)}` : source.manifest?.connection?.baseUrl;
@@ -211,12 +221,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (!externalTickets?.listIssues) throw new Error('External ticket adapter is unavailable.');
         const limit = c.limit ?? 10;
         if (!Number.isInteger(limit) || limit < 1 || limit > 25) throw new Error('Preview limit must be 1–25.');
-        const remote = await externalTickets.listIssues(source, limit);
+        const remote = normalizedRemotePage(await externalTickets.listIssues(source, limit));
         let wouldImport = 0; let wouldUpdate = 0; let unchanged = 0;
         let sample;
-        for (const item of remote) {
-          const normalized = normalizedRemote(item);
-          if (!normalized?.remoteId || !normalized.remoteKey || !normalized.title) throw new Error('Ticket source returned an incomplete issue.');
+        for (const normalized of remote) {
           sample ??= { remoteId: normalized.remoteId, remoteKey: normalized.remoteKey, title: normalized.title, description: normalized.description ?? '' };
           const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
           if (!existing) { wouldImport++; continue; }
@@ -232,26 +240,33 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (!externalTickets) throw new Error('External ticket adapter is unavailable.');
         const limit = c.limit ?? 50;
         if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Import limit must be 1–100.');
-        const remote = await externalTickets.listIssues(source, limit);
+        const remote = normalizedRemotePage(await externalTickets.listIssues(source, limit));
         const planned = []; let imported = 0; let updated = 0;
-        for (const item of remote) {
-          const normalized = normalizedRemote(item);
-          if (!normalized?.remoteId || !normalized.remoteKey || !normalized.title) throw new Error('Ticket source returned an incomplete issue.');
+        for (const normalized of remote) {
           const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
           const ownership = normalized.fieldOwnership ?? { title: 'external', description: 'external' };
-          const remoteLink = { ...link(source, normalized), remoteTitle: normalized.title, remoteDescription: normalized.description ?? '', fieldOwnership: ownership };
+          const remoteLink = { ...link(source, normalized), remoteTitle: normalized.title, remoteDescription: normalized.description ?? '', ...(normalized.status !== undefined ? { remoteStatus: normalized.status } : {}), ...(normalized.priority !== undefined ? { remotePriority: normalized.priority } : {}), fieldOwnership: ownership };
           if (existing) {
             const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === normalized.remoteId);
             remoteLink.fieldOwnership = previous.fieldOwnership ?? remoteLink.fieldOwnership;
-            const changed = previous.remoteTitle !== normalized.title || previous.remoteDescription !== (normalized.description ?? '') || previous.remoteVersion !== normalized.remoteVersion;
-            const localChanged = existing.title !== previous.remoteTitle || existing.description !== previous.remoteDescription;
+            const titleChanged = previous.remoteTitle !== normalized.title;
+            const descriptionChanged = previous.remoteDescription !== (normalized.description ?? '');
+            const statusChanged = normalized.status !== undefined && previous.remoteStatus !== undefined && previous.remoteStatus !== normalized.status;
+            const priorityChanged = normalized.priority !== undefined && previous.remotePriority !== undefined && previous.remotePriority !== normalized.priority;
+            const changed = titleChanged || descriptionChanged || statusChanged || priorityChanged || previous.remoteVersion !== normalized.remoteVersion;
+            const ownedByExternal = field => (remoteLink.fieldOwnership[field] ?? 'external') === 'external';
+            const conflict = titleChanged && ownedByExternal('title') && existing.title !== previous.remoteTitle
+              || descriptionChanged && ownedByExternal('description') && existing.description !== previous.remoteDescription
+              || statusChanged && ownedByExternal('status') && previous.remoteStatus !== undefined && existing.status !== previous.remoteStatus
+              || priorityChanged && ownedByExternal('priority') && previous.remotePriority !== undefined && existing.priority !== previous.remotePriority;
             const next = { ...existing, externalLinks: existing.externalLinks.map(value => value === previous ? remoteLink : value) };
-            if (changed && (localChanged || remoteLink.fieldOwnership.title === 'convoy' && previous.remoteTitle !== normalized.title || remoteLink.fieldOwnership.description === 'convoy' && previous.remoteDescription !== (normalized.description ?? ''))) {
+            if (changed && conflict) {
               remoteLink.syncState = 'error'; remoteLink.message = 'Local and external content changed. Review this ticket.';
             } else if (changed) {
-              next.title = normalized.title; next.description = normalized.description ?? '';
-              if (normalized.status !== undefined) next.status = normalized.status;
-              if (normalized.priority !== undefined) next.priority = normalized.priority;
+              if (titleChanged && ownedByExternal('title')) next.title = normalized.title;
+              if (descriptionChanged && ownedByExternal('description')) next.description = normalized.description ?? '';
+              if (statusChanged && ownedByExternal('status')) next.status = normalized.status;
+              if (priorityChanged && ownedByExternal('priority')) next.priority = normalized.priority;
               next.revision++; updated++;
             }
             planned.push({ old: existing, next });
@@ -275,17 +290,23 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (!externalLink) throw new Error('External link not found.');
         if (c.resolution && !['local', 'remote'].includes(c.resolution)) throw new Error('Unknown sync resolution.');
         if (c.resolution === 'remote') {
-          if (!externalTickets?.getIssue) throw new Error('External ticket read adapter is unavailable.');
-          const remote = normalizedRemote(await externalTickets.getIssue(connection(c.connectionId), externalLink.remoteId));
-          if (!remote || connection(c.connectionId).provider === 'linear' && remote.sourceScope !== connection(c.connectionId).teamId) throw new Error('External issue is no longer in the configured source.');
-          const patch = { title: remote.title, description: remote.description ?? '' };
+          const ownership = externalLink.fieldOwnership ?? { title: 'external', description: 'external' };
+          const patch = {};
+          if ((ownership.title ?? 'external') === 'external' && externalLink.remoteTitle !== undefined) patch.title = externalLink.remoteTitle;
+          if ((ownership.description ?? 'external') === 'external' && externalLink.remoteDescription !== undefined) patch.description = externalLink.remoteDescription;
+          if ((ownership.status ?? 'external') === 'external' && externalLink.remoteStatus !== undefined) patch.status = externalLink.remoteStatus;
+          if ((ownership.priority ?? 'external') === 'external' && externalLink.remotePriority !== undefined) patch.priority = externalLink.remotePriority;
+          if (!Object.keys(patch).length) throw new Error('No observed external values are available to apply. Import the source again.');
           boards.validateTicketUpdate(t, patch);
           Object.assign(t, patch, { revision: t.revision + 1 });
-          externalLink.remoteTitle = patch.title; externalLink.remoteDescription = patch.description;
           externalLink.syncState = 'linked'; delete externalLink.message;
           execution.syncTicket(t); await save(); return t;
         }
-        if (c.resolution === 'local') externalLink.fieldOwnership = { title: 'convoy', description: 'convoy' };
+        if (c.resolution === 'local') {
+          const source = activeConnection(c.connectionId);
+          if (!source.capabilities?.update) throw new Error('This ticket source is read-only. Use its external values or edit the ticket at the source.');
+          externalLink.fieldOwnership = { title: 'convoy', description: 'convoy', status: 'convoy', priority: 'convoy' };
+        }
         return pushContent(t, externalLink);
       }
       if (c.action === 'updateTicket') {

@@ -68,7 +68,7 @@ test('acceptance: a mapped HTTP source previews, imports once, and survives rest
   t.after(() => { if (previous === undefined) delete process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE; else process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE = previous; });
   let requests = 0;
   const custom = createCustomTicketSource({
-    resolver: async () => [{ address: '203.0.113.20', family: 4 }],
+    resolver: async () => [{ address: '8.8.4.4', family: 4 }],
     fetcher: async (_url, options) => {
       requests++;
       assert.equal(options.headers.Authorization, 'Bearer fixture-secret');
@@ -79,7 +79,7 @@ test('acceptance: a mapped HTTP source previews, imports once, and survives rest
   const manifest = {
     apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
     connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE' } },
-    operations: { list: { method: 'GET', path: '/tickets', response: { items: '$.items' } } },
+    operations: { list: { method: 'GET', path: 'tickets', response: { items: '$.items' } } },
     mapping: { remoteId: '$.id', remoteKey: '$.number', title: '$.subject', description: '$.details', status: '$.state', priority: '$.severity', remoteVersion: '$.revision', url: '$.url' },
     values: { status: { open: 'Backlog' }, priority: { urgent: 'High' } },
   };
