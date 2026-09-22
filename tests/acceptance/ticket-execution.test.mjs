@@ -21,7 +21,7 @@ async function fixture(t) {
     auth: { token: async () => 'fake', status: async () => ({ connected: true }) },
     generate: async function* (input) {
       prompts.push(input);
-      const submit = input.systemPrompt.includes('Current workflow step');
+      const submit = input.prompt?.turnInstructions.includes('Current workflow step') ?? input.systemPrompt.includes('Current workflow step');
       yield {
         type: 'result',
         message: {
@@ -173,7 +173,7 @@ test('ticket run: continue preserves prior conversation context and pinned workf
       (await f.snapshot()).sessions.find((s) => s.id === chat.sessionId)?.flow?.status ===
       'waiting_gate',
   );
-  assert.match(JSON.stringify(f.prompts.at(-1).messages), /Preserve this architecture decision/);
+  assert.match(JSON.stringify(f.prompts.at(-1).prompt.messages), /Preserve this architecture decision/);
   await f.act('saveWorkflow', {
     workflow: {
       id: 'ticket-loop',
@@ -247,7 +247,7 @@ test('ticket run: durable ticket attachments are exposed in snapshots and suppli
   });
   assert.equal(run.ticketId, f.ticket.id);
   await until(() => f.prompts.length);
-  assert.match(JSON.stringify(f.prompts[0].messages), /TICKET_ATTACHMENT_CONTENT/);
+  assert.match(JSON.stringify(f.prompts[0].prompt.messages), /TICKET_ATTACHMENT_CONTENT/);
 });
 test('ticket run: local runner provisions, evidence is inspectable, worktree cannot be relocated', async (t) => {
   const f = await fixture(t);

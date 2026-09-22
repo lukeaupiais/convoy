@@ -105,8 +105,8 @@ test('runtime loads skills on demand, keeps context and restores pinned profile 
   await f.act('setCapabilityProfile',{sessionId:f.c.sessionId,profile:p});
   await f.act('start',{sessionId:f.c.sessionId,text:'Review this',model:'fake',requestId:'one'});
   await until(async()=>(await f.session()).status==='awaiting_review');
-  assert(!f.prompts[0].systemPrompt.includes('Secret procedure'));assert(f.prompts[1].systemPrompt.includes('Secret procedure'));
-  assert(f.prompts[2].messages.some(m=>m.role==='toolResult'&&JSON.stringify(m).includes('keyboard navigation')));
+  assert(!f.prompts[0].prompt.turnInstructions.includes('Secret procedure'));assert(f.prompts[1].prompt.turnInstructions.includes('Secret procedure'));
+  assert(f.prompts[2].prompt.messages.some(m=>m.role==='toolResult'&&JSON.stringify(m).includes('keyboard navigation')));
   const before=await f.session();assert.equal(before.capabilityProfile.hash,p.hash);assert(before.effectiveCapabilities.skills[0].active);
   await f.runtime.close();const restarted=await createRuntime(f.options);t.after(()=>restarted.close());const after=(await restarted.snapshot(f.c.sessionId)).sessions[0];assert.equal(after.capabilityProfile.hash,p.hash);assert(after.effectiveCapabilities.skills[0].active);
 });

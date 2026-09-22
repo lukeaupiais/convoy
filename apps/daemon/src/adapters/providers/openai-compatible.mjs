@@ -154,10 +154,13 @@ export function createOpenAICompatibleProvider({ id, name, endpoint, fetch: requ
         .filter((model) => typeof model?.id === 'string' && model.id)
         .map((model) => ({ id: model.id, name: model.name ?? model.id, input: ['text'] }));
     },
-    async *generate({ model, messages: input, systemPrompt, tools: declared, token, signal }) {
+    async *generate({ model, prompt, messages: input, systemPrompt, tools: declared, token, signal }) {
+      const instructions = prompt
+        ? [prompt.stableInstructions, prompt.turnInstructions].filter(Boolean).join('\n\n')
+        : systemPrompt;
       const body = {
         model,
-        messages: messages(input, systemPrompt),
+        messages: messages(prompt?.messages ?? input, instructions),
         stream: true,
         stream_options: { include_usage: true },
         ...(declared?.length ? { tools: tools(declared), tool_choice: 'auto' } : {}),
@@ -179,8 +182,10 @@ export function createOpenAICompatibleProvider({ id, name, endpoint, fetch: requ
       const calls = new Map();
       let stopReason = 'stop';
       const terminal = { done: false, finishReason: false };
+      let usage;
       try {
         for await (const event of sse(response.body, signal, terminal)) {
+          if (event?.usage) usage = event.usage;
           const choice = event?.choices?.[0];
           const delta = choice?.delta ?? {};
           if (typeof delta.content === 'string' && delta.content) {
@@ -220,6 +225,12 @@ export function createOpenAICompatibleProvider({ id, name, endpoint, fetch: requ
       yield {
         type: 'result',
         message: { role: 'assistant', content: result, stopReason, timestamp: Date.now() },
+        ...(usage ? { usage: {
+          ...(Number.isFinite(usage.prompt_tokens) ? { inputTokens: usage.prompt_tokens } : {}),
+          ...(Number.isFinite(usage.completion_tokens) ? { outputTokens: usage.completion_tokens } : {}),
+          ...(Number.isFinite(usage.prompt_tokens_details?.cached_tokens)
+            ? { cachedInputTokens: usage.prompt_tokens_details.cached_tokens } : {}),
+        } } : {}),
       };
     },
   };

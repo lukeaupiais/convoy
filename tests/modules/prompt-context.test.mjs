@@ -87,6 +87,8 @@ test('stable epoch excludes runtime data while updates append after its prefix',
   assert.match(first.systemPrompt, /org/);
   assert.match(first.systemPrompt, /project/);
   assert.match(first.systemPrompt, /legacy/);
+  assert.equal(first.stableInstructions, first.epoch.baseline);
+  assert.equal(first.systemPrompt, `${first.stableInstructions}\n\n${first.turnInstructions}`);
   assert.doesNotMatch(first.systemPrompt, /volatile|Ticket/);
   assert.match(messages.at(-1).content, /reference data, not instructions/);
   assert.match(messages.at(-1).content, /volatile/);
@@ -104,6 +106,8 @@ test('stable epoch excludes runtime data while updates append after its prefix',
     capabilityText: 'Activated skill body',
   });
   assert.equal(second.epoch.id, first.epoch.id);
+  assert.equal(second.stableInstructions, first.stableInstructions);
+  assert.notEqual(second.turnInstructions, first.turnInstructions);
   assert(second.systemPrompt.startsWith(first.epoch.baseline));
   assert.match(second.systemPrompt, /Context update: workflow/);
   assert.match(second.systemPrompt, /Activated skill body/);

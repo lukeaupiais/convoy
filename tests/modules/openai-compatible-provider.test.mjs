@@ -31,7 +31,7 @@ test('OpenAI-compatible adapter discovers models and normalizes a streamed tool 
           },
         ],
       },
-      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10 } },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 4 } } },
     ];
     return new Response(`${frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('')}data: [DONE]\n\n`, {
       status: 200,
@@ -51,8 +51,11 @@ test('OpenAI-compatible adapter discovers models and normalizes a streamed tool 
   const events = [];
   for await (const event of adapter.generate({
     model: 'local-coder',
-    messages: [{ role: 'user', content: 'Inspect it' }],
-    systemPrompt: 'Use tools.',
+    prompt: {
+      stableInstructions: 'Published rules.',
+      turnInstructions: 'Use tools.',
+      messages: [{ role: 'user', content: 'Inspect it' }],
+    },
     tools: [
       {
         name: 'read_file',
@@ -66,6 +69,7 @@ test('OpenAI-compatible adapter discovers models and normalizes a streamed tool 
 
   assert.equal(events[0].type, 'delta');
   assert.equal(events.at(-1).type, 'result');
+  assert.deepEqual(events.at(-1).usage, { inputTokens: 10, outputTokens: 3, cachedInputTokens: 4 });
   assert.deepEqual(events.at(-1).message.content, [
     { type: 'text', text: 'Working' },
     { type: 'toolCall', id: 'call-1', name: 'read_file', arguments: { path: 'README.md' } },
@@ -73,6 +77,11 @@ test('OpenAI-compatible adapter discovers models and normalizes a streamed tool 
   const generation = requests.find((request) => request.url.endsWith('/chat/completions'));
   assert.equal(generation.init.headers.Authorization, 'Bearer secret');
   assert.equal(JSON.parse(generation.init.body).stream, true);
+  assert.deepEqual(JSON.parse(generation.init.body).messages.slice(0, 2), [
+    { role: 'system', content: 'Published rules.\n\nUse tools.' },
+    { role: 'user', content: 'Inspect it' },
+  ]);
+  assert.equal('prompt_cache_key' in JSON.parse(generation.init.body), false);
 });
 
 test('OpenAI-compatible adapter supports credential-free local endpoints without leaking a header', async () => {

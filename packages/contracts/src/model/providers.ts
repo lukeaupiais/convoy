@@ -151,6 +151,8 @@ export type ProviderOutcome = {
   usage: {
     inputTokens?: number;
     outputTokens?: number;
+    cachedInputTokens?: number;
+    cacheWriteTokens?: number;
     upstreamCostUsd?: number;
     gatewayCostUsd?: number;
     costUsd?: number;

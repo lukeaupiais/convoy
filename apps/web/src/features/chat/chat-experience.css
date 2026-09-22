@@ -802,6 +802,13 @@
   color: var(--chat-ink);
   background: #fff9;
 }
+.app .chat-workspace .chat-usage,
+.app .chat-workspace .chat-usage-empty {
+  color: var(--chat-muted);
+}
+.app .chat-workspace .chat-usage strong {
+  color: var(--chat-ink);
+}
 .app .chat-workspace .chat-model-picker {
   margin-left: auto;
   min-width: 0;
@@ -1179,8 +1186,12 @@
   .app .chat-workspace .attachment-toolbar {
     order: 1;
   }
-  .app .chat-workspace .chat-model-picker {
+  .app .chat-workspace .chat-usage,
+  .app .chat-workspace .chat-usage-empty {
     order: 2;
+  }
+  .app .chat-workspace .chat-model-picker {
+    order: 3;
     max-width: 42%;
   }
   .app .chat-workspace .composer-send-mode {

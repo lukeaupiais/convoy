@@ -8,6 +8,7 @@ import {
   useRuntime,
   type ContextFile,
   type RuntimeAction,
+  type Session,
 } from '../../shared/api/runtime';
 import { AttachmentComposer, AttachmentList } from './ChatAttachments';
 import { AuthControls } from '../providers';
@@ -22,6 +23,29 @@ import { ToolGroup, InlineQuestion } from './ToolActivity';
 import { AgentRunBar } from './AgentRunBar';
 import { ChangeReview } from './ChangeReview';
 type Note = { id: string; text: string; createdAt: string };
+function tokenCount(value?: number) {
+  if (value === undefined) return '—';
+  if (value < 1000) return String(value);
+  return `${(value / 1000).toFixed(value < 10000 ? 1 : 0).replace(/\.0$/, '')}k`;
+}
+function ChatUsage({ usage }: { usage?: Session['modelUsage'] }) {
+  if (!usage) return <span className="chat-usage-empty">No usage reported yet</span>;
+  const metrics: [string, number | undefined][] = [
+    ['In', usage.inputTokens],
+    ['Out', usage.outputTokens],
+    ['Cache read', usage.cachedInputTokens],
+  ];
+  if (usage.cacheWriteTokens !== undefined) metrics.push(['Cache write', usage.cacheWriteTokens]);
+  return (
+    <div className="chat-usage" aria-label={`Chat model usage across ${usage.requests} responses`}>
+      {metrics.map(([label, value]) => (
+        <span key={label} title={`${label}: ${value?.toLocaleString() ?? 'not reported'} tokens`}>
+          {label} <strong>{tokenCount(value)}</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
 function load(key: string): { messages: Note[]; draft: string; attachments: ContextFile[] } {
   try {
     const value = JSON.parse(localStorage.getItem(key) ?? 'null');
@@ -608,6 +632,7 @@ export function SessionChat({
               />
               <div className="composer-bottom">
                 {toolbar}
+                <ChatUsage usage={session?.modelUsage} />
                 <Select
                   className="chat-model-picker"
                   aria-label="Chat model"

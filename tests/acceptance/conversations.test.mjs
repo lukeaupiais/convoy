@@ -11,7 +11,7 @@ async function fixture(t, generate) {
   const directory = await mkdtemp(join(tmpdir(), 'convoy-conversations-test-'));
   const prompts = [];
   const options = { directory, models: [{ id: 'test' }], auth: { token: async()=> 'fake', status: async()=>({ connected:true }) },
-    generate: async function* (input) { prompts.push(structuredClone({ messages: input.messages, systemPrompt: input.systemPrompt, tools: input.tools })); yield { type:'result', message: generate ? await generate(input, prompts.length) : reply('Done') }; },
+    generate: async function* (input) { prompts.push(structuredClone({ messages: input.prompt?.messages ?? input.messages, systemPrompt: input.prompt ? [input.prompt.stableInstructions, input.prompt.turnInstructions].filter(Boolean).join('\n\n') : input.systemPrompt, tools: input.tools })); const value = generate ? await generate(input, prompts.length) : reply('Done'); yield { type:'result', ...(value.role === 'assistant' ? { message: value } : value) }; },
     runners: { execute: async (_r, c) => c.action==='probe' ? {repository:'/fixture', tools:['read_file'], shell:false} : c.action==='provision' ? {path:'/fixture/'+c.workspaceId,branch:c.workspaceId} : c.action==='diff' ? {digest:'unchanged'} : {text:'File',sha256:'hash'} } };
   const runtime=await createRuntime(options); t.after(()=>runtime.close());
   const act=(action, data={})=>runtime.command({action,client:'conversation-test',...data});
@@ -98,6 +98,23 @@ test('independent conversations persist without board items; legacy migration is
   assert.equal(state.sessions.find(s=>s.id===f.c.sessionId).events.filter(e=>e.type==='user').length,1);
   assert.equal(state.conversations.find(c=>c.sessionId==='42').linkedTicketIds[0],42);
   await restarted.close();
+});
+
+test('chat snapshots retain provider-reported input, output and cache usage across turns', async t => {
+  const f = await fixture(t, (_input, n) => ({
+    message: reply('Done'),
+    usage: { inputTokens: 1000 + n, outputTokens: 20, cachedInputTokens: n === 1 ? 0 : 800 },
+  }));
+  await f.chat('sendMessage', { text: 'First', model: 'test', mode: 'queue', requestId: 'usage-1' });
+  await f.done();
+  await f.chat('sendMessage', { text: 'Second', model: 'test', mode: 'queue', requestId: 'usage-2' });
+  await f.done();
+  assert.deepEqual((await f.session()).modelUsage, {
+    requests: 2,
+    inputTokens: 2003,
+    outputTokens: 40,
+    cachedInputTokens: 800,
+  });
 });
 
 test('agent creates an approved unassigned ticket, reuses request key and links without execution',async t=>{
@@ -237,7 +254,7 @@ test('project context cannot leak through reassignment; workflow decisions and r
 });
 
 test('context compaction retains full history and a durable checkpoint',async t=>{
-  const f=await fixture(t,(input)=>input.systemPrompt.startsWith('Summarize conversation')?reply('Decision: blue architecture; do not deploy.'):reply('Continuing'));
+  const f=await fixture(t,(input)=>input.systemPrompt?.startsWith('Summarize conversation')?reply('Decision: blue architecture; do not deploy.'):reply('Continuing'));
   await f.runtime.close();
   const path=join(f.options.directory,'state.json');const data=JSON.parse(await readFile(path,'utf8'));
   const s=data.sessions[f.c.sessionId];s.messages=Array.from({length:24},(_,i)=>i%2?reply('Evidence '+ 'x'.repeat(9500)):{role:'user',content:'Blue architecture '+ 'y'.repeat(9500),timestamp:Date.now()});

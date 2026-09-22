@@ -14,7 +14,7 @@ async function until(fn){for(let i=0;i<300;i++){const v=await fn();if(v)return v
 async function fixture(t,generate,runners){
   const directory=await mkdtemp(join(tmpdir(),'convoy-context-test-'));const prompts=[];
   const options={directory,models:[{id:'vision',input:['text','image']},{id:'text-only',input:['text']}],auth:{token:async()=> 'fake',status:async()=>({connected:true})},runners,
-    generate:async function*(input){prompts.push(structuredClone(input.messages));if(generate)await generate(input,prompts.length);yield {type:'result',message:{role:'assistant',content:[{type:'text',text:'Done'}],timestamp:Date.now(),stopReason:'stop'}};}};
+    generate:async function*(input){prompts.push(structuredClone(input.prompt?.messages ?? input.messages));if(generate)await generate(input,prompts.length);yield {type:'result',message:{role:'assistant',content:[{type:'text',text:'Done'}],timestamp:Date.now(),stopReason:'stop'}};}};
   const runtime=await createRuntime(options);t.after(()=>runtime.close());
   const act=(action,data={})=>runtime.command({action,client:'context-test',...data});
   const c=await act('createConversation',{requestId:'chat',projectId:'agent-platform'});const chat=(action,data={})=>act(action,{sessionId:c.sessionId,...data});await chat('claim');
