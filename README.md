@@ -43,7 +43,7 @@ reports, workflow feedback, and focused open-source contributions.
 
 ## Get it running
 
-You'll need **Node.js 22+**, **Git**, Linux **Bubblewrap** (`bwrap`) for
+You'll need **Node.js 22.13+**, **Git**, Linux **Bubblewrap** (`bwrap`) for
 sandboxed shell execution, and **tmux** for persistent native terminals.
 
 ```sh

@@ -12,7 +12,7 @@ inject adapters so module and acceptance tests can use deterministic fakes.
 | Adapter | External boundary |
 | --- | --- |
 | `auth` | Convoy-owned ChatGPT subscription login and refresh lifecycle |
-| `persistence` | atomic private state, attachment bytes, and bounded command logs |
+| `persistence` | SQLite or PostgreSQL keyed state rows, attachment bytes, and bounded command logs |
 | `providers` | direct provider HTTP protocol, model catalog, and streaming normalization |
 | `runners` | local process or SSH worker transport |
 | `deployment` | durable deployment identity and fail-closed server configuration |
