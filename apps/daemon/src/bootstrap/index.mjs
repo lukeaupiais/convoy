@@ -91,6 +91,13 @@ async function main() {
   runtime = await createRuntime({
     directory: join(root, 'runtime'),
     legacyDirectory,
+    persistenceBackend: process.env.CONVOY_DATABASE_URL ? 'postgres' : 'sqlite',
+    databaseUrl: process.env.CONVOY_DATABASE_URL,
+    importLegacy: process.env.CONVOY_IMPORT_LEGACY_STATE === '1',
+    onPersistenceFailure: () => {
+      console.error('Convoy persistence connection lost; stopping active work.');
+      void shutdown(1);
+    },
     models,
     generate,
     provider,

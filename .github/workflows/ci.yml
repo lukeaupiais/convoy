@@ -24,6 +24,22 @@ jobs:
   system:
     # Hosted Ubuntu 24.04 blocks Bubblewrap UID mapping under AppArmor.
     runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: convoy
+          POSTGRES_PASSWORD: convoy-test
+          POSTGRES_DB: convoy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U convoy -d convoy_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CONVOY_TEST_DATABASE_URL: postgresql://convoy:convoy-test@127.0.0.1:5432/convoy_test
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7

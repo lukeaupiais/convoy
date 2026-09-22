@@ -49,6 +49,8 @@ The module command ownership seam is documented in
 The extension contract is documented in [`extensions.md`](extensions.md).
 Execution profiles, resolved grants, runner authority, and the static capacity-provider seam are
 documented in [`execution-access.md`](execution-access.md).
+Deployment storage, migration, and offline backup are documented in
+[`persistence.md`](persistence.md).
 
 ## Ownership boundaries
 

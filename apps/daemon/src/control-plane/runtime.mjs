@@ -2419,6 +2419,7 @@ export async function createRuntime({
         await runners?.close?.();
         await sessionExecution.close();
         await store.save();
+        await store.close?.();
       })());
     },
   };
