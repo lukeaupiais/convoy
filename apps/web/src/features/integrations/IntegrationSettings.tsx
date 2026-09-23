@@ -69,6 +69,13 @@ function ConnectionCard({
   const [editing, setEditing] = useState(false);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('');
+  const binding = state.ticketImportBindings?.find((value) => value.connectionId === connection.id);
+  const projects = state.projects.filter(
+    (value) => value.organizationId === connection.organizationId,
+  );
+  const [importProjectId, setImportProjectId] = useState(projects[0]?.id ?? '');
+  const [importName, setImportName] = useState(connection.name);
+  const [importWorkType, setImportWorkType] = useState('support');
   useEffect(() => {
     setName(connection.name);
     if (connection.provider === 'linear') {
@@ -146,6 +153,40 @@ function ConnectionCard({
       setWorking(false);
     }
   }
+  async function saveBinding(enabled = binding?.enabled ?? true) {
+    setWorking(true);
+    setMessage('');
+    try {
+      await command('saveTicketImportBinding', {
+        ...(binding ? { id: binding.id, revision: binding.revision } : {}),
+        connectionId: connection.id,
+        projectId: binding?.projectId ?? importProjectId,
+        name: binding?.name ?? importName.trim(),
+        workType: binding?.workType ?? importWorkType.trim(),
+        enabled,
+      });
+      setMessage('Import binding saved.');
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+  async function syncBinding() {
+    if (!binding) return;
+    setWorking(true);
+    setMessage('');
+    try {
+      const response = await command('syncTicketImportBinding', { id: binding.id, limit: 100 });
+      setMessage(
+        `Synced ${response.result.imported} new and ${response.result.updated} updated tickets${response.result.complete ? '.' : '; more pages remain.'}`,
+      );
+    } catch (error) {
+      setMessage(`Sync failed: ${(error as Error).message}`);
+    } finally {
+      setWorking(false);
+    }
+  }
   return (
     <article className="integration-card">
       <header>
@@ -183,6 +224,69 @@ function ConnectionCard({
           >
             Enable
           </button>
+        )}
+      </div>
+      <div className="integration-card-body">
+        {binding ? (
+          <>
+            <span>
+              Import to{' '}
+              {projects.find((value) => value.id === binding.projectId)?.name ?? binding.projectId}{' '}
+              · {binding.workType}
+            </span>
+            <button
+              className="secondary"
+              disabled={working || !binding.enabled || !connection.enabled}
+              onClick={() => void syncBinding()}
+            >
+              Sync
+            </button>
+            <button
+              className="secondary"
+              disabled={working}
+              onClick={() => void saveBinding(!binding.enabled)}
+            >
+              {binding.enabled ? 'Pause import' : 'Enable import'}
+            </button>
+            {binding.lastSyncedAt && (
+              <span>Last synced {new Date(binding.lastSyncedAt).toLocaleString()}</span>
+            )}
+            {binding.lastError && <span role="alert">{binding.lastError}</span>}
+          </>
+        ) : (
+          <>
+            <label>
+              Import project
+              <select
+                value={importProjectId}
+                onChange={(event) => setImportProjectId(event.target.value)}
+              >
+                {projects.map((value) => (
+                  <option key={value.id} value={value.id}>
+                    {value.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Import name
+              <input value={importName} onChange={(event) => setImportName(event.target.value)} />
+            </label>
+            <label>
+              Work type
+              <input
+                value={importWorkType}
+                onChange={(event) => setImportWorkType(event.target.value)}
+              />
+            </label>
+            <button
+              className="secondary"
+              disabled={working || !importProjectId}
+              onClick={() => void saveBinding()}
+            >
+              Bind import
+            </button>
+          </>
         )}
       </div>
       {editing && (

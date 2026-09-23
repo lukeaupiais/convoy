@@ -14,6 +14,8 @@ const commands = [
   'reconcileTicketPublish',
   'syncExternalTicket',
   'importExternalTickets',
+  'saveTicketImportBinding',
+  'syncTicketImportBinding',
   'updateTicket',
   'attachTicketFile',
   'removeTicketFile',
@@ -57,6 +59,9 @@ export function createWork({ afterCommand = async (_command, result) => result, 
         ticketConnections: value.ticketConnections.filter((connection) =>
           value.projects.some((project) => projectIds.has(project.id) && project.organizationId === connection.organizationId),
         ),
+        ticketImportBindings: value.ticketImportBindings.filter((binding) => projectIds.has(binding.projectId)),
+        ticketImportMemberships: value.ticketImportMemberships.filter((membership) =>
+          value.ticketImportBindings.some((binding) => binding.id === membership.bindingId && projectIds.has(binding.projectId))),
         boards: value.boards
           .filter(
             (board) =>

@@ -59,7 +59,7 @@ export type TicketSourceManifest = {
       method: 'GET';
       path: string;
       query?: Record<string, string>;
-      response: { items: string; nextCursor?: string };
+      response: { items: string; nextCursor?: string; total?: string };
     };
     get?: {
       method: 'GET';
@@ -109,10 +109,30 @@ export type TicketConnection = TicketConnectionBase &
         credentialEnv?: never;
       }
   );
+export type TicketImportBinding = {
+  id: string;
+  connectionId: string;
+  projectId: string;
+  name: string;
+  workType: string;
+  enabled: boolean;
+  revision: number;
+  cursor?: string;
+  runId?: string;
+  lastSyncedAt?: string;
+  lastError?: string;
+};
+export type TicketImportMembership = {
+  id: string;
+  bindingId: string;
+  ticketId: number;
+  seenRunId: string;
+};
 export type Ticket = {
   id: number;
   executionSessionId?: string;
   projectId: string;
+  workType?: string;
   title: string;
   description: string;
   status: string;
@@ -171,6 +191,8 @@ export type BoardPlacement = {
 export type BoardFilters = {
   projectIds?: string[];
   origins?: NonNullable<Ticket['origin']>[];
+  workTypes?: string[];
+  importBindingIds?: string[];
   statuses?: string[];
   labels?: string[];
   agents?: string[];
@@ -200,6 +222,7 @@ export type Board = {
   cardFields: string[];
   grouping: BoardGrouping;
   creationPolicy?: { mode: 'convoy' | 'ask' | 'connection'; connectionId?: string };
+  creationWorkType?: string;
   destinationConnectionIds?: string[];
   density: 'compact' | 'comfortable' | 'spacious';
   revision: number;

@@ -127,6 +127,8 @@ export function BoardStudio({
         (!f.query || `${t.title} ${t.description}`.toLowerCase().includes(f.query.toLowerCase())) &&
         (!f.projectIds?.length || f.projectIds.includes(t.projectId)) &&
         (!f.origins?.length || f.origins.includes(t.origin ?? 'convoy')) &&
+        (!f.workTypes?.length || f.workTypes.includes(t.workType ?? 'task')) &&
+        (!f.importBindingIds?.length || (state.ticketImportMemberships ?? []).some((m) => m.ticketId === t.id && f.importBindingIds?.includes(m.bindingId))) &&
         (!f.statuses?.length || f.statuses.includes(t.status)) &&
         (!f.labels?.length || f.labels.includes(t.label)) &&
         (!f.agents?.length || f.agents.includes(t.agent)) &&
@@ -135,11 +137,12 @@ export function BoardStudio({
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
-  }, [tickets, board, query, projectName]);
-  const linkedSources = [...new Set(boardTickets.flatMap((ticket) => (ticket.externalLinks ?? []).map((link) => link.connectionId)))];
-  const syncSource = linkedSources.length === 1 ? connections.find((value) => value.id === linkedSources[0] && value.enabled && value.capabilities?.import) : undefined;
+  }, [tickets, board, query, projectName, state.ticketImportMemberships]);
+  const syncBinding = board.filters.importBindingIds?.length === 1
+    ? state.ticketImportBindings?.find((value) => value.id === board.filters.importBindingIds?.[0] && value.enabled) : undefined;
+  const syncSource = connections.find((value) => value.id === syncBinding?.connectionId && value.enabled);
   const needsSupportFollowUp = (ticket: Ticket) =>
-    ticket.origin === 'external' && !['Resolved', 'Closed'].includes(ticket.status) &&
+    (ticket.workType === 'support' || ticket.workType === undefined && ticket.origin === 'external') && !['Resolved', 'Closed'].includes(ticket.status) &&
     (state.ticketDevelopmentLinks ?? []).some((link) => link.supportTicketId === ticket.id &&
       state.tickets.some((development) => development.id === link.developmentTicketId && development.status === 'Done'));
   const lanes = useMemo(() => {
@@ -337,12 +340,12 @@ export function BoardStudio({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {syncSource && board.projectIds.length === 1 && (
+          {syncSource && syncBinding && (
             <button className="secondary" disabled={saving} onClick={async () => {
               setSaving(true);
               try {
-                const response = await command('importExternalTickets', { connectionId: syncSource.id, projectId: board.projectIds[0], limit: 100 });
-                setMessage(`Synced ${syncSource.name}: ${response.result.imported} new, ${response.result.updated} updated.`);
+                const response = await command('syncTicketImportBinding', { id: syncBinding.id, limit: 100 });
+                setMessage(`Synced ${syncSource.name}: ${response.result.imported} new, ${response.result.updated} updated${response.result.complete ? '.' : '; more pages remain.'}`);
               } catch (error) { setMessage(`Sync failed: ${(error as Error).message}`); }
               finally { setSaving(false); }
             }}>Sync {syncSource.name}</button>
@@ -367,6 +370,14 @@ export function BoardStudio({
           <div className="board-settings-grid">
             <fieldset className="board-integrations">
               <legend>Integrations</legend>
+              <label>
+                Imported ticket set
+                <Select value={draft.filters.importBindingIds?.[0] ?? ''} onChange={(event) => patch({ filters: { ...draft.filters, importBindingIds: event.target.value ? [event.target.value] : undefined } })}>
+                  <option value="">Any source</option>
+                  {(state.ticketImportBindings ?? []).filter((value) => draft.projectIds.includes(value.projectId)).map((value) =>
+                    <option key={value.id} value={value.id}>{value.name}</option>)}
+                </Select>
+              </label>
               <label>
                 New tickets on this board
                 <Select
@@ -406,17 +417,6 @@ export function BoardStudio({
                       setSaving(false);
                     }
                   }}>Preview</button>
-                  <button className="secondary" type="button" disabled={saving || !value.enabled} onClick={async () => {
-                    setSaving(true);
-                    try {
-                      const response = await command('importExternalTickets', { connectionId: value.id, projectId, limit: 50 });
-                      setMessage(`Imported ${response.result.imported} and updated ${response.result.updated} tickets.`);
-                    } catch (error) {
-                      setMessage(`Import failed: ${(error as Error).message}`);
-                    } finally {
-                      setSaving(false);
-                    }
-                  }}>Import tickets</button>
                 </div>
               ))}
               <button className="secondary" type="button" onClick={onManageIntegrations}>Manage connections</button>
@@ -507,6 +507,14 @@ export function BoardStudio({
                 <option value="browser-import">Browser imports</option>
                 <option value="session-migration">Session migrations</option>
               </Select>
+            </label>
+            <label>
+              Work type
+              <input value={(draft.filters.workTypes ?? []).join(', ')} placeholder="support, development" onChange={(event) => patch({ filters: { ...draft.filters, workTypes: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) } })} />
+            </label>
+            <label>
+              New ticket work type
+              <input value={draft.creationWorkType ?? 'task'} onChange={(event) => patch({ creationWorkType: event.target.value })} />
             </label>
             <label>
               Search filter
@@ -854,7 +862,7 @@ export function BoardStudio({
                           {cards.length}
                           {column.wipLimit ? ` / ${column.wipLimit}` : ''}
                         </span>
-                        {(!board.filters.origins?.length || board.filters.origins.includes('convoy')) &&
+                        {(!board.filters.origins?.length || board.filters.origins.includes('convoy')) && !board.filters.importBindingIds?.length &&
                           <button
                             aria-label={`Add ticket to ${column.name}`}
                             onClick={() => onNewTicket(board.id, column.id)}

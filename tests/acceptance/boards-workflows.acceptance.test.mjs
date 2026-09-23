@@ -62,6 +62,29 @@ test('acceptance: a board can mix local and Linear tickets without publishing lo
   await assert.rejects(f.act('deleteTicketConnection', { id: source.id, revision: disabled.revision }), /Remove this connection from boards/);
 });
 
+test('acceptance: one project has independent imported and development boards across restart', async t => {
+  const issue = { id: 'case-1', identifier: 'CASE-1', url: 'https://linear.app/issue/CASE-1', title: 'Reported problem' };
+  const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: { listIssuesPage: async () => ({ items: [issue] }) } });
+  const project = await f.act('saveProject', { name: 'Product' });
+  const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'linear', name: 'Cases', teamId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', credentialEnv: 'CONVOY_LINEAR_TOKEN_TEST' });
+  const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Cases', workType: 'support' });
+  const support = await f.act('saveBoard', { name: 'Support', projectIds: [project.id], filters: { workTypes: ['support'], importBindingIds: [binding.id] }, columns: [{ id: 'open', name: 'Open' }] });
+  const development = await f.act('saveBoard', { name: 'Development', projectIds: [project.id], filters: { workTypes: ['development'] }, creationWorkType: 'development', columns: [{ id: 'backlog', name: 'Backlog' }] });
+  assert.equal((await f.snapshot()).boards.find(value => value.id === support.id).tickets.length, 0);
+  assert.deepEqual(await f.act('syncTicketImportBinding', { id: binding.id }), { imported: 1, updated: 0, complete: true, pages: 1 });
+  let snapshot = await f.snapshot();
+  const report = snapshot.tickets.find(value => value.projectId === project.id);
+  await f.act('createDevelopmentTicket', { requestId: 'case-1-dev', supportTicketId: report.id, supportRevision: report.revision, projectId: project.id, title: 'Fix problem' });
+  await f.restart();
+  snapshot = await f.snapshot();
+  assert.equal(snapshot.ticketImportBindings.length, 1);
+  assert.equal(snapshot.ticketImportMemberships.length, 1);
+  assert.equal(snapshot.boards.find(value => value.id === support.id).tickets.length, 1);
+  assert.equal(snapshot.boards.find(value => value.id === development.id).tickets.length, 1);
+  assert.equal(snapshot.ticketDevelopmentLinks.length, 1);
+  assert.equal(snapshot.tickets.filter(value => value.projectId === project.id).length, 2);
+});
+
 test('acceptance: a mapped HTTP source previews, imports once, and survives restart', async t => {
   const previous = process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE;
   process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE = 'fixture-secret';

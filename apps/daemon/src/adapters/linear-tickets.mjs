@@ -63,11 +63,16 @@ export function createLinearTickets({ fetcher = fetch } = {}) {
       return normalize(data.issueUpdate.issue);
     },
     async listIssues(connection, limit) {
+      return (await this.listIssuesPage(connection, limit)).items;
+    },
+    async listIssuesPage(connection, limit, cursor) {
       const data = await call(connection,
-        'query($id: String!, $first: Int!) { team(id: $id) { issues(first: $first) { nodes { id identifier url title description updatedAt } } } }',
-        { id: connection.teamId, first: limit });
+        'query($id: String!, $first: Int!, $after: String) { team(id: $id) { issues(first: $first, after: $after) { nodes { id identifier url title description updatedAt } pageInfo { hasNextPage endCursor } } } }',
+        { id: connection.teamId, first: limit, after: cursor ?? null });
       if (!data.team?.issues?.nodes) throw new Error('Linear team or issues unavailable.');
-      return data.team.issues.nodes.map(normalize);
+      const { nodes, pageInfo } = data.team.issues;
+      if (pageInfo?.hasNextPage && (!pageInfo.endCursor || !nodes.length)) throw new Error('Linear returned an invalid next page.');
+      return { items: nodes.map(normalize), nextCursor: pageInfo?.hasNextPage ? pageInfo.endCursor : undefined };
     },
   };
 }

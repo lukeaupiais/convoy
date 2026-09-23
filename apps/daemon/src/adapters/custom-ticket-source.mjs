@@ -154,9 +154,13 @@ export function validateCustomTicketSourceManifest(input) {
       }
     }
     const response = object(operation.response, `${name} response mapping is required.`);
-    keys(response, name === 'list' ? ['items', 'nextCursor'] : ['item'], `Unknown ${name} response field`);
+    keys(response, name === 'list' ? ['items', 'nextCursor', 'total'] : ['item'], `Unknown ${name} response field`);
     selector(response[name === 'list' ? 'items' : 'item'], `${name} response selector`);
     if (response.nextCursor !== undefined) selector(response.nextCursor, 'Next cursor selector');
+    if (response.total !== undefined) selector(response.total, 'Total selector');
+    if (name === 'list' && (response.nextCursor || response.total) &&
+      !operation.path.includes('${cursor}') && !Object.values(operation.query ?? {}).includes('${cursor}'))
+      throw new Error('Paged list operation must send its cursor.');
   }
   const mapping = object(manifest.mapping, 'Manifest mapping is required.');
   keys(mapping, ['remoteId', 'remoteKey', 'title', 'description', 'status', 'priority', 'remoteVersion', 'updatedAt', 'url', 'urlTemplate'], 'Unknown mapping field');
@@ -276,11 +280,28 @@ export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, a
       return { sourceName: connection.name, sample, itemCount: items.length };
     },
     async listIssues(connection, limit) {
-      const { manifest, operation, body } = await request(connection, 'list', { limit });
+      return (await this.listIssuesPage(connection, limit)).items;
+    },
+    async listIssuesPage(connection, limit, cursor) {
+      const { manifest, operation, body } = await request(connection, 'list', { limit, cursor: cursor ?? '0' });
       const items = readSelector(body, operation.response.items);
       if (!Array.isArray(items)) throw new Error('Ticket source item selector did not return an array.');
       if (items.length > limit || items.length > 100) throw new Error('Ticket source returned too many records.');
-      return items.map((item) => normalize(manifest, item));
+      let nextCursor;
+      if (operation.response.nextCursor) {
+        const next = readSelector(body, operation.response.nextCursor);
+        if (next !== undefined && next !== null && next !== '') nextCursor = String(next);
+      } else if (operation.response.total) {
+        const total = readSelector(body, operation.response.total);
+        if (!Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(Number(cursor ?? 0)) || Number(cursor ?? 0) < 0) throw new Error('Ticket source returned an invalid pagination total.');
+        const offset = Number(cursor ?? 0) + items.length;
+        if (offset < total) {
+          if (!items.length) throw new Error('Ticket source returned an empty page before the total was reached.');
+          nextCursor = String(offset);
+        }
+      }
+      return { items: items.map((item) => normalize(manifest, item)), nextCursor,
+        mayBeTruncated: !operation.response.nextCursor && !operation.response.total };
     },
     async getIssue(connection, remoteId) {
       const { manifest, operation, body } = await request(connection, 'get', { remoteId });

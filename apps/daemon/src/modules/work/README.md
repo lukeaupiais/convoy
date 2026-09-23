@@ -19,7 +19,10 @@ Work persists outbound intent before asking it to create an issue. Board
 placement alone never publishes a ticket.
 
 Imported support tickets may link to local development tickets in the same project.
-Separate boards filter by ticket origin, so support and development work retain
-their own columns without creating a second project. One development ticket may
+An import binding assigns one external source to a project and work type.
+Its membership is separate from the ticket and board placement, so one ticket
+can appear on several boards. Boards filter by work type and, when needed,
+binding membership. A development board can create its own work type.
+One development ticket may
 address several support reports. The relationship is durable and independent of board placement;
 finishing development does not change a support ticket's external-owned status.

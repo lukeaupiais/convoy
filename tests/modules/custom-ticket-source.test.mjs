@@ -48,6 +48,23 @@ function manifest(overrides = {}) {
 }
 
 const resolver = async () => [{ address: '8.8.8.8', family: 4 }];
+
+test('custom source follows an offset using a declared total', async (t) => {
+  credential(t, 'secret');
+  const requested = [];
+  const source = manifest({ operations: { list: { method: 'GET', path: 'tickets', query: { limit: '${limit}', offset: '${cursor}' }, response: { items: '$.items', total: '$.total' } } } });
+  const adapter = createCustomTicketSource({ resolver, fetcher: async (url) => {
+    requested.push(new URL(url).searchParams.get('offset'));
+    const offset = Number(new URL(url).searchParams.get('offset'));
+    return new Response(JSON.stringify({ total: 3, items: Array.from({ length: Math.min(2, 3 - offset) }, (_, i) => ({ id: String(offset + i), key: `SUP-${offset + i}`, subject: 'Report', version: 1 })) }), { headers: { 'content-type': 'application/json' } });
+  } });
+  const first = await adapter.listIssuesPage({ manifest: source }, 2);
+  const second = await adapter.listIssuesPage({ manifest: source }, 2, first.nextCursor);
+  assert.deepEqual(requested, ['0', '2']);
+  assert.equal(first.nextCursor, '2');
+  assert.equal(second.nextCursor, undefined);
+  assert.equal(first.items.length + second.items.length, 3);
+});
 function credential(t, value) {
   const previous = process.env.CONVOY_TICKET_SOURCE_TOKEN_TEST;
   process.env.CONVOY_TICKET_SOURCE_TOKEN_TEST = value;

@@ -169,6 +169,17 @@ export function createCommandAuthorization({
       if (!connection || value.organizationId !== connection.organizationId) denied();
       return;
     }
+    if (command.action === 'saveTicketImportBinding' || command.action === 'syncTicketImportBinding') {
+      const existing = state.ticketImportBindings?.find((value) => value.id === command.id);
+      if (command.action === 'syncTicketImportBinding' && !existing) denied();
+      if (command.id && !existing) denied();
+      const value = await projectId(existing?.projectId ?? command.projectId, 'project.write', command, actor);
+      const connection = state.ticketConnections?.find((item) => item.id === (existing?.connectionId ?? command.connectionId));
+      if (!connection || connection.organizationId !== value.organizationId) denied();
+      if (existing && command.action === 'saveTicketImportBinding' &&
+        (command.projectId !== existing.projectId || command.connectionId !== existing.connectionId)) denied();
+      return;
+    }
     if (projectWrite.has(command.action)) {
       const id = command.projectId ?? ticket(command.taskId)?.projectId;
       await projectId(id, 'project.write', command, actor);

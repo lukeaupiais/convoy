@@ -71,6 +71,7 @@ function filters(input = {}, projectIds) {
     result.origins = uniqueList(input.origins, 'Ticket origins', 4);
     if (result.origins.some(value => !['convoy', 'external', 'browser-import', 'session-migration'].includes(value))) throw new Error('Unknown ticket origin.');
   }
+  for (const key of ['workTypes', 'importBindingIds']) if (input[key] !== undefined) result[key] = uniqueList(input[key], `Filter ${key}`, 100);
   for (const key of ['statuses', 'labels', 'agents', 'priorities']) if (input[key] !== undefined) result[key] = uniqueList(input[key], `Filter ${key}`, 100);
   if (input.query !== undefined) result.query = optionalText(input.query, 'Board query', 200);
   return result;
@@ -99,6 +100,7 @@ function boardInput(input, projects, old) {
     cardFields: uniqueList(input.cardFields ?? ['priority', 'label', 'agent', 'project'], 'Card fields', 30),
     grouping: { mode: input.grouping?.mode ?? 'local' },
     creationPolicy: creationPolicy(input.creationPolicy ?? old?.creationPolicy),
+    creationWorkType: safeId(input.creationWorkType ?? old?.creationWorkType ?? 'task', 'Creation work type'),
     destinationConnectionIds: uniqueList(input.destinationConnectionIds ?? old?.destinationConnectionIds ?? [], 'Board destinations', 30),
     density: input.density ?? 'comfortable',
     revision: (old?.revision ?? 0) + 1,
@@ -127,6 +129,7 @@ function templateInput(input, old) {
     cardFields: uniqueList(input.cardFields ?? ['priority', 'label', 'agent', 'project'], 'Card fields', 30),
     grouping: { mode: input.grouping?.mode ?? 'local' },
     creationPolicy: creationPolicy(input.creationPolicy ?? old?.creationPolicy),
+    creationWorkType: safeId(input.creationWorkType ?? old?.creationWorkType ?? 'task', 'Creation work type'),
     destinationConnectionIds: uniqueList(input.destinationConnectionIds ?? old?.destinationConnectionIds ?? [], 'Board destinations', 30),
     density: input.density ?? 'comfortable',
     revision: (old?.revision ?? 0) + 1,
@@ -243,6 +246,8 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
       if (!selectedProjects.has(t.projectId)) return false;
       const f = boardValue.filters ?? {};
       if (f.origins?.length && !f.origins.includes(t.origin ?? 'convoy')) return false;
+      if (f.workTypes?.length && !f.workTypes.includes(t.workType ?? 'task')) return false;
+      if (f.importBindingIds?.length && !state.ticketImportMemberships?.some(m => m.ticketId === t.id && f.importBindingIds.includes(m.bindingId))) return false;
       if (f.statuses?.length && !f.statuses.includes(t.status)) return false;
       if (f.labels?.length && !f.labels.includes(t.label)) return false;
       if (f.agents?.length && !f.agents.includes(t.agent)) return false;

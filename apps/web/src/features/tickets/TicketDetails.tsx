@@ -207,7 +207,7 @@ export function TicketDetails({
     .map((link) => state.tickets.find((value) => value.id === link.supportTicketId))
     .filter((value): value is Ticket => Boolean(value));
   const availableDevelopmentTickets = state.tickets.filter((value) =>
-    value.origin === 'convoy' && value.projectId === ticket.projectId &&
+    (value.workType === 'development' || value.workType === undefined && value.origin === 'convoy') && value.projectId === ticket.projectId &&
     !linkedDevelopment.some((linked) => linked.id === value.id));
   const statusBoard = state.boards.find((board) => board.projectIds.includes(ticket.projectId) &&
     (!board.filters.origins?.length || board.filters.origins.includes(ticket.origin ?? 'convoy')) &&
@@ -255,7 +255,7 @@ export function TicketDetails({
             Edit
           </button>
         </header>
-        {ticket.origin === 'external' && (
+        {(ticket.workType === 'support' || ticket.workType === undefined && ticket.origin === 'external') && (
           <section aria-label="Development work">
             <h3>Development work</h3>
             {linkedDevelopment.length === 0 && <p>No development item linked.</p>}

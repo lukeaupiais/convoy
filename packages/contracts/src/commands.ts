@@ -323,6 +323,16 @@ export type RuntimeCommandInputMap = {
     resolution?: 'local' | 'remote';
   };
   importExternalTickets: { connectionId: string; projectId: string; limit?: number };
+  saveTicketImportBinding: {
+    id?: string;
+    revision?: number;
+    connectionId: string;
+    projectId: string;
+    name: string;
+    workType: string;
+    enabled?: boolean;
+  };
+  syncTicketImportBinding: { id: string; limit?: number };
   decide: SessionTarget & {
     approvalId: string;
     decision?: 'allow_once' | 'allow_always' | 'deny';
@@ -571,6 +581,8 @@ type RuntimeCommandKnownResults = {
   reconcileTicketPublish: Ticket;
   syncExternalTicket: Ticket;
   importExternalTickets: { imported: number; updated: number };
+  saveTicketImportBinding: import('./model/work').TicketImportBinding;
+  syncTicketImportBinding: { imported: number; updated: number; complete: boolean; pages: number };
   exportSkill: { files: Record<string, string>; source: string };
   importTickets: { imported: number; conflicts: number[] };
   openTicketConversation: Conversation;

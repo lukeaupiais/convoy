@@ -8,6 +8,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
   state.tickets ??= []; state.ticketRequests ??= {};
   state.ticketDevelopmentLinks ??= [];
   state.ticketConnections ??= [];
+  state.ticketImportBindings ??= []; state.ticketImportMemberships ??= [];
   for (const value of state.ticketConnections) {
     value.enabled ??= true;
     value.capabilities ??= { import: true, create: value.provider === 'linear', update: value.provider === 'linear' };
@@ -20,13 +21,13 @@ export function createCatalog({ state, save, execution, externalTickets, context
   const ticket = id => state.tickets.find(t => String(t.id) === String(id));
   const supportTicket = (id, revision) => {
     const value = ticket(id);
-    if (!value || value.origin !== 'external') throw new Error('Imported support ticket not found.');
+    if (!value || (value.workType ?? (value.origin === 'external' ? 'support' : 'task')) !== 'support') throw new Error('Imported support ticket not found.');
     if (value.revision !== revision) throw new Error('Support ticket changed in another client. Reload before linking.');
     return value;
   };
   const developmentTicket = id => {
     const value = ticket(id);
-    if (!value || value.origin !== 'convoy') throw new Error('Development ticket not found.');
+    if (!value || (value.workType ?? (value.origin === 'convoy' ? 'development' : 'task')) !== 'development') throw new Error('Development ticket not found.');
     return value;
   };
   const linkDevelopment = (support, development) => {
@@ -98,6 +99,81 @@ export function createCatalog({ state, save, execution, externalTickets, context
     state.ticketStatusMigrationVersion = 1;
   }
   const boards = createBoards({ state, save, projects: state.projects, ticket, referencedColumn, referencedBoard });
+  const syncingBindings = new Set();
+  async function importPage(c, source, remote, binding, runId, nextCursor) {
+    const planned = []; let imported = 0; let updated = 0;
+    for (const normalized of remote) {
+      const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
+      if (existing && existing.projectId !== c.projectId) throw new Error('External issue is already linked to another project.');
+      if (existing && binding && existing.workType && existing.workType !== binding.workType) throw new Error('Imported ticket has a different work type.');
+      const ownership = normalized.fieldOwnership ?? { title: 'external', description: 'external' };
+      const remoteLink = { ...link(source, normalized), remoteTitle: normalized.title, remoteDescription: normalized.description ?? '', ...(normalized.status !== undefined ? { remoteStatus: normalized.rawStatus ?? normalized.status, mappedStatus: normalized.status } : {}), ...(normalized.priority !== undefined ? { remotePriority: normalized.rawPriority ?? normalized.priority, mappedPriority: normalized.priority } : {}), fieldOwnership: ownership };
+      if (existing) {
+        const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === normalized.remoteId);
+        remoteLink.fieldOwnership = previous.fieldOwnership ?? remoteLink.fieldOwnership;
+        const titleChanged = previous.remoteTitle !== normalized.title;
+        const descriptionChanged = previous.remoteDescription !== (normalized.description ?? '');
+        const previousStatus = previous.mappedStatus ?? previous.remoteStatus;
+        const previousPriority = previous.mappedPriority ?? previous.remotePriority;
+        const statusChanged = normalized.status !== undefined && previousStatus !== undefined && previousStatus !== normalized.status;
+        const priorityChanged = normalized.priority !== undefined && previousPriority !== undefined && previousPriority !== normalized.priority;
+        const changed = titleChanged || descriptionChanged || statusChanged || priorityChanged || previous.remoteVersion !== normalized.remoteVersion;
+        const ownedByExternal = field => (remoteLink.fieldOwnership[field] ?? 'external') === 'external';
+        const conflict = titleChanged && ownedByExternal('title') && existing.title !== previous.remoteTitle
+          || descriptionChanged && ownedByExternal('description') && existing.description !== previous.remoteDescription
+          || statusChanged && ownedByExternal('status') && previousStatus !== undefined && existing.status !== previousStatus
+          || priorityChanged && ownedByExternal('priority') && previousPriority !== undefined && existing.priority !== previousPriority;
+        const next = { ...existing, ...(binding ? { workType: binding.workType } : {}), externalLinks: existing.externalLinks.map(value => value === previous ? remoteLink : value) };
+        if (changed && conflict) {
+          remoteLink.syncState = 'error'; remoteLink.message = 'Local and external content changed. Review this ticket.';
+        } else if (changed) {
+          if (titleChanged && ownedByExternal('title')) next.title = normalized.title;
+          if (descriptionChanged && ownedByExternal('description')) next.description = normalized.description ?? '';
+          if (statusChanged && ownedByExternal('status')) next.status = normalized.status;
+          if (priorityChanged && ownedByExternal('priority')) next.priority = normalized.priority;
+          next.revision++; updated++;
+        }
+        planned.push({ old: existing, next });
+      } else {
+        const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...planned.map(v => Number(v.next.id)), ...execution.reservedTicketIds()) + 1;
+        const next = { id, projectId: c.projectId, ...fields({ title: normalized.title, description: normalized.description ?? '', status: normalized.status, priority: normalized.priority }), revision: 1, origin: 'external', ...(binding ? { workType: binding.workType } : {}), externalLinks: [remoteLink], placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+        planned.push({ next }); imported++;
+      }
+    }
+    const provisionalMemberships = binding ? planned.filter(change =>
+      !state.ticketImportMemberships.some(value => value.bindingId === binding.id && value.ticketId === change.next.id))
+      .map(change => ({ id: `${binding.id}:${change.next.id}`, bindingId: binding.id, ticketId: change.next.id, seenRunId: runId })) : [];
+    state.ticketImportMemberships.push(...provisionalMemberships);
+    try { boards.validateTicketBatch(planned); }
+    catch (error) {
+      if (provisionalMemberships.length) {
+        const provisionalIds = new Set(provisionalMemberships.map(value => value.id));
+        state.ticketImportMemberships = state.ticketImportMemberships.filter(value => !provisionalIds.has(value.id));
+      }
+      throw error;
+    }
+    for (const change of planned) {
+      if (change.old) Object.assign(change.old, change.next);
+      else { state.tickets.push(change.next); boards.ensureTicket(change.next); }
+    }
+    if (binding) {
+      for (const change of planned) {
+        const membership = state.ticketImportMemberships.find(value => value.bindingId === binding.id && value.ticketId === change.next.id);
+        if (membership) membership.seenRunId = runId;
+        else state.ticketImportMemberships.push({ id: `${binding.id}:${change.next.id}`, bindingId: binding.id, ticketId: change.next.id, seenRunId: runId });
+      }
+      if (nextCursor === undefined) {
+        state.ticketImportMemberships = state.ticketImportMemberships.filter(value => value.bindingId !== binding.id || value.seenRunId === runId);
+        delete binding.cursor; delete binding.runId;
+        binding.lastSyncedAt = new Date().toISOString();
+      } else {
+        binding.cursor = nextCursor; binding.runId = runId;
+      }
+      delete binding.lastError;
+      binding.revision++;
+    }
+    await save(); return { imported, updated };
+  }
   async function publish(t, source, requestId) {
     if (!externalTickets) throw new Error('External ticket adapter is unavailable.');
     if (source.capabilities?.create === false) throw new Error('This ticket source is read-only.');
@@ -164,7 +240,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
           externalTickets?.validateConnection?.({ provider: c.provider, manifest });
         }
         if (old && c.provider === 'custom-http' && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) {
-          const identity = value => ({ ...value, values: undefined, mapping: { ...value.mapping, urlTemplate: undefined } });
+          const identity = value => ({ ...value, values: undefined, mapping: { ...value.mapping, urlTemplate: undefined }, operations: {
+            ...value.operations,
+            list: { ...value.operations.list, query: Object.fromEntries(Object.entries(value.operations.list.query ?? {}).filter(([, template]) => template !== '${cursor}')), response: { ...value.operations.list.response, nextCursor: undefined, total: undefined } },
+          } });
           if (JSON.stringify(identity(old.manifest)) !== JSON.stringify(identity(manifest))) throw new Error('A connection with linked tickets can change value mappings only. Create another connection for a different source.');
         }
         if (c.enabled !== undefined && typeof c.enabled !== 'boolean') throw new Error('Connection enabled must be a boolean.');
@@ -178,6 +257,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const source = connection(c.id);
         if (c.revision !== source.revision) throw new Error('Ticket connection changed in another client.');
         if (state.boards?.some(board => board.destinationConnectionIds?.includes(source.id) || board.creationPolicy?.connectionId === source.id)) throw new Error('Remove this connection from boards before deleting it.');
+        if (state.ticketImportBindings.some(value => value.connectionId === source.id)) throw new Error('Connection has an import binding. Disable it instead.');
         if (state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === source.id) || t.externalPublish?.connectionId === source.id)) throw new Error('Connection has linked or pending tickets. Disable it instead.');
         state.ticketConnections = state.ticketConnections.filter(value => value.id !== source.id);
         await save(); return { id: source.id, deleted: true };
@@ -211,7 +291,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (source) externalTickets.assertReady?.(source);
         const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...execution.reservedTicketIds()) + 1;
         if (id > 9999999999) throw new Error('Ticket ID range exhausted.');
-        const value = { id, projectId: c.projectId, ...values, revision: 1, origin: 'convoy', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+        const value = { id, projectId: c.projectId, ...values, revision: 1, origin: 'convoy', workType: board?.creationWorkType ?? 'task', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
         if (board) boards.assertTicketVisible(board.id, value);
         boards.validateNewTicket(value);
         state.tickets.push(value); state.ticketRequests[request] = id; boards.ensureTicket(value); await save();
@@ -231,7 +311,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (owner.id !== support.projectId) throw new Error('Development work must belong to the support project.');
         const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...execution.reservedTicketIds()) + 1;
         if (id > 9999999999) throw new Error('Ticket ID range exhausted.');
-        const value = { id, projectId: owner.id, ...fields({ title: c.title, description: c.description ?? '', status: 'Backlog' }), revision: 1, origin: 'convoy', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+        const value = { id, projectId: owner.id, ...fields({ title: c.title, description: c.description ?? '', status: 'Backlog' }), revision: 1, origin: 'convoy', workType: 'development', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
         boards.validateNewTicket(value);
         state.tickets.push(value);
         state.ticketRequests[request] = id;
@@ -294,62 +374,80 @@ export function createCatalog({ state, save, execution, externalTickets, context
           sample ??= { remoteId: normalized.remoteId, remoteKey: normalized.remoteKey, title: normalized.title, description: normalized.description ?? '' };
           const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
           if (!existing) { wouldImport++; continue; }
+          if (existing.projectId !== owner.id) throw new Error('External issue is already linked to another project.');
           const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === normalized.remoteId);
           if (previous.remoteTitle !== normalized.title || previous.remoteDescription !== (normalized.description ?? '') || previous.remoteVersion !== normalized.remoteVersion) wouldUpdate++;
           else unchanged++;
         }
         return { wouldImport, wouldUpdate, unchanged, ...(sample ? { sample } : {}) };
       }
+      if (c.action === 'saveTicketImportBinding') {
+        const owner = project(c.projectId); const source = connection(c.connectionId);
+        if (source.organizationId !== owner.organizationId) throw new Error('Connection is not available to this project.');
+        const old = c.id ? state.ticketImportBindings.find(value => value.id === c.id) : null;
+        if (c.id && !old) throw new Error('Import binding not found.');
+        if (old && old.revision !== c.revision) throw new Error('Import binding changed in another client.');
+        if (old && (old.connectionId !== c.connectionId || old.projectId !== c.projectId)) throw new Error('Import binding source and project cannot change.');
+        if (!old && state.ticketImportBindings.some(value => value.connectionId === c.connectionId)) throw new Error('Connection already has an import binding.');
+        const workType = text(c.workType, 'Work type', 80);
+        if (!/^[A-Za-z0-9][\w-]{0,79}$/.test(workType)) throw new Error('Work type must be a stable ID.');
+        if (c.enabled !== undefined && typeof c.enabled !== 'boolean') throw new Error('Binding enabled must be a boolean.');
+        const linked = state.tickets.filter(t => t.externalLinks?.some(link => link.connectionId === source.id));
+        if (linked.some(t => t.projectId !== owner.id)) throw new Error('Connection has tickets in another project.');
+        if (linked.some(t => t.workType && t.workType !== workType)) throw new Error('Linked ticket has a different work type.');
+        if (old && old.workType !== workType && linked.length) throw new Error('A binding with linked tickets cannot change work type.');
+        const value = { ...(old ?? { id: randomUUID(), connectionId: source.id, projectId: owner.id }), name: text(c.name, 'Binding name', 100), workType, enabled: c.enabled ?? old?.enabled ?? true, revision: (old?.revision ?? 0) + 1 };
+        if (old) Object.assign(old, value); else state.ticketImportBindings.push(value);
+        for (const t of linked) {
+          t.workType = workType;
+          if (!state.ticketImportMemberships.some(m => m.bindingId === value.id && m.ticketId === t.id)) state.ticketImportMemberships.push({ id: `${value.id}:${t.id}`, bindingId: value.id, ticketId: t.id, seenRunId: value.runId ?? 'backfill' });
+        }
+        await save(); return value;
+      }
+      if (c.action === 'syncTicketImportBinding') {
+        const binding = state.ticketImportBindings.find(value => value.id === c.id);
+        if (!binding) throw new Error('Import binding not found.');
+        if (syncingBindings.has(binding.id)) throw new Error('Import binding is already syncing.');
+        if (!binding.enabled) throw new Error('Import binding is disabled.');
+        const owner = project(binding.projectId); const source = activeConnection(binding.connectionId);
+        if (source.organizationId !== owner.organizationId) throw new Error('Connection is not available to this project.');
+        if (!externalTickets?.listIssuesPage) throw new Error('Paged ticket source adapter is unavailable.');
+        const limit = c.limit ?? 100;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Import limit must be 1–100.');
+        const runId = binding.runId ?? randomUUID();
+        let imported = 0; let updated = 0; let pages = 0; let cursor = binding.cursor;
+        const cursors = new Set();
+        syncingBindings.add(binding.id);
+        try {
+          do {
+            if (cursor !== undefined && cursors.has(cursor)) throw new Error('Ticket source repeated a pagination cursor.');
+            if (cursor !== undefined) cursors.add(cursor);
+            const page = await externalTickets.listIssuesPage(source, limit, cursor);
+            if (!page || !Array.isArray(page.items)) throw new Error('Ticket source returned an invalid page.');
+            const nextCursor = page.nextCursor == null ? undefined : String(page.nextCursor);
+            if (nextCursor === undefined && page.mayBeTruncated && page.items.length === limit) throw new Error('Ticket source page is full but pagination is not configured.');
+            if (nextCursor !== undefined && (!nextCursor || nextCursor === cursor || !page.items.length)) throw new Error('Ticket source returned an invalid next cursor.');
+            const result = await importPage({ projectId: binding.projectId }, source, normalizedRemotePage(page.items), binding, runId, nextCursor);
+            imported += result.imported; updated += result.updated; pages++; cursor = nextCursor;
+          } while (cursor !== undefined && pages < 100);
+          return { imported, updated, complete: cursor === undefined, pages };
+        } catch (error) {
+          binding.lastError = error.message;
+          await save();
+          throw error;
+        } finally {
+          syncingBindings.delete(binding.id);
+        }
+      }
       if (c.action === 'importExternalTickets') {
         const owner = project(c.projectId); const source = activeConnection(c.connectionId);
         if (source.organizationId !== owner.organizationId) throw new Error('Connection is not available to this project.');
+        if (state.ticketImportBindings.some(value => value.connectionId === source.id)) throw new Error('Use the import binding to sync this source.');
         if (!externalTickets) throw new Error('External ticket adapter is unavailable.');
         const limit = c.limit ?? 50;
         if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Import limit must be 1–100.');
         const remote = normalizedRemotePage(await externalTickets.listIssues(source, limit));
-        const planned = []; let imported = 0; let updated = 0;
-        for (const normalized of remote) {
-          const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
-          const ownership = normalized.fieldOwnership ?? { title: 'external', description: 'external' };
-          const remoteLink = { ...link(source, normalized), remoteTitle: normalized.title, remoteDescription: normalized.description ?? '', ...(normalized.status !== undefined ? { remoteStatus: normalized.rawStatus ?? normalized.status, mappedStatus: normalized.status } : {}), ...(normalized.priority !== undefined ? { remotePriority: normalized.rawPriority ?? normalized.priority, mappedPriority: normalized.priority } : {}), fieldOwnership: ownership };
-          if (existing) {
-            const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === normalized.remoteId);
-            remoteLink.fieldOwnership = previous.fieldOwnership ?? remoteLink.fieldOwnership;
-            const titleChanged = previous.remoteTitle !== normalized.title;
-            const descriptionChanged = previous.remoteDescription !== (normalized.description ?? '');
-            const previousStatus = previous.mappedStatus ?? previous.remoteStatus;
-            const previousPriority = previous.mappedPriority ?? previous.remotePriority;
-            const statusChanged = normalized.status !== undefined && previousStatus !== undefined && previousStatus !== normalized.status;
-            const priorityChanged = normalized.priority !== undefined && previousPriority !== undefined && previousPriority !== normalized.priority;
-            const changed = titleChanged || descriptionChanged || statusChanged || priorityChanged || previous.remoteVersion !== normalized.remoteVersion;
-            const ownedByExternal = field => (remoteLink.fieldOwnership[field] ?? 'external') === 'external';
-            const conflict = titleChanged && ownedByExternal('title') && existing.title !== previous.remoteTitle
-              || descriptionChanged && ownedByExternal('description') && existing.description !== previous.remoteDescription
-              || statusChanged && ownedByExternal('status') && previousStatus !== undefined && existing.status !== previousStatus
-              || priorityChanged && ownedByExternal('priority') && previousPriority !== undefined && existing.priority !== previousPriority;
-            const next = { ...existing, externalLinks: existing.externalLinks.map(value => value === previous ? remoteLink : value) };
-            if (changed && conflict) {
-              remoteLink.syncState = 'error'; remoteLink.message = 'Local and external content changed. Review this ticket.';
-            } else if (changed) {
-              if (titleChanged && ownedByExternal('title')) next.title = normalized.title;
-              if (descriptionChanged && ownedByExternal('description')) next.description = normalized.description ?? '';
-              if (statusChanged && ownedByExternal('status')) next.status = normalized.status;
-              if (priorityChanged && ownedByExternal('priority')) next.priority = normalized.priority;
-              next.revision++; updated++;
-            }
-            planned.push({ old: existing, next });
-          } else {
-            const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...planned.map(v => Number(v.next.id)), ...execution.reservedTicketIds()) + 1;
-            const next = { id, projectId: c.projectId, ...fields({ title: normalized.title, description: normalized.description ?? '', status: normalized.status, priority: normalized.priority }), revision: 1, origin: 'external', externalLinks: [remoteLink], placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
-            planned.push({ next }); imported++;
-          }
-        }
-        boards.validateTicketBatch(planned);
-        for (const change of planned) {
-          if (change.old) Object.assign(change.old, change.next);
-          else { state.tickets.push(change.next); boards.ensureTicket(change.next); }
-        }
-        await save(); return { imported, updated };
+        return importPage(c, source, remote);
       }
       if (c.action === 'syncExternalTicket') {
         const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
@@ -442,6 +540,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate', 'setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) return boards.command(c);
       throw new Error('Unknown catalog command.');
     },
-    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ...boards.snapshot() }; },
+    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ...boards.snapshot() }; },
   };
 }
