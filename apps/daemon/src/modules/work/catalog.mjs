@@ -7,6 +7,9 @@ export function createCatalog({ state, save, execution, externalTickets, context
   for (const value of state.projects) value.organizationId ??= 'personal';
   state.tickets ??= []; state.ticketRequests ??= {};
   state.ticketDevelopmentLinks ??= [];
+  state.ticketImportFacts ??= [];
+  state.ticketThreads ??= [];
+  state.ticketReplies ??= [];
   state.ticketConnections ??= [];
   state.ticketImportBindings ??= []; state.ticketImportMemberships ??= [];
   for (const value of state.ticketConnections) {
@@ -133,7 +136,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
           if (priorityChanged && ownedByExternal('priority')) next.priority = normalized.priority;
           next.revision++; updated++;
         }
-        planned.push({ old: existing, next });
+        planned.push({ old: existing, next, changed: changed && !conflict });
       } else {
         const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...planned.map(v => Number(v.next.id)), ...execution.reservedTicketIds()) + 1;
         const next = { id, projectId: c.projectId, ...fields({ title: normalized.title, description: normalized.description ?? '', status: normalized.status, priority: normalized.priority }), revision: 1, origin: 'external', ...(binding ? { workType: binding.workType } : {}), externalLinks: [remoteLink], placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
@@ -172,7 +175,47 @@ export function createCatalog({ state, save, execution, externalTickets, context
       delete binding.lastError;
       binding.revision++;
     }
+    if (binding) for (const change of planned) {
+      const remoteLink = change.next.externalLinks.find(value => value.connectionId === source.id);
+      const event = change.old ? change.changed ? 'ticket_source_updated' : null : 'ticket_imported';
+      if (!event) continue;
+      const key = `${binding.id}:${change.next.id}:${event}:${remoteLink.remoteVersion}`;
+      if (!state.ticketImportFacts.some(value => value.key === key)) state.ticketImportFacts.push({
+        id: key, key, event, projectId: binding.projectId, bindingId: binding.id,
+        ticketId: change.next.id, status: 'pending',
+      });
+    }
     await save(); return { imported, updated };
+  }
+  async function syncThread(t, source) {
+    const link = t.externalLinks?.find(value => value.connectionId === source.id);
+    if (!link) throw new Error('Ticket is not linked to this source.');
+    if (!source.capabilities?.threadRead) throw new Error('This ticket source does not provide a thread.');
+    const messages = await externalTickets.listComments(source, link.remoteId);
+    if (!Array.isArray(messages) || messages.length > 500 || messages.some(value => !value.remoteId || !value.body || !value.authorRole || !value.createdAt))
+      throw new Error('Ticket source returned an invalid thread.');
+    const ids = messages.map(value => value.remoteId);
+    if (new Set(ids).size !== ids.length) throw new Error('Ticket source returned duplicate message IDs.');
+    const id = `${source.id}:${t.id}`;
+    const previous = state.ticketThreads.find(value => value.id === id);
+    const seen = new Set(previous?.messages.map(value => value.remoteId) ?? []);
+    if (previous && [...seen].some(remoteId => !ids.includes(remoteId)))
+      throw new Error('Ticket source returned an incomplete thread; earlier messages are missing.');
+    const record = { id, ticketId: t.id, connectionId: source.id, messages: structuredClone(messages),
+      revision: (previous?.revision ?? 0) + 1, syncedAt: new Date().toISOString() };
+    if (previous) Object.assign(previous, record);
+    else state.ticketThreads.push(record);
+    if (previous) for (const message of messages) {
+      if (seen.has(message.remoteId) || !['user', 'customer'].includes(message.authorRole.toLowerCase())) continue;
+      const key = `${id}:ticket_message_received:${message.remoteId}`;
+      if (!state.ticketImportFacts.some(value => value.key === key)) state.ticketImportFacts.push({
+        id: key, key, event: 'ticket_message_received', projectId: t.projectId,
+        bindingId: state.ticketImportBindings.find(value => value.connectionId === source.id && value.projectId === t.projectId)?.id,
+        ticketId: t.id, messageId: message.remoteId, status: 'pending',
+      });
+    }
+    await save();
+    return record;
   }
   async function publish(t, source, requestId) {
     if (!externalTickets) throw new Error('External ticket adapter is unavailable.');
@@ -218,6 +261,17 @@ export function createCatalog({ state, save, execution, externalTickets, context
   function assertEditable(t, queuedPlacement = false) { execution.assertEditable(t, queuedPlacement); }
   return {
     project, ticket, assertEditable, boards,
+    supportContext(ticketId) {
+      const thread = state.ticketThreads.find(value => value.ticketId === ticketId);
+      const developmentTickets = (state.ticketDevelopmentLinks ?? [])
+        .filter(value => value.supportTicketId === ticketId)
+        .map(value => state.tickets.find(ticket => ticket.id === value.developmentTicketId))
+        .filter(Boolean)
+        .map(value => ({ id: value.id, title: value.title, status: value.status }));
+      return { thread: thread ? { syncedAt: thread.syncedAt, totalMessages: thread.messages.length,
+        messages: thread.messages.slice(-20).map(value => ({ ...value, body: value.body.slice(0, 1500) })) } : null,
+      developmentTickets };
+    },
     async readAttachment(ticketId, attachmentId) {
       const t = ticket(ticketId); if (!t) throw new Error('Ticket not found.');
       return contextFiles.read(attachmentOwner(t), attachmentId);
@@ -240,15 +294,20 @@ export function createCatalog({ state, save, execution, externalTickets, context
           externalTickets?.validateConnection?.({ provider: c.provider, manifest });
         }
         if (old && c.provider === 'custom-http' && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) {
-          const identity = value => ({ ...value, values: undefined, mapping: { ...value.mapping, urlTemplate: undefined }, operations: {
+          const identity = value => ({ ...value, values: undefined, threadMapping: undefined,
+            connection: { ...value.connection, writeAuthentication: undefined }, mapping: { ...value.mapping, urlTemplate: undefined }, operations: {
             ...value.operations,
+            thread: undefined,
+            reply: undefined,
             list: { ...value.operations.list, query: Object.fromEntries(Object.entries(value.operations.list.query ?? {}).filter(([, template]) => template !== '${cursor}')), response: { ...value.operations.list.response, nextCursor: undefined, total: undefined } },
           } });
           if (JSON.stringify(identity(old.manifest)) !== JSON.stringify(identity(manifest))) throw new Error('A connection with linked tickets can change value mappings only. Create another connection for a different source.');
         }
         if (c.enabled !== undefined && typeof c.enabled !== 'boolean') throw new Error('Connection enabled must be a boolean.');
         const providerFields = c.provider === 'linear' ? { teamId: c.teamId, credentialEnv: c.credentialEnv } : { manifest };
-        const capabilities = { import: true, create: c.provider === 'linear', update: c.provider === 'linear' };
+        const capabilities = { import: true, create: c.provider === 'linear', update: c.provider === 'linear',
+          threadRead: Boolean(c.provider === 'custom-http' && manifest?.operations?.thread),
+          reply: Boolean(c.provider === 'custom-http' && manifest?.operations?.reply) };
         const value = { id: old?.id ?? randomUUID(), organizationId: c.organizationId, provider: c.provider, name: text(c.name, 'Connection name', 100), ...providerFields, capabilities, enabled: c.enabled ?? old?.enabled ?? true, revision: (old?.revision ?? 0) + 1 };
         if (old) Object.assign(old, value); else state.ticketConnections.push(value);
         await save(); return value;
@@ -392,11 +451,14 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const workType = text(c.workType, 'Work type', 80);
         if (!/^[A-Za-z0-9][\w-]{0,79}$/.test(workType)) throw new Error('Work type must be a stable ID.');
         if (c.enabled !== undefined && typeof c.enabled !== 'boolean') throw new Error('Binding enabled must be a boolean.');
+        const pollIntervalMinutes = c.pollIntervalMinutes ?? old?.pollIntervalMinutes ?? 0;
+        if (!Number.isInteger(pollIntervalMinutes) || pollIntervalMinutes < 0 || pollIntervalMinutes > 1440)
+          throw new Error('Poll interval must be 0–1440 whole minutes.');
         const linked = state.tickets.filter(t => t.externalLinks?.some(link => link.connectionId === source.id));
         if (linked.some(t => t.projectId !== owner.id)) throw new Error('Connection has tickets in another project.');
         if (linked.some(t => t.workType && t.workType !== workType)) throw new Error('Linked ticket has a different work type.');
         if (old && old.workType !== workType && linked.length) throw new Error('A binding with linked tickets cannot change work type.');
-        const value = { ...(old ?? { id: randomUUID(), connectionId: source.id, projectId: owner.id }), name: text(c.name, 'Binding name', 100), workType, enabled: c.enabled ?? old?.enabled ?? true, revision: (old?.revision ?? 0) + 1 };
+        const value = { ...(old ?? { id: randomUUID(), connectionId: source.id, projectId: owner.id }), name: text(c.name, 'Binding name', 100), workType, enabled: c.enabled ?? old?.enabled ?? true, pollIntervalMinutes, revision: (old?.revision ?? 0) + 1 };
         if (old) Object.assign(old, value); else state.ticketImportBindings.push(value);
         for (const t of linked) {
           t.workType = workType;
@@ -415,6 +477,8 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const limit = c.limit ?? 100;
         if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Import limit must be 1–100.');
         const runId = binding.runId ?? randomUUID();
+        binding.lastAttemptAt = new Date().toISOString();
+        await save();
         let imported = 0; let updated = 0; let pages = 0; let cursor = binding.cursor;
         const cursors = new Set();
         syncingBindings.add(binding.id);
@@ -428,6 +492,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
             if (nextCursor === undefined && page.mayBeTruncated && page.items.length === limit) throw new Error('Ticket source page is full but pagination is not configured.');
             if (nextCursor !== undefined && (!nextCursor || nextCursor === cursor || !page.items.length)) throw new Error('Ticket source returned an invalid next cursor.');
             const result = await importPage({ projectId: binding.projectId }, source, normalizedRemotePage(page.items), binding, runId, nextCursor);
+            if (source.capabilities?.threadRead) for (const remote of page.items) {
+              const local = state.tickets.find(value => value.externalLinks?.some(link => link.connectionId === source.id && link.remoteId === remote.remoteId));
+              if (local) await syncThread(local, source);
+            }
             imported += result.imported; updated += result.updated; pages++; cursor = nextCursor;
           } while (cursor !== undefined && pages < 100);
           return { imported, updated, complete: cursor === undefined, pages };
@@ -438,6 +506,60 @@ export function createCatalog({ state, save, execution, externalTickets, context
         } finally {
           syncingBindings.delete(binding.id);
         }
+      }
+      if (c.action === 'syncExternalTicketThread') {
+        const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
+        const source = activeConnection(c.connectionId);
+        if (source.organizationId !== project(t.projectId).organizationId) throw new Error('Connection is not available to this project.');
+        return syncThread(t, source);
+      }
+      if (c.action === 'postExternalTicketReply') {
+        const requestId = text(c.requestId, 'Request ID', 100);
+        if (!/^[\w-]+$/.test(requestId)) throw new Error('Invalid request ID.');
+        const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
+        const source = activeConnection(c.connectionId);
+        if (source.organizationId !== project(t.projectId).organizationId || !source.capabilities?.reply)
+          throw new Error('Ticket source cannot send replies.');
+        const link = t.externalLinks?.find(value => value.connectionId === source.id);
+        if (!link) throw new Error('Ticket is not linked to this source.');
+        const body = text(c.body, 'Reply body', 12000);
+        const existing = state.ticketReplies.find(value => value.id === requestId);
+        if (existing) {
+          if (existing.ticketId !== t.id || existing.connectionId !== source.id || existing.body !== body)
+            throw new Error('Request ID belongs to a different reply.');
+          if (existing.status === 'queued') return existing;
+          throw new Error('Previous reply outcome needs reconciliation before another send.');
+        }
+        const reply = { id: requestId, ticketId: t.id, connectionId: source.id, body,
+          status: 'pending', createdAt: new Date().toISOString() };
+        state.ticketReplies.push(reply);
+        await save();
+        try {
+          const result = await externalTickets.postReply(source, link.remoteId, body, requestId);
+          reply.status = 'queued'; reply.remoteId = result.remoteId;
+          reply.deliveryStatus = result.deliveryStatus;
+          await save(); return reply;
+        } catch (error) {
+          reply.status = 'outcome-unknown'; reply.message = error.message;
+          await save(); throw error;
+        }
+      }
+      if (c.action === 'reconcileExternalTicketReply') {
+        const reply = state.ticketReplies.find(value => value.id === c.requestId);
+        if (!reply || !['pending', 'outcome-unknown'].includes(reply.status)) throw new Error('Reply is not awaiting reconciliation.');
+        if (Boolean(c.remoteId) === Boolean(c.confirmNotPosted)) throw new Error('Provide a remote message ID or confirm the reply was not posted.');
+        if (c.remoteId) {
+          const t = ticket(reply.ticketId);
+          const source = activeConnection(reply.connectionId);
+          const link = t.externalLinks?.find(value => value.connectionId === source.id);
+          if (!link || !source.capabilities?.threadRead) throw new Error('Ticket source cannot verify this reply.');
+          const messages = await externalTickets.listComments(source, link.remoteId);
+          const remote = messages.find(value => value.remoteId === c.remoteId && value.body === reply.body && !['user', 'customer'].includes(value.authorRole.toLowerCase()));
+          if (!remote) throw new Error('Matching remote reply was not found.');
+          reply.status = 'queued'; reply.remoteId = remote.remoteId; reply.deliveryStatus = remote.deliveryStatus;
+        } else reply.status = 'not-posted';
+        delete reply.message;
+        await save(); return reply;
       }
       if (c.action === 'importExternalTickets') {
         const owner = project(c.projectId); const source = activeConnection(c.connectionId);
@@ -540,6 +662,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate', 'setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) return boards.command(c);
       throw new Error('Unknown catalog command.');
     },
-    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ...boards.snapshot() }; },
+    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ...boards.snapshot() }; },
   };
 }

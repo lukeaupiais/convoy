@@ -38,6 +38,8 @@ export function WorkflowStartRules({ state }: { state: RuntimeState }) {
             event: rule.event,
             boardId: rule.boardId,
             columnId: rule.columnId,
+            bindingId: rule.bindingId,
+            workType: rule.workType,
             workflowId: rule.workflowId,
             workflowVersion: rule.workflowVersion,
             enabled: rule.enabled,
@@ -142,6 +144,8 @@ export function WorkflowStartRules({ state }: { state: RuntimeState }) {
                   projectId: event.target.value,
                   boardId: undefined,
                   columnId: undefined,
+                  bindingId: undefined,
+                  workType: undefined,
                   workflowId: first?.id ?? '',
                   workflowVersion: first?.version ?? 1,
                 });
@@ -163,14 +167,33 @@ export function WorkflowStartRules({ state }: { state: RuntimeState }) {
                   event: event.target.value as RuleInput['event'],
                   boardId: undefined,
                   columnId: undefined,
+                  bindingId: undefined,
                 })
               }
             >
               <option value="ticket_created">Ticket created</option>
               <option value="ticket_updated">Ticket updated</option>
+              <option value="ticket_imported">Ticket imported</option>
+              <option value="ticket_source_updated">Imported ticket updated</option>
+              <option value="ticket_message_received">Customer message received</option>
               <option value="board_placement_changed">Board placement changed</option>
               <option value="ticket_moved">Ticket moved</option>
             </select>
+          </label>
+          {['ticket_imported', 'ticket_source_updated', 'ticket_message_received'].includes(editing.event) && (
+            <label>
+              Import binding{' '}
+              <select value={editing.bindingId ?? ''} onChange={(event) => update({ bindingId: event.target.value || undefined })}>
+                <option value="">Choose binding</option>
+                {(state.ticketImportBindings ?? []).filter((value) => value.projectId === editing.projectId).map((value) => (
+                  <option key={value.id} value={value.id}>{value.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            Work type (optional){' '}
+            <input value={editing.workType ?? ''} onChange={(event) => update({ workType: event.target.value || undefined })} placeholder="development" />
           </label>
           {['ticket_moved', 'board_placement_changed'].includes(editing.event) && (
             <label>

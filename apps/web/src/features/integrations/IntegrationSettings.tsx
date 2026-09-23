@@ -76,6 +76,7 @@ function ConnectionCard({
   const [importProjectId, setImportProjectId] = useState(projects[0]?.id ?? '');
   const [importName, setImportName] = useState(connection.name);
   const [importWorkType, setImportWorkType] = useState('support');
+  const [pollIntervalMinutes, setPollIntervalMinutes] = useState(binding?.pollIntervalMinutes ?? 0);
   useEffect(() => {
     setName(connection.name);
     if (connection.provider === 'linear') {
@@ -103,6 +104,7 @@ function ConnectionCard({
         organizationId: connection.organizationId,
         name: name.trim(),
         enabled,
+        pollIntervalMinutes,
       };
       if (connection.provider === 'linear')
         await command('saveTicketConnection', {
@@ -234,6 +236,16 @@ function ConnectionCard({
               {projects.find((value) => value.id === binding.projectId)?.name ?? binding.projectId}{' '}
               · {binding.workType}
             </span>
+            <label>
+              Sync interval
+              <select value={pollIntervalMinutes} onChange={(event) => setPollIntervalMinutes(Number(event.target.value))}>
+                <option value={0}>Manual</option>
+                <option value={5}>Every 5 minutes</option>
+                <option value={15}>Every 15 minutes</option>
+                <option value={60}>Hourly</option>
+              </select>
+            </label>
+            {pollIntervalMinutes !== (binding.pollIntervalMinutes ?? 0) && <button className="secondary" disabled={working} onClick={() => void saveBinding()}>Save interval</button>}
             <button
               className="secondary"
               disabled={working || !binding.enabled || !connection.enabled}
@@ -278,6 +290,15 @@ function ConnectionCard({
                 value={importWorkType}
                 onChange={(event) => setImportWorkType(event.target.value)}
               />
+            </label>
+            <label>
+              Sync interval
+              <select value={pollIntervalMinutes} onChange={(event) => setPollIntervalMinutes(Number(event.target.value))}>
+                <option value={0}>Manual</option>
+                <option value={5}>Every 5 minutes</option>
+                <option value={15}>Every 15 minutes</option>
+                <option value={60}>Hourly</option>
+              </select>
             </label>
             <button
               className="secondary"

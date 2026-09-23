@@ -49,6 +49,42 @@ function manifest(overrides = {}) {
 
 const resolver = async () => [{ address: '8.8.8.8', family: 4 }];
 
+test('custom source reads a mapped ticket thread without exposing provider fields', async t => {
+  credential(t, 'secret');
+  const configured = manifest();
+  configured.operations.thread = { method: 'GET', path: 'tickets/${remoteId}/comments', response: { items: '$.items' } };
+  configured.threadMapping = { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' };
+  const adapter = createCustomTicketSource({ resolver, fetcher: async (url) => {
+    assert.equal(new URL(url).pathname, '/api/tickets/41/comments');
+    return new Response(JSON.stringify({ items: [{ id: 8, body: 'Please check', role: 'user', createdAt: '2026-09-23T12:00:00Z', delivery: 'delivered', privateId: 'hidden' }] }), { headers: { 'content-type': 'application/json' } });
+  } });
+  assert.deepEqual(await adapter.listComments({ manifest: configured }, '41'), [{
+    remoteId: '8', body: 'Please check', authorRole: 'user', createdAt: '2026-09-23T12:00:00Z', deliveryStatus: 'delivered',
+  }]);
+  assert.throws(() => validateCustomTicketSourceManifest(manifest({ threadMapping: configured.threadMapping })), /requires a thread operation/);
+});
+
+test('custom source replies with a separate credential and stable request ID', async t => {
+  credential(t, 'read-secret');
+  const previous = process.env.CONVOY_TICKET_SOURCE_WRITE_TEST;
+  process.env.CONVOY_TICKET_SOURCE_WRITE_TEST = 'write-secret';
+  t.after(() => { if (previous === undefined) delete process.env.CONVOY_TICKET_SOURCE_WRITE_TEST; else process.env.CONVOY_TICKET_SOURCE_WRITE_TEST = previous; });
+  const configured = manifest();
+  configured.connection.writeAuthentication = { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_WRITE_TEST' };
+  configured.operations.reply = { method: 'POST', path: 'tickets/${remoteId}/comments', response: { commentId: '$.commentId', deliveryStatus: '$.deliveryStatus' } };
+  const adapter = createCustomTicketSource({ resolver, fetcher: async (url, options) => {
+    assert.equal(new URL(url).pathname, '/api/tickets/41/comments');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers.Authorization, 'Bearer write-secret');
+    assert.equal(options.headers['Idempotency-Key'], 'reply-41');
+    assert.deepEqual(JSON.parse(options.body), { body: 'We are investigating.' });
+    return new Response(JSON.stringify({ commentId: 12, deliveryStatus: 'pending' }), { status: 202, headers: { 'content-type': 'application/json' } });
+  } });
+  assert.deepEqual(await adapter.postReply({ manifest: configured }, '41', 'We are investigating.', 'reply-41'), { remoteId: '12', deliveryStatus: 'pending' });
+  const noWrite = manifest({ operations: configured.operations });
+  assert.throws(() => validateCustomTicketSourceManifest(noWrite), /separate write authentication/);
+});
+
 test('custom source follows an offset using a declared total', async (t) => {
   credential(t, 'secret');
   const requested = [];

@@ -148,7 +148,7 @@ export function createPromptContext({ digest, now = () => new Date().toISOString
     };
   }
 
-  function turnSnapshot(session, ticket) {
+  function turnSnapshot(session, ticket, supportContext = null) {
     const command = (value) => ({
       commandId: value.commandId,
       command: value.command,
@@ -166,6 +166,7 @@ export function createPromptContext({ digest, now = () => new Date().toISOString
         ? { path: session.workspace.path, runnerId: session.runnerId }
         : null,
       assignment: ticket ?? null,
+      supportContext,
       commands: (session.commands ?? []).slice(-10).map(command),
       workingContext: session.workingContext ?? '',
       delegatedResults: session.events

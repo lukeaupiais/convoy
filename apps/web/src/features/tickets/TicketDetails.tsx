@@ -198,10 +198,16 @@ export function TicketDetails({
   const [developmentTicketId, setDevelopmentTicketId] = useState('');
   const [developmentTitle, setDevelopmentTitle] = useState('');
   const [linkBusy, setLinkBusy] = useState(false);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
   const linkedDevelopment = (state.ticketDevelopmentLinks ?? [])
     .filter((link) => link.supportTicketId === ticket.id)
     .map((link) => state.tickets.find((value) => value.id === link.developmentTicketId))
     .filter((value): value is Ticket => Boolean(value));
+  const thread = (state.ticketThreads ?? []).find((value) => value.ticketId === ticket.id);
+  const replies = (state.ticketReplies ?? []).filter((value) => value.ticketId === ticket.id);
+  const uncertainReply = replies.find((value) => ['pending', 'outcome-unknown'].includes(value.status));
+  const replyConnection = ticket.externalLinks?.find((link) => state.ticketConnections?.find((source) => source.id === link.connectionId)?.capabilities?.reply);
   const linkedSupport = (state.ticketDevelopmentLinks ?? [])
     .filter((link) => link.developmentTicketId === ticket.id)
     .map((link) => state.tickets.find((value) => value.id === link.supportTicketId))
@@ -311,6 +317,62 @@ export function TicketDetails({
           <section aria-label="Support reports">
             <h3>Support reports</h3>
             {linkedSupport.map((support) => <button key={support.id} className="secondary" onClick={() => onSelectTicket(support.id)}>#{support.id} {support.title} · {support.status}</button>)}
+          </section>
+        )}
+        {ticket.origin === 'external' && (
+          <section aria-label="Customer conversation">
+            <h3>Customer conversation</h3>
+            {thread?.messages.map((entry) => (
+              <article key={entry.remoteId}>
+                <strong>{entry.authorRole}</strong> · <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
+                <p>{entry.body}</p>
+              </article>
+            ))}
+            {!thread?.messages.length && <p>No conversation synced.</p>}
+            {replies.map((reply) => <p key={reply.id}>Reply {reply.remoteId ?? reply.id}: {reply.deliveryStatus ?? reply.status}</p>)}
+            {ticket.externalLinks?.some((link) => state.ticketConnections?.find((source) => source.id === link.connectionId)?.capabilities?.threadRead) && (
+              <button className="secondary" onClick={async () => {
+                const link = ticket.externalLinks?.find((value) => state.ticketConnections?.find((source) => source.id === value.connectionId)?.capabilities?.threadRead);
+                if (!link) return;
+                try { await command('syncExternalTicketThread', { ticketId: ticket.id, connectionId: link.connectionId }); setMessage('Conversation synced.'); }
+                catch (error) { setMessage((error as Error).message); }
+              }}>Refresh conversation</button>
+            )}
+            {replyConnection && (
+              <div>
+                <label>Reply to customer
+                  <textarea value={replyDraft} onChange={(event) => setReplyDraft(event.target.value)} maxLength={12000} rows={4} />
+                </label>
+                <button className="secondary" disabled={replyBusy || !replyDraft.trim() || Boolean(uncertainReply)} onClick={async () => {
+                  setReplyBusy(true);
+                  try {
+                    await command('postExternalTicketReply', { requestId: crypto.randomUUID(), ticketId: ticket.id, connectionId: replyConnection.connectionId, body: replyDraft.trim() });
+                    setReplyDraft(''); setMessage('Reply queued. Check delivery status in the source.');
+                  } catch (error) { setMessage((error as Error).message); }
+                  finally { setReplyBusy(false); }
+                }}>Send reviewed reply</button>
+                {uncertainReply && (
+                  <div role="alert">
+                    <p>Reply outcome needs review in the source before another send.</p>
+                    <p>{uncertainReply.body}</p>
+                    {thread?.messages.filter((entry) => entry.body === uncertainReply.body && !['user', 'customer'].includes(entry.authorRole.toLowerCase())).map((entry) => (
+                      <button key={entry.remoteId} className="secondary" disabled={replyBusy} onClick={async () => {
+                        setReplyBusy(true);
+                        try { await command('reconcileExternalTicketReply', { requestId: uncertainReply.id, remoteId: entry.remoteId }); setMessage('Reply matched to the source conversation.'); }
+                        catch (error) { setMessage((error as Error).message); }
+                        finally { setReplyBusy(false); }
+                      }}>Confirm source message {entry.remoteId}</button>
+                    ))}
+                    <button className="secondary" disabled={replyBusy} onClick={async () => {
+                      setReplyBusy(true);
+                      try { await command('reconcileExternalTicketReply', { requestId: uncertainReply.id, confirmNotPosted: true }); setMessage('Marked not posted after review.'); }
+                      catch (error) { setMessage((error as Error).message); }
+                      finally { setReplyBusy(false); }
+                    }}>Confirm no reply was posted</button>
+                  </div>
+                )}
+              </div>
+            )}
           </section>
         )}
         {(ticket.externalLinks ?? []).map((link) => (

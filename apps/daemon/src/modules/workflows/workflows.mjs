@@ -4,7 +4,7 @@ const required = (value, label, limit = 6000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > limit) throw new Error(`${label} is required (up to ${limit} characters).`);
   return value.trim();
 };
-const kinds = new Set(['agent', 'human', 'check', 'action', 'branch']);
+const kinds = new Set(['agent', 'human', 'check', 'action', 'branch', 'wait']);
 const sessionModes = new Set(['continue', 'new', 'reuse']);
 const safeId = value => typeof value === 'string' && /^[\w-]{1,80}$/.test(value);
 
@@ -12,7 +12,15 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (!original || typeof original !== 'object') throw new Error(`Step ${index + 1} is required.`);
   const node = { ...original, id: original.id || `step-${index + 1}`, name: required(original.name, `Step ${index + 1} name`, 120) };
   if (!safeId(node.id) || ids.has(node.id)) throw new Error('Every workflow node needs a unique identifier.');
-  if (!kinds.has(node.kind)) throw new Error(`${node.name}: choose agent, human, check, action or branch.`);
+  if (!kinds.has(node.kind)) throw new Error(`${node.name}: choose agent, human, check, action, branch or wait.`);
+  if (node.kind === 'wait') {
+    const waitFor = node.waitFor;
+    if (!waitFor || !['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(waitFor.event) ||
+        !['active_ticket', 'linked_development'].includes(waitFor.ticketSource ?? 'active_ticket') ||
+        waitFor.status !== undefined && (typeof waitFor.status !== 'string' || !waitFor.status.trim() || waitFor.status.length > 80))
+      throw new Error(`${node.name}: choose a supported ticket event to wait for.`);
+    node.waitFor = { event: waitFor.event, ticketSource: waitFor.ticketSource ?? 'active_ticket', ...(waitFor.status ? { status: waitFor.status } : {}) };
+  }
   if (node.kind !== 'branch') node.prompt = required(original.prompt ?? `${node.name} completed by the workflow.`, `Objective for ${node.name}`);
   else if (node.prompt !== undefined) {
     // Branch nodes are evaluated data-only and do not need an objective. The
@@ -32,11 +40,12 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (node.kind === 'check' || node.requiresCheck) node.checkCommand = required(node.checkCommand, `${node.name}: exact check command`, 4000);
   if (node.kind === 'action') {
     const operation = node.operation ?? node.action ?? node.boardAction?.type ?? 'inspect_changes';
-    if (!['inspect_changes', 'create_ticket', 'update_ticket', 'move_ticket'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
+    if (!['inspect_changes', 'create_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
     node.operation = operation; if (!node.input && node.boardAction && typeof node.boardAction === 'object') node.input = { boardId: node.boardAction.boardId, columnId: node.boardAction.columnId };
     const input = node.input ?? node.args ?? node.payload;
     if (operation !== 'inspect_changes' && (!input || typeof input !== 'object' || Array.isArray(input))) throw new Error(`${node.name}: board action input is required.`);
     if (operation === 'create_ticket' && (typeof input.title !== 'string' || !input.title.trim() || typeof input.projectId !== 'string' || !input.projectId.trim())) throw new Error(`${node.name}: create_ticket needs title and projectId.`);
+    if (operation === 'create_development_ticket' && input.title !== undefined && (typeof input.title !== 'string' || !input.title.trim())) throw new Error(`${node.name}: create_development_ticket title must be non-empty text.`);
     if (operation === 'update_ticket' && input.ticketSource !== 'active_ticket' && input.ticketSource !== 'last_created' && input.ticketId === undefined && input.taskId === undefined) throw new Error(`${node.name}: update_ticket needs a ticket target.`);
     if (operation === 'move_ticket' && (typeof input.boardId !== 'string' || (!input.columnId && !input.placement?.columnId))) throw new Error(`${node.name}: move_ticket needs boardId and columnId.`);
     delete node.action;
@@ -143,9 +152,9 @@ export function normalizeWorkflow(input) {
   value.steps = value.nodes;
   value.triggers = Array.isArray(input.triggers) ? input.triggers.map((trigger, index) => {
     const event = trigger?.event ?? trigger?.type;
-    if (!trigger || typeof trigger !== 'object' || !['ticket_created', 'ticket_updated', 'ticket_moved', 'board_placement_changed'].includes(event)) throw new Error(`Trigger ${index + 1} is invalid.`);
+    if (!trigger || typeof trigger !== 'object' || !['ticket_created', 'ticket_updated', 'ticket_moved', 'board_placement_changed', 'ticket_imported', 'ticket_source_updated', 'ticket_message_received'].includes(event)) throw new Error(`Trigger ${index + 1} is invalid.`);
     const value = { ...trigger, event }; delete value.type;
-    for (const key of ['boardId', 'columnId', 'projectId']) if (value[key] !== undefined && !safeId(value[key])) throw new Error(`Trigger ${index + 1} has an invalid ${key}.`);
+    for (const key of ['boardId', 'columnId', 'bindingId', 'workType', 'projectId']) if (value[key] !== undefined && !safeId(value[key])) throw new Error(`Trigger ${index + 1} has an invalid ${key}.`);
     return value;
   }) : [];
   if (value.triggers.length > 20) throw new Error('A workflow may have at most 20 board triggers.');
@@ -169,7 +178,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
   function activate(s, nodeId, outcome = 'success') {
     const list = nodes(s); const index = list.findIndex(n => n.id === nodeId); if (index < 0) throw new Error('Workflow transition references an unknown node.');
     s.step = index; s.flow.nodeId = nodeId; s.flow.instance = randomUUID(); s.flow.validation = null; s.flow.submission = null; s.flow.agentSessionId = null; s.flow.lastOutcome = outcome;
-    const node = list[index]; s.flow.status = node.kind === 'human' ? 'waiting_gate' : 'ready'; s.status = s.flow.status;
+    const node = list[index]; s.flow.status = node.kind === 'human' ? 'waiting_gate' : node.kind === 'wait' ? 'waiting_event' : 'ready'; s.status = s.flow.status;
     event(s, 'step_activated', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance: s.flow.instance, name: node.name, outcome });
   }
   function transition(s, outcome) {
@@ -230,6 +239,17 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
   }
   return {
     active, current,
+    async signal(s, instance, fact) {
+      requireInstance(s, instance);
+      if (s.flow.status !== 'waiting_event' || current(s).kind !== 'wait') return false;
+      const node = current(s);
+      if (node.waitFor.event !== fact.event) return false;
+      s.flow.actionResult = { event: fact.event, ticketId: fact.ticketId, ...(fact.messageId ? { messageId: fact.messageId } : {}) };
+      event(s, 'workflow_event_received', { runId: s.flow.id, nodeId: node.id, instance, ...s.flow.actionResult });
+      transition(s, 'success');
+      await save();
+      return true;
+    },
     async start(s) {
       if (active(s) || busy(s)) throw new Error('A workflow is already active.'); if (!s.workflow) throw new Error('Select and apply a workflow first.');
       s.workflow = { ...normalizeWorkflow(s.workflow), version: s.workflow.version }; if (s.workflow.nodes.some(node => node.artifact || node.kind === 'check' || node.kind === 'action' && node.operation === 'inspect_changes' || node.requiresCheck) && !s.workspace && !canProvision(s)) throw new Error('This workflow requires a worktree. Select a runner or placement pool first.');
@@ -271,7 +291,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       }
       if (command.action !== 'continueWorkflow') throw new Error('There is no pending workflow gate.');
       if (s.flow.status === 'awaiting_continue') { const instance = s.flow.instance; const expectedStatus = s.flow.status; const evidence = await validate(s); requireInstance(s, instance); if (s.flow.status !== expectedStatus || JSON.stringify(evidence.artifact) !== JSON.stringify(s.flow.validation?.artifact) || evidence.digest !== s.flow.validation?.digest) throw new Error('Submitted evidence changed. Request a fresh submission before advancing.'); event(s, 'step_completed', { instance, actor: s.lease?.label, evidence, outcome: 'success' }); transition(s, 'success'); }
-      else if (['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status)) { const resume = s.flow.resumeStatus; s.flow.status = resume === 'awaiting_continue' || resume === 'waiting_gate' ? resume : 'ready'; s.flow.resumeStatus = null; s.status = s.flow.status; }
+      else if (['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status)) { const resume = s.flow.resumeStatus; s.flow.status = ['awaiting_continue', 'waiting_gate', 'waiting_event'].includes(resume) ? resume : 'ready'; s.flow.resumeStatus = null; s.status = s.flow.status; }
       else throw new Error('This workflow is not waiting to continue.'); await save();
     },
     async pause(s, cancel = false) { if (!active(s)) throw new Error('No active workflow.'); if (s.flow.status === 'paused' && !cancel) return; s.flow.resumeStatus = s.flow.status; s.flow.status = cancel ? 'cancelled' : 'paused'; s.status = s.flow.status; event(s, cancel ? 'workflow_cancelled' : 'workflow_paused', { instance: s.flow.instance }); abort(s); await save(); },

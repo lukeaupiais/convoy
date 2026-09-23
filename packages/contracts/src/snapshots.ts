@@ -37,6 +37,8 @@ import type {
   TicketDevelopmentLink,
   TicketImportBinding,
   TicketImportMembership,
+  TicketThread,
+  TicketReply,
 } from './model/work';
 import type {
   WorkflowDefinition,
@@ -70,6 +72,8 @@ export type RuntimeSnapshot = {
   ticketConnections?: TicketConnection[];
   ticketImportBindings?: TicketImportBinding[];
   ticketImportMemberships?: TicketImportMembership[];
+  ticketThreads?: TicketThread[];
+  ticketReplies?: TicketReply[];
   environments: Environment[];
   environmentAccessBindings?: EnvironmentAccessBinding[];
   runnerEnrollments?: RunnerEnrollment[];

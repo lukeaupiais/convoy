@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-const events = new Set(['ticket_created', 'ticket_updated', 'ticket_moved', 'board_placement_changed']);
+const events = new Set(['ticket_created', 'ticket_updated', 'ticket_moved', 'board_placement_changed', 'ticket_imported', 'ticket_source_updated', 'ticket_message_received']);
 const idPattern = /^[A-Za-z0-9][\w-]{0,79}$/;
 
 export function workflowForProject(state, id, version, projectId) {
@@ -36,6 +36,8 @@ export function migrateWorkflowStartRules(state) {
           workflowId: workflow.id, workflowVersion: workflow.version,
           event: trigger.event, ...(trigger.boardId ? { boardId: trigger.boardId } : {}),
           ...(trigger.columnId ? { columnId: trigger.columnId } : {}),
+          ...(trigger.bindingId ? { bindingId: trigger.bindingId } : {}),
+          ...(trigger.workType ? { workType: trigger.workType } : {}),
           // Existing personal automations retain their authority. Other tenants
           // must choose a governed principal before automatic execution resumes.
           enabled: project.organizationId === 'personal',
@@ -53,6 +55,10 @@ export function createWorkflowStartRules({ state, save, authorizeRule = async ()
   return {
     validate(rule) {
       workflowForProject(state, rule.workflowId, rule.workflowVersion, rule.projectId);
+      if (rule.bindingId) {
+        const binding = state.ticketImportBindings?.find((value) => value.id === rule.bindingId);
+        if (!binding || binding.projectId !== rule.projectId) throw new Error('Start automation import binding is no longer available.');
+      }
       if (!rule.boardId) return;
       const board = state.boards.find((value) => value.id === rule.boardId);
       if (!board || !board.projectIds.includes(rule.projectId) ||
@@ -77,6 +83,11 @@ export function createWorkflowStartRules({ state, save, authorizeRule = async ()
       if (!events.has(input.event)) throw new Error('Choose a supported start event.');
       if (input.boardId && !['ticket_moved', 'board_placement_changed'].includes(input.event))
         throw new Error('Only board placement events can select a board.');
+      if (input.bindingId && !['ticket_imported', 'ticket_source_updated', 'ticket_message_received'].includes(input.event))
+        throw new Error('Only import events can select an import binding.');
+      if (input.workType && !idPattern.test(input.workType)) throw new Error('Invalid start automation work type.');
+      if (['ticket_imported', 'ticket_source_updated', 'ticket_message_received'].includes(input.event) && !input.bindingId)
+        throw new Error('Choose an import binding for this start event.');
       if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 120) throw new Error('Name the start automation.');
       if (!Number.isInteger(input.workflowVersion) || input.workflowVersion < 1) throw new Error('Choose a published workflow version.');
       workflowForProject(state, input.workflowId, input.workflowVersion, project.id);
@@ -85,6 +96,10 @@ export function createWorkflowStartRules({ state, save, authorizeRule = async ()
         if (!board || !board.projectIds.includes(project.id)) throw new Error('Board is not available for this project.');
         if (input.columnId && !board.columns.some((column) => column.id === input.columnId)) throw new Error('Board column was not found.');
       } else if (input.columnId) throw new Error('Choose a board before a column.');
+      if (input.bindingId) {
+        const binding = state.ticketImportBindings?.find((value) => value.id === input.bindingId);
+        if (!binding || binding.projectId !== project.id) throw new Error('Import binding is not available for this project.');
+      }
       if (input.columnId && !['ticket_moved', 'board_placement_changed'].includes(input.event)) throw new Error('Column entry requires a board placement event.');
       const actor = previous?.principal ?? principal;
       if (input.enabled && (!actor || actor.kind !== 'user' && actor.kind !== 'workload')) throw new Error('Enabled automation needs a governed principal.');
@@ -94,6 +109,8 @@ export function createWorkflowStartRules({ state, save, authorizeRule = async ()
         projectId: project.id, event: input.event,
         ...(input.boardId ? { boardId: input.boardId } : {}),
         ...(input.columnId ? { columnId: input.columnId } : {}),
+        ...(input.bindingId ? { bindingId: input.bindingId } : {}),
+        ...(input.workType ? { workType: input.workType } : {}),
         workflowId: input.workflowId, workflowVersion: input.workflowVersion,
         enabled: Boolean(input.enabled), principal: actor,
         revision: (previous?.revision ?? 0) + 1,
@@ -107,6 +124,8 @@ export function createWorkflowStartRules({ state, save, authorizeRule = async ()
     matches(rule, fact) {
       if (!rule.enabled || rule.projectId !== fact.projectId || rule.event !== fact.event) return false;
       if (rule.boardId && rule.boardId !== fact.boardId) return false;
+      if (rule.bindingId && rule.bindingId !== fact.bindingId) return false;
+      if (rule.workType && rule.workType !== fact.workType) return false;
       if (rule.columnId && !(fact.toColumnId === rule.columnId && fact.fromColumnId !== rule.columnId)) return false;
       return true;
     },

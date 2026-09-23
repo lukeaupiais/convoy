@@ -113,7 +113,7 @@ function mapValue(values, field, raw) {
 
 export function validateCustomTicketSourceManifest(input) {
   const manifest = structuredClone(object(input, 'Custom ticket source manifest must be an object.'));
-  keys(manifest, ['apiVersion', 'kind', 'metadata', 'connection', 'operations', 'mapping', 'values', 'ownership'], 'Unknown manifest field');
+  keys(manifest, ['apiVersion', 'kind', 'metadata', 'connection', 'operations', 'mapping', 'threadMapping', 'values', 'ownership'], 'Unknown manifest field');
   if (manifest.apiVersion !== 'convoy.dev/v1alpha1' || manifest.kind !== 'TicketSource')
     throw new Error('Custom ticket source manifest version or kind is unsupported.');
   if (manifest.metadata !== undefined) {
@@ -122,7 +122,7 @@ export function validateCustomTicketSourceManifest(input) {
     requiredString(manifest.metadata.name, 'Manifest metadata name', 100);
   }
   const connection = object(manifest.connection, 'Manifest connection is required.');
-  keys(connection, ['baseUrl', 'authentication'], 'Unknown connection field');
+  keys(connection, ['baseUrl', 'authentication', 'writeAuthentication'], 'Unknown connection field');
   const base = new URL(requiredString(connection.baseUrl, 'Base URL', 1000));
   if (base.username || base.password || base.search || base.hash) throw new Error('Base URL cannot contain credentials, query, or fragment.');
   connection.baseUrl = base.href.replace(/\/$/, '');
@@ -137,12 +137,25 @@ export function validateCustomTicketSourceManifest(input) {
     if (!/^x-[a-z0-9-]+$/.test(header)) throw new Error('Static authentication must use an X- prefixed header.');
     authentication.header = header;
   } else if (authentication.header !== undefined) throw new Error('Bearer authentication cannot define a header.');
+  if (connection.writeAuthentication !== undefined) {
+    const writeAuth = object(connection.writeAuthentication, 'Write authentication must be an object.');
+    keys(writeAuth, ['type', 'credential', 'header'], 'Unknown write authentication field');
+    if (!['bearer', 'header'].includes(writeAuth.type) ||
+        !/^CONVOY_TICKET_SOURCE_[A-Z0-9_]{1,72}$/.test(requiredString(writeAuth.credential, 'Write credential reference', 100)) ||
+        writeAuth.credential === authentication.credential)
+      throw new Error('Write authentication needs a separate ticket-source credential.');
+    if (writeAuth.type === 'header') {
+      const header = requiredString(writeAuth.header, 'Write authentication header', 80).toLowerCase();
+      if (!/^x-[a-z0-9-]+$/.test(header)) throw new Error('Write authentication must use an X- prefixed header.');
+      writeAuth.header = header;
+    } else if (writeAuth.header !== undefined) throw new Error('Bearer write authentication cannot define a header.');
+  }
   const operations = object(manifest.operations, 'Manifest operations are required.');
-  keys(operations, ['list', 'get'], 'Unknown operation');
-  for (const [name, required] of [['list', true], ['get', false]]) {
+  keys(operations, ['list', 'get', 'thread', 'reply'], 'Unknown operation');
+  for (const [name, required] of [['list', true], ['get', false], ['thread', false]]) {
     if (!operations[name]) { if (required) throw new Error('List operation is required.'); else continue; }
     const operation = object(operations[name], `${name} operation must be an object.`);
-    keys(operation, ['method', 'path', 'query', 'response'], `Unknown ${name} operation field`);
+    keys(operation, name === 'thread' ? ['method', 'path', 'response'] : ['method', 'path', 'query', 'response'], `Unknown ${name} operation field`);
     if (operation.method !== 'GET') throw new Error(`${name} operation must use GET.`);
     endpointUrl(connection.baseUrl, operation.path, { remoteId: 'id', cursor: 'cursor', limit: 1 });
     if (operation.query !== undefined) {
@@ -154,13 +167,30 @@ export function validateCustomTicketSourceManifest(input) {
       }
     }
     const response = object(operation.response, `${name} response mapping is required.`);
-    keys(response, name === 'list' ? ['items', 'nextCursor', 'total'] : ['item'], `Unknown ${name} response field`);
-    selector(response[name === 'list' ? 'items' : 'item'], `${name} response selector`);
+    keys(response, name === 'list' ? ['items', 'nextCursor', 'total'] : name === 'thread' ? ['items'] : ['item'], `Unknown ${name} response field`);
+    selector(response[name === 'list' || name === 'thread' ? 'items' : 'item'], `${name} response selector`);
     if (response.nextCursor !== undefined) selector(response.nextCursor, 'Next cursor selector');
     if (response.total !== undefined) selector(response.total, 'Total selector');
     if (name === 'list' && (response.nextCursor || response.total) &&
       !operation.path.includes('${cursor}') && !Object.values(operation.query ?? {}).includes('${cursor}'))
       throw new Error('Paged list operation must send its cursor.');
+  }
+  if (operations.thread) {
+    const message = object(manifest.threadMapping, 'Thread mapping is required.');
+    keys(message, ['id', 'body', 'authorRole', 'createdAt', 'deliveryStatus'], 'Unknown thread mapping field');
+    for (const name of ['id', 'body', 'authorRole', 'createdAt']) selector(message[name], `${name} thread selector`);
+    if (message.deliveryStatus !== undefined) selector(message.deliveryStatus, 'Delivery status thread selector');
+  } else if (manifest.threadMapping !== undefined) throw new Error('Thread mapping requires a thread operation.');
+  if (operations.reply) {
+    if (!connection.writeAuthentication) throw new Error('Reply operation needs separate write authentication.');
+    const reply = object(operations.reply, 'Reply operation must be an object.');
+    keys(reply, ['method', 'path', 'response'], 'Unknown reply operation field');
+    if (reply.method !== 'POST') throw new Error('Reply operation must use POST.');
+    endpointUrl(connection.baseUrl, reply.path, { remoteId: 'id' });
+    const response = object(reply.response, 'Reply response mapping is required.');
+    keys(response, ['commentId', 'deliveryStatus'], 'Unknown reply response field');
+    selector(response.commentId, 'Reply comment ID selector');
+    if (response.deliveryStatus) selector(response.deliveryStatus, 'Reply delivery status selector');
   }
   const mapping = object(manifest.mapping, 'Manifest mapping is required.');
   keys(mapping, ['remoteId', 'remoteKey', 'title', 'description', 'status', 'priority', 'remoteVersion', 'updatedAt', 'url', 'urlTemplate'], 'Unknown mapping field');
@@ -190,8 +220,8 @@ export function validateCustomTicketSourceManifest(input) {
   return manifest;
 }
 
-function credential(connection, manifest) {
-  const reference = manifest.connection.authentication.credential;
+function credential(connection, manifest, write = false) {
+  const reference = (write ? manifest.connection.writeAuthentication : manifest.connection.authentication).credential;
   const value = process.env[reference];
   if (!value) throw new Error(`Ticket source credential ${reference} is unavailable.`);
   return value;
@@ -306,6 +336,44 @@ export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, a
     async getIssue(connection, remoteId) {
       const { manifest, operation, body } = await request(connection, 'get', { remoteId });
       return normalize(manifest, readSelector(body, operation.response.item));
+    },
+    async listComments(connection, remoteId) {
+      const { manifest, operation, body } = await request(connection, 'thread', { remoteId });
+      const items = readSelector(body, operation.response.items);
+      if (!Array.isArray(items) || items.length > 500) throw new Error('Ticket source thread must contain at most 500 messages.');
+      const mapping = manifest.threadMapping;
+      return items.map((item) => ({
+        remoteId: mappedString(item, mapping.id, 'Message ID', 200),
+        body: mappedString(item, mapping.body, 'Message body', 12000),
+        authorRole: mappedString(item, mapping.authorRole, 'Message author role', 80),
+        createdAt: mappedString(item, mapping.createdAt, 'Message time', 100),
+        ...(mapping.deliveryStatus ? { deliveryStatus: mappedString(item, mapping.deliveryStatus, 'Message delivery status', 80, true) } : {}),
+      }));
+    },
+    async postReply(connection, remoteId, body, requestId) {
+      const manifest = validateCustomTicketSourceManifest(connection.manifest);
+      const operation = manifest.operations.reply;
+      if (!operation) throw new Error('Ticket source does not provide customer replies.');
+      if (typeof body !== 'string' || !body.trim() || body.length > 12000 || !/^[\w-]{1,100}$/.test(requestId))
+        throw new Error('Reply body or request ID is invalid.');
+      const url = endpointUrl(manifest.connection.baseUrl, operation.path, { remoteId });
+      const addresses = await assertDestination(url, resolver, privateOrigins);
+      const secret = credential(connection, manifest, true);
+      const auth = manifest.connection.writeAuthentication;
+      const headers = { Accept: 'application/json', 'Content-Type': 'application/json', 'Idempotency-Key': requestId };
+      headers[auth.type === 'bearer' ? 'Authorization' : auth.header] = auth.type === 'bearer' ? `Bearer ${secret}` : secret;
+      const dispatcher = dispatcherFactory(url.hostname, addresses);
+      try {
+        const response = await fetcher(url, { method: 'POST', headers, body: JSON.stringify({ body }), redirect: 'error', signal: AbortSignal.timeout(15000), ...(dispatcher ? { dispatcher } : {}) });
+        if (!response.ok) throw new Error(`Ticket source reply failed (${response.status}).`);
+        const type = response.headers?.get?.('content-type') ?? 'application/json';
+        if (!type.toLowerCase().startsWith('application/json')) throw new Error('Ticket source returned a non-JSON reply.');
+        const result = await readJson(response);
+        return {
+          remoteId: mappedString(result, operation.response.commentId, 'Reply comment ID', 200),
+          ...(operation.response.deliveryStatus ? { deliveryStatus: mappedString(result, operation.response.deliveryStatus, 'Reply delivery status', 80, true) } : {}),
+        };
+      } finally { await dispatcher?.close(); }
     },
   };
 }

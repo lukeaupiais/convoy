@@ -1109,6 +1109,7 @@ export async function createRuntime({
     return true;
   }
   async function dispatch() {
+    await workflowEffects.drainImportFacts();
     for (const s of Object.values(state.sessions)) {
       for (const m of s.pendingMessages ?? [])
         if (m.binding !== messageBinding(s)) {
@@ -1209,11 +1210,26 @@ export async function createRuntime({
     }
     await store.save();
   }
+  async function pollTicketImports() {
+    const now = Date.now();
+    for (const binding of state.ticketImportBindings ?? []) {
+      const last = binding.lastAttemptAt ?? binding.lastSyncedAt;
+      if (!binding.enabled || !binding.pollIntervalMinutes ||
+          last && now - Date.parse(last) < binding.pollIntervalMinutes * 60_000) continue;
+      try {
+        await catalog.command({ action: 'syncTicketImportBinding', id: binding.id, limit: 100 });
+      } catch {
+        // Work records the source error on the binding for the operator.
+      } finally {
+        await workflowEffects.drainImportFacts();
+      }
+    }
+  }
   const dispatchTimer = setInterval(() => {
     if (!closing)
       queue = queue
         .catch(() => {})
-        .then(dispatch)
+        .then(async () => { await pollTicketImports(); await dispatch(); })
         .catch(() => {});
   }, 3000);
   dispatchTimer.unref();

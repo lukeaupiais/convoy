@@ -163,6 +163,25 @@ export function createCommandAuthorization({
       await ticketId(command.ticketId, 'project.write', command, actor);
       return;
     }
+    if (command.action === 'syncExternalTicketThread') {
+      const value = await ticketId(command.ticketId, 'project.write', command, actor);
+      const connection = state.ticketConnections?.find((item) => item.id === command.connectionId);
+      if (!connection || project(value.projectId)?.organizationId !== connection.organizationId) denied();
+      return;
+    }
+    if (command.action === 'postExternalTicketReply') {
+      const value = await ticketId(command.ticketId, 'project.write', command, actor);
+      const connection = state.ticketConnections?.find((item) => item.id === command.connectionId);
+      if (!connection || project(value.projectId)?.organizationId !== connection.organizationId) denied();
+      return;
+    }
+    if (command.action === 'reconcileExternalTicketReply') {
+      const reply = state.ticketReplies?.find((value) => value.id === command.requestId);
+      if (!reply) denied();
+      await ticketId(reply.ticketId, 'project.write', command, actor);
+      await organization(project(ticket(reply.ticketId).projectId).organizationId, 'organization.manage', command, actor);
+      return;
+    }
     if (command.action === 'importExternalTickets') {
       const value = await projectId(command.projectId, 'project.write', command, actor);
       const connection = state.ticketConnections?.find((item) => item.id === command.connectionId);

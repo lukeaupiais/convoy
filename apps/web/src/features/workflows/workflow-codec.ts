@@ -1,9 +1,9 @@
 import type { WorkflowDefinition, WorkflowStep } from '../../shared/api/runtime';
 import { newId } from '../../shared/lib/browser';
 
-export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch';
+export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait';
 export type SessionMode = 'continue' | 'new' | 'reuse';
-export type ActionOperation = 'inspect_changes' | 'create_ticket' | 'update_ticket' | 'move_ticket';
+export type ActionOperation = 'inspect_changes' | 'create_ticket' | 'create_development_ticket' | 'update_ticket' | 'move_ticket';
 export type ConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type ConditionOperator = 'equals' | 'notEquals' | 'exists';
 export type ConditionValueType = 'text' | 'number' | 'boolean' | 'null';
@@ -32,6 +32,7 @@ export type GraphNode = {
   operation?: ActionOperation;
   input?: ActionInput;
   condition?: Condition;
+  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource: 'active_ticket' | 'linked_development'; status?: string };
   session?: { mode: SessionMode; name?: string; target?: string };
   permissions?: string;
   maxRounds?: number;
@@ -66,6 +67,7 @@ export const kindLabels: Record<NodeKind, string> = {
   approval: 'Approval',
   action: 'Action',
   branch: 'Branch',
+  wait: 'Wait for event',
 };
 export const outcomesFor = (node: GraphNode): string[] =>
   node.type === 'branch'
@@ -217,6 +219,11 @@ export function fresh(type: NodeKind = 'agent', index = 0): GraphNode {
       operation: 'inspect_changes',
       input: {},
     };
+  if (type === 'wait') return {
+    ...common,
+    prompt: 'Wait for the selected ticket event.',
+    waitFor: { event: 'ticket_message_received', ticketSource: 'active_ticket' },
+  };
   return {
     ...common,
     prompt: '',
@@ -258,7 +265,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
   const type: NodeKind =
     rawType === 'human'
       ? 'approval'
-      : ['agent', 'check', 'approval', 'action', 'branch'].includes(rawType)
+      : ['agent', 'check', 'approval', 'action', 'branch', 'wait'].includes(rawType)
         ? (rawType as NodeKind)
         : 'agent';
   const node = fresh(type, index);
@@ -270,12 +277,13 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     value.condition && typeof value.condition === 'object'
       ? (value.condition as Record<string, unknown>)
       : undefined;
+  const rawWait = value.waitFor && typeof value.waitFor === 'object' ? value.waitFor as Record<string, unknown> : undefined;
   const artifact =
     value.artifact && typeof value.artifact === 'object'
       ? (value.artifact as Record<string, unknown>)
       : undefined;
   const rawOperation = String(value.operation ?? value.action ?? 'inspect_changes');
-  const operation = ['inspect_changes', 'create_ticket', 'update_ticket', 'move_ticket'].includes(
+  const operation = ['inspect_changes', 'create_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(
     rawOperation,
   )
     ? (rawOperation as ActionOperation)
@@ -388,6 +396,13 @@ export function safeNode(raw: unknown, index: number): GraphNode {
             falseOutcome: String(rawCondition?.falseOutcome ?? conditionOutcomes.false ?? 'no'),
           }
         : undefined,
+    waitFor: type === 'wait' ? {
+      event: ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(String(rawWait?.event))
+        ? rawWait?.event as 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'
+        : 'ticket_message_received',
+      ticketSource: rawWait?.ticketSource === 'linked_development' ? 'linked_development' : 'active_ticket',
+      ...(rawWait?.status ? { status: String(rawWait.status) } : {}),
+    } : undefined,
     outcomes,
   };
   normalized.outcomes = outcomesFor(normalized);
@@ -399,6 +414,7 @@ export function backendNode(node: GraphNode): WorkflowStep {
     type,
     outcomes: _outcomes,
     condition,
+    waitFor,
     operation,
     input,
     session,
@@ -431,6 +447,7 @@ export function backendNode(node: GraphNode): WorkflowStep {
     result.operation = operation ?? 'inspect_changes';
     result.input = input ?? {};
   }
+  if (type === 'wait') result.waitFor = waitFor ?? { event: 'ticket_message_received', ticketSource: 'active_ticket' };
   if (type === 'branch' && condition)
     result.condition = {
       source: condition.source,
@@ -573,6 +590,7 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
     }
     if (node.type === 'check' && !node.checkCommand?.trim())
       errors.push(`${node.name}: check command is required.`);
+    if (node.type === 'wait' && !node.waitFor) errors.push(`${node.name}: wait event is required.`);
   }
   return [...new Set(errors)];
 }
