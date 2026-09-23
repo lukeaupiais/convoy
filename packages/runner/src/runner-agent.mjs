@@ -1042,12 +1042,18 @@ export async function executeRunner(
       signal,
     );
     if (changes.code !== 0 || diff.code !== 0) throw new Error('Unable to inspect worktree.');
-    const files = await git(root, ['ls-files', '-c', '-o', '--exclude-standard', '-z'], signal);
-    if (files.code !== 0 || files.stopped)
+    // HEAD identifies clean tracked content. Hash only paths whose working-tree
+    // content can differ from HEAD, so large repositories do not exhaust the
+    // bounded command output or file-content budget just by being checked out.
+    const head = await git(root, ['rev-parse', 'HEAD'], signal);
+    const changed = await git(root, ['diff', '--name-only', '-z', 'HEAD', '--', '.'], signal);
+    const untracked = await git(root, ['ls-files', '-o', '--exclude-standard', '-z'], signal);
+    if ([head, changed, untracked].some(result => result.code !== 0 || result.stopped))
       throw new Error('Workspace fingerprint exceeded its safe limit.');
     const hash = createHash('sha256');
+    hash.update(head.output.trim() + '\0');
     let bytes = 0;
-    for (const name of [...new Set(files.output.split('\0').filter(Boolean))].sort()) {
+    for (const name of [...new Set([...changed.output.split('\0'), ...untracked.output.split('\0')].filter(Boolean))].sort()) {
       if (name === request.ignoreArtifact) continue;
       const path = resolve(root, name);
       if (relative(root, path).startsWith('..')) throw new Error('Invalid Git path.');
