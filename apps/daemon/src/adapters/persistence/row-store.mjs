@@ -6,6 +6,18 @@
  */
 const identity = (bucket, key) => JSON.stringify([bucket, key]);
 
+function itemKey(name, item) {
+  if (name === 'workflows' && item?.version !== undefined)
+    return `${item.id}@${item.version}`;
+  if (name === 'skills' && item?.version !== undefined)
+    return `${item.organizationId ?? 'personal'}:${item.name}@${item.version}`;
+  if (name === 'capabilityProfiles' && item?.version !== undefined)
+    return `${item.organizationId ?? 'personal'}:${item.id}@${item.version}`;
+  if (name === 'extensions' && item?.revision !== undefined)
+    return `${item.organizationId ?? 'personal'}:${item.id}@${item.revision}`;
+  return item?.id;
+}
+
 function flatten(data) {
   const rows = new Map();
   for (const [name, value] of Object.entries(data)) {
@@ -14,9 +26,7 @@ function flatten(data) {
       const seen = new Set();
       for (let position = 0; position < value.length; position++) {
         const item = value[position];
-        const key = name === 'workflows' && item?.version !== undefined
-          ? `${item.id}@${item.version}`
-          : item?.id;
+        const key = itemKey(name, item);
         if ((typeof key !== 'string' && typeof key !== 'number') || seen.has(String(key)))
           throw new Error(`Persisted collection ${name} needs unique item IDs.`);
         seen.add(String(key));
