@@ -4,6 +4,7 @@ import {
   GitBranch,
   Link2,
   Maximize2,
+  MoreHorizontal,
   ShieldCheck,
   Sparkles,
   Zap,
@@ -19,6 +20,7 @@ const kindIcon: Record<NodeKind, typeof Zap> = {
   approval: ShieldCheck,
   action: Sparkles,
   branch: GitBranch,
+  wait: MoreHorizontal,
 };
 
 export function WorkflowCanvas({

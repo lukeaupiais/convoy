@@ -13,6 +13,9 @@ const commands = [
   'publishTicket',
   'reconcileTicketPublish',
   'syncExternalTicket',
+  'syncExternalTicketThread',
+  'postExternalTicketReply',
+  'reconcileExternalTicketReply',
   'importExternalTickets',
   'saveTicketImportBinding',
   'syncTicketImportBinding',
@@ -62,6 +65,8 @@ export function createWork({ afterCommand = async (_command, result) => result, 
         ticketImportBindings: value.ticketImportBindings.filter((binding) => projectIds.has(binding.projectId)),
         ticketImportMemberships: value.ticketImportMemberships.filter((membership) =>
           value.ticketImportBindings.some((binding) => binding.id === membership.bindingId && projectIds.has(binding.projectId))),
+        ticketThreads: value.ticketThreads.filter((thread) => projectIds.has(value.tickets.find((ticket) => ticket.id === thread.ticketId)?.projectId)),
+        ticketReplies: value.ticketReplies.filter((reply) => projectIds.has(value.tickets.find((ticket) => ticket.id === reply.ticketId)?.projectId)),
         boards: value.boards
           .filter(
             (board) =>

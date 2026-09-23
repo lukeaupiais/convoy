@@ -322,6 +322,9 @@ export type RuntimeCommandInputMap = {
     connectionId: string;
     resolution?: 'local' | 'remote';
   };
+  syncExternalTicketThread: { ticketId: number; connectionId: string };
+  postExternalTicketReply: RequestIdentity & { ticketId: number; connectionId: string; body: string };
+  reconcileExternalTicketReply: { requestId: string; remoteId?: string; confirmNotPosted?: true };
   importExternalTickets: { connectionId: string; projectId: string; limit?: number };
   saveTicketImportBinding: {
     id?: string;
@@ -331,6 +334,7 @@ export type RuntimeCommandInputMap = {
     name: string;
     workType: string;
     enabled?: boolean;
+    pollIntervalMinutes?: number;
   };
   syncTicketImportBinding: { id: string; limit?: number };
   decide: SessionTarget & {

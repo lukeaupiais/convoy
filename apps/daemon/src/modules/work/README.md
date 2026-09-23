@@ -26,3 +26,12 @@ binding membership. A development board can create its own work type.
 One development ticket may
 address several support reports. The relationship is durable and independent of board placement;
 finishing development does not change a support ticket's external-owned status.
+
+Bindings can opt into a polling interval. Work records the last attempt and any
+source error; the control plane drains durable import and customer-message facts
+after each poll. A ticket thread is a source-owned projection. The first read
+establishes a baseline, while later customer messages can start or resume a
+workflow. An incomplete thread is rejected so missing history cannot be mistaken
+for a new customer message. Outbound replies record intent before transmission
+and require reconciliation if the result is uncertain. A queued reply is not a
+delivery receipt.

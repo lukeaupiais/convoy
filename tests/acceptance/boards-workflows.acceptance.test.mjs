@@ -85,6 +85,97 @@ test('acceptance: one project has independent imported and development boards ac
   assert.equal(snapshot.tickets.filter(value => value.projectId === project.id).length, 2);
 });
 
+test('acceptance: an enabled import binding polls without an operator command', async t => {
+  let calls = 0;
+  const f = await fixture(t, { externalTickets: {
+    listIssuesPage: async () => { calls++; return { items: [{ id: 'case-poll', identifier: 'CASE-POLL', title: 'Polled report' }] }; },
+  } });
+  const project = await f.act('saveProject', { name: 'Polling project' });
+  const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'linear', name: 'Polling source', teamId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', credentialEnv: 'CONVOY_LINEAR_TOKEN_TEST' });
+  await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Polling', workType: 'support', pollIntervalMinutes: 1 });
+  const deadline = Date.now() + 6000;
+  while (Date.now() < deadline && !(await f.snapshot()).tickets.some(ticket => ticket.title === 'Polled report'))
+    await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal((await f.snapshot()).tickets.some(ticket => ticket.title === 'Polled report'), true);
+  assert.equal(calls, 1);
+});
+
+test('acceptance: imported support starts once and approved escalation starts linked development work', async t => {
+  const issue = { id: 'case-2', identifier: 'CASE-2', url: 'https://linear.app/issue/CASE-2', title: 'Customer report', description: 'Observed failure', updatedAt: '2026-09-23T00:00:00Z' };
+  const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: { listIssuesPage: async () => ({ items: [issue] }) } });
+  const project = await f.act('saveProject', { name: 'Another product' });
+  const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'linear', name: 'Cases', teamId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', credentialEnv: 'CONVOY_LINEAR_TOKEN_TEST' });
+  const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Cases', workType: 'support' });
+  await f.act('saveBoard', { name: 'Support', projectIds: [project.id], filters: { workTypes: ['support'], importBindingIds: [binding.id] }, columns: [{ id: 'open', name: 'Open' }] });
+  await f.act('saveBoard', { name: 'Development', projectIds: [project.id], filters: { workTypes: ['development'] }, creationWorkType: 'development', columns: [{ id: 'backlog', name: 'Backlog' }] });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  await f.act('saveWorkflow', { workflow: { id: 'support-review', name: 'Support review', nodes: [
+    { id: 'approve', name: 'Approve escalation', kind: 'human', prompt: 'Review evidence.' },
+    { id: 'escalate', name: 'Create development work', kind: 'action', operation: 'create_development_ticket', input: {} },
+  ], edges: [{ from: 'approve', to: 'escalate', outcome: 'approved' }] } });
+  await f.act('saveWorkflow', { workflow: { id: 'development-review', name: 'Development review', nodes: [{ id: 'review', name: 'Review development', kind: 'human', prompt: 'Review scope.' }] } });
+  await f.act('saveWorkflowStartRule', { organizationId: 'personal', revision: 0, rule: { name: 'Imported cases', projectId: project.id, event: 'ticket_imported', bindingId: binding.id, workflowId: 'support-review', workflowVersion: 1, enabled: true } });
+  await f.act('saveWorkflowStartRule', { organizationId: 'personal', revision: 0, rule: { name: 'New development', projectId: project.id, event: 'ticket_created', workType: 'development', workflowId: 'development-review', workflowVersion: 1, enabled: true } });
+  await f.act('syncTicketImportBinding', { id: binding.id });
+  let state = await until(async () => { const snapshot = await f.snapshot(); return snapshot.sessions && Object.values(snapshot.sessions).some(value => value.flow?.workflowId === 'support-review') ? snapshot : null; });
+  const support = state.tickets.find(value => value.projectId === project.id && value.workType === 'support');
+  const session = Object.values(state.sessions).find(value => value.flow?.workflowId === 'support-review');
+  assert.equal(session.flow.status, 'waiting_gate');
+  await f.act('claim', { sessionId: session.id });
+  await f.act('approveGate', { sessionId: session.id, instance: session.flow.instance });
+  state = await until(async () => { const snapshot = await f.snapshot(); return snapshot.ticketDevelopmentLinks?.length === 1 ? snapshot : null; });
+  const development = state.tickets.find(value => value.workType === 'development' && value.projectId === project.id);
+  assert.equal(state.ticketDevelopmentLinks[0].supportTicketId, support.id);
+  assert.equal(state.ticketDevelopmentLinks[0].developmentTicketId, development.id);
+  assert.equal(development.description.includes('Observed failure'), true);
+  assert.equal(Object.values(state.sessions).some(value => value.activeTicketId === development.id && value.flow?.workflowId === 'development-review'), true);
+  await f.act('syncTicketImportBinding', { id: binding.id });
+  await f.restart();
+  state = await f.snapshot();
+  assert.equal(state.ticketDevelopmentLinks.length, 1);
+  assert.equal(state.tickets.filter(value => value.projectId === project.id).length, 2);
+  assert.equal(Object.values(state.sessions).filter(value => value.activeTicketId === support.id).length, 1);
+});
+
+test('acceptance: a new customer message resumes the matching support wait after a restart', async t => {
+  const issue = { remoteId: 'report-3', remoteKey: 'R-3', title: 'Request', description: 'Initial report', remoteVersion: '1' };
+  let comments = [{ remoteId: '1', body: 'Initial report', authorRole: 'user', createdAt: '2026-09-23T12:00:00Z' }];
+  const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: {
+    listIssuesPage: async () => ({ items: [issue] }),
+    listComments: async () => comments,
+  } });
+  const project = await f.act('saveProject', { name: 'Service project' });
+  const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+    connection: { baseUrl: 'https://tickets.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TEST' } },
+    operations: { list: { method: 'GET', path: 'tickets', response: { items: '$.items' } },
+      thread: { method: 'GET', path: 'tickets/${remoteId}/comments', response: { items: '$.items' } } },
+    mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', remoteVersion: '$.version' },
+    threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt' } };
+  const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Service', manifest });
+  const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Reports', workType: 'support' });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  await f.act('saveWorkflow', { workflow: { id: 'reply-wait', name: 'Reply wait', nodes: [
+    { id: 'wait', name: 'Wait for customer', kind: 'wait', waitFor: { event: 'ticket_message_received' } },
+    { id: 'review', name: 'Review new information', kind: 'human', prompt: 'Review the new message.' },
+  ], edges: [{ from: 'wait', to: 'review', outcome: 'success' }] } });
+  await f.act('saveWorkflowStartRule', { organizationId: 'personal', revision: 0, rule: { name: 'New reports', projectId: project.id, event: 'ticket_imported', bindingId: binding.id, workflowId: 'reply-wait', workflowVersion: 1, enabled: true } });
+  await f.act('syncTicketImportBinding', { id: binding.id });
+  let state = await f.snapshot();
+  const support = state.tickets.find(value => value.projectId === project.id);
+  assert.equal(state.ticketThreads.find(value => value.ticketId === support.id).messages.length, 1);
+  assert.equal(Object.values(state.sessions).find(value => value.activeTicketId === support.id).flow.status, 'waiting_event');
+  await f.restart();
+  comments = [...comments, { remoteId: '2', body: 'More details', authorRole: 'user', createdAt: '2026-09-23T13:00:00Z' }];
+  await f.act('syncTicketImportBinding', { id: binding.id });
+  state = await f.snapshot();
+  const session = Object.values(state.sessions).find(value => value.activeTicketId === support.id);
+  assert.equal(session.flow.nodeId, 'review');
+  assert.equal(session.flow.status, 'waiting_gate');
+  assert.equal(state.ticketThreads.find(value => value.ticketId === support.id).messages.length, 2);
+  await f.act('syncTicketImportBinding', { id: binding.id });
+  assert.equal(Object.values((await f.snapshot()).sessions).filter(value => value.activeTicketId === support.id).length, 1);
+});
+
 test('acceptance: a mapped HTTP source previews, imports once, and survives restart', async t => {
   const previous = process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE;
   process.env.CONVOY_TICKET_SOURCE_TOKEN_ACCEPTANCE = 'fixture-secret';

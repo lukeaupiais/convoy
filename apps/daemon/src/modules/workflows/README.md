@@ -12,6 +12,12 @@ fact is observed through the control plane; multiple matches conflict and an
 active run blocks another start. Historical embedded triggers migrate once to
 rules, then only rules are evaluated.
 
+Import and customer-message start rules are scoped to one import binding and
+may also select a work type. A wait node can resume an active run from a ticket
+event, including an update to linked development work. Workflow actions can
+create a linked development ticket in the same project. The customer ticket's
+external status remains owned by its source.
+
 External effects are requested through injected callbacks and recorded so restart
 recovery can avoid uncertain replay.
 

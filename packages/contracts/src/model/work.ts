@@ -53,6 +53,9 @@ export type TicketSourceManifest = {
     authentication:
       | { type: 'bearer'; credential: string }
       | { type: 'header'; credential: string; header: string };
+    writeAuthentication?:
+      | { type: 'bearer'; credential: string }
+      | { type: 'header'; credential: string; header: string };
   };
   operations: {
     list: {
@@ -67,6 +70,23 @@ export type TicketSourceManifest = {
       query?: Record<string, string>;
       response: { item: string };
     };
+    thread?: {
+      method: 'GET';
+      path: string;
+      response: { items: string };
+    };
+    reply?: {
+      method: 'POST';
+      path: string;
+      response: { commentId: string; deliveryStatus?: string };
+    };
+  };
+  threadMapping?: {
+    id: string;
+    body: string;
+    authorRole: string;
+    createdAt: string;
+    deliveryStatus?: string;
   };
   mapping: {
     remoteId: string;
@@ -96,7 +116,7 @@ type TicketConnectionBase = {
   organizationId: string;
   name: string;
   enabled: boolean;
-  capabilities?: { import: true; create: boolean; update: boolean };
+  capabilities?: { import: true; create: boolean; update: boolean; threadRead?: boolean; reply?: boolean };
   revision: number;
 };
 export type TicketConnection = TicketConnectionBase &
@@ -117,6 +137,8 @@ export type TicketImportBinding = {
   workType: string;
   enabled: boolean;
   revision: number;
+  pollIntervalMinutes?: number;
+  lastAttemptAt?: string;
   cursor?: string;
   runId?: string;
   lastSyncedAt?: string;
@@ -127,6 +149,30 @@ export type TicketImportMembership = {
   bindingId: string;
   ticketId: number;
   seenRunId: string;
+};
+export type TicketThread = {
+  id: string;
+  ticketId: number;
+  connectionId: string;
+  messages: Array<{
+    remoteId: string;
+    body: string;
+    authorRole: string;
+    createdAt: string;
+    deliveryStatus?: string;
+  }>;
+  revision: number;
+  syncedAt: string;
+};
+export type TicketReply = {
+  id: string;
+  ticketId: number;
+  connectionId: string;
+  body: string;
+  status: 'pending' | 'outcome-unknown' | 'queued' | 'not-posted';
+  remoteId?: string;
+  deliveryStatus?: string;
+  message?: string;
 };
 export type Ticket = {
   id: number;

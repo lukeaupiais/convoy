@@ -14,6 +14,16 @@ export function createTicketSources(adapters) {
       return value.listIssuesPage ? value.listIssuesPage(connection, limit, cursor) : { items: await value.listIssues(connection, limit) };
     },
     getIssue(connection, remoteId) { return adapter(connection).getIssue(connection, remoteId); },
+    listComments(connection, remoteId) {
+      const value = adapter(connection);
+      if (!value.listComments) throw new Error('This ticket source does not provide a thread.');
+      return value.listComments(connection, remoteId);
+    },
+    postReply(connection, remoteId, body, requestId) {
+      const value = adapter(connection);
+      if (!value.postReply) throw new Error('This ticket source does not support replies.');
+      return value.postReply(connection, remoteId, body, requestId);
+    },
     createIssue(connection, ticket) {
       const value = adapter(connection);
       if (!value.createIssue) throw new Error('This ticket source is read-only.');

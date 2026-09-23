@@ -1,4 +1,4 @@
-export type WorkflowNodeKind = 'agent' | 'human' | 'check' | 'action' | 'branch';
+export type WorkflowNodeKind = 'agent' | 'human' | 'check' | 'action' | 'branch' | 'wait';
 export type WorkflowAdvance = 'automatic' | 'manual';
 export type WorkflowPermission = 'none' | 'read' | 'read-write' | 'full';
 export type WorkflowSessionRule = {
@@ -10,6 +10,7 @@ export type WorkflowArtifact = { path: string; headings: string[] };
 export type WorkflowActionOperation =
   | 'inspect_changes'
   | 'create_ticket'
+  | 'create_development_ticket'
   | 'update_ticket'
   | 'move_ticket';
 export type WorkflowConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
@@ -39,14 +40,17 @@ export type WorkflowStep = {
   skills?: string[];
   model?: string;
   condition?: WorkflowCondition;
+  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource?: 'active_ticket' | 'linked_development'; status?: string };
   x?: number;
   y?: number;
 };
 export type WorkflowEdge = { id: string; from: string; to: string; outcome: string };
 export type WorkflowBoardTrigger = {
-  event: 'ticket_created' | 'ticket_updated' | 'ticket_moved' | 'board_placement_changed';
+  event: 'ticket_created' | 'ticket_updated' | 'ticket_moved' | 'board_placement_changed' | 'ticket_imported' | 'ticket_source_updated' | 'ticket_message_received';
   boardId?: string;
   columnId?: string;
+  bindingId?: string;
+  workType?: string;
   projectId?: string;
 };
 export type WorkflowDefinition = {
@@ -73,6 +77,8 @@ export type WorkflowStartRule = {
   event: WorkflowBoardTrigger['event'];
   boardId?: string;
   columnId?: string;
+  bindingId?: string;
+  workType?: string;
   workflowId: string;
   workflowVersion: number;
   enabled: boolean;

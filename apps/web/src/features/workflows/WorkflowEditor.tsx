@@ -51,6 +51,7 @@ const kindIcon: Record<NodeKind, typeof Zap> = {
   approval: ShieldCheck,
   action: Sparkles,
   branch: GitBranch,
+  wait: MoreHorizontal,
 };
 
 type WorkflowTemplate = 'team-delivery' | 'small-change' | 'bug-fix' | 'blank';
@@ -1000,6 +1001,27 @@ function NodeInspector({
         </label>
       )}
       {node.type === 'branch' && <BranchFields node={node} onPatch={onPatch} />}{' '}
+      {node.type === 'wait' && (
+        <details open>
+          <summary>Event to resume this workflow</summary>
+          <label>Event
+            <select value={node.waitFor?.event ?? 'ticket_message_received'} onChange={(event) => onPatch(node.id, { waitFor: { ...node.waitFor, event: event.target.value as NonNullable<GraphNode['waitFor']>['event'], ticketSource: node.waitFor?.ticketSource ?? 'active_ticket' } })}>
+              <option value="ticket_message_received">Customer message received</option>
+              <option value="ticket_source_updated">Imported ticket updated</option>
+              <option value="ticket_updated">Local ticket updated</option>
+            </select>
+          </label>
+          <label>Ticket
+            <select value={node.waitFor?.ticketSource ?? 'active_ticket'} onChange={(event) => onPatch(node.id, { waitFor: { event: node.waitFor?.event ?? 'ticket_message_received', ticketSource: event.target.value as NonNullable<GraphNode['waitFor']>['ticketSource'], status: node.waitFor?.status } })}>
+              <option value="active_ticket">Active ticket</option>
+              <option value="linked_development">Linked development ticket</option>
+            </select>
+          </label>
+          <label>Required status (optional)
+            <input value={node.waitFor?.status ?? ''} onChange={(event) => onPatch(node.id, { waitFor: { event: node.waitFor?.event ?? 'ticket_message_received', ticketSource: node.waitFor?.ticketSource ?? 'active_ticket', status: event.target.value || undefined } })} />
+          </label>
+        </details>
+      )}
       {node.type === 'action' && (
         <ActionFields
           node={node}
@@ -1054,7 +1076,7 @@ function ActionFields({
   const setOperation = (next: ActionOperation) =>
     onPatch(node.id, {
       operation: next,
-      input: Object.keys(input).length ? input : actionInputDefaults(next),
+      input: actionInputDefaults(next),
     });
   const projectField = (
     <label>
@@ -1103,6 +1125,7 @@ function ActionFields({
         >
           <option value="inspect_changes">Inspect changes</option>
           <option value="create_ticket">Create ticket</option>
+          <option value="create_development_ticket">Create linked development ticket</option>
           <option value="update_ticket">Update ticket</option>
           <option value="move_ticket">Move ticket</option>
         </select>
@@ -1116,6 +1139,12 @@ function ActionFields({
           {field('label', 'Label')}
           {field('agent', 'Agent', 'Unassigned')}
           {field('priority', 'Priority', 'Medium')}
+        </>
+      )}
+      {operation === 'create_development_ticket' && (
+        <>
+          {field('title', 'Title (defaults to support ticket)')}
+          {field('description', 'Description (defaults to support report)')}
         </>
       )}
       {operation === 'update_ticket' && (
