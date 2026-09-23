@@ -34,15 +34,17 @@ test('a mixed board creates a local ticket without calling Linear', async () => 
 
 test('an external reply has durable identity and uncertain outcomes require reconciliation', async () => {
   let sends = 0;
+  const comments = [{ remoteId: 'reply-2', body: 'A second reply', authorRole: 'dev', createdAt: '2026-09-23T12:00:00Z' }];
   const { catalog, state } = fixture({
     listIssues: async () => [{ remoteId: 'case-9', remoteKey: 'CASE-9', title: 'Question', description: 'Need help', remoteVersion: 'v1' }],
     postReply: async (_source, _remoteId, body, requestId) => {
       sends++;
       if (requestId === 'uncertain') throw new Error('transport lost');
       assert.equal(body, 'We are checking.');
+      comments.push({ remoteId: 'reply-1', body, authorRole: 'dev', createdAt: '2026-09-23T12:01:00Z', deliveryStatus: 'delivered' });
       return { remoteId: 'reply-1', deliveryStatus: 'pending' };
     },
-    listComments: async () => [{ remoteId: 'reply-2', body: 'A second reply', authorRole: 'dev', createdAt: '2026-09-23T12:00:00Z' }],
+    listComments: async () => comments,
   });
   const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
     connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_READ_TEST' }, writeAuthentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_WRITE_TEST' } },
@@ -57,6 +59,9 @@ test('an external reply has durable identity and uncertain outcomes require reco
   const send = (requestId, body) => catalog.command({ action: 'postExternalTicketReply', requestId, ticketId, connectionId: source.id, body });
   assert.equal((await send('reply-1', 'We are checking.')).remoteId, 'reply-1');
   assert.equal((await send('reply-1', 'We are checking.')).status, 'queued');
+  assert.equal(state.ticketReplies.find(value => value.id === 'reply-1').deliveryStatus, 'pending');
+  await catalog.command({ action: 'syncExternalTicketThread', ticketId, connectionId: source.id });
+  assert.equal(state.ticketReplies.find(value => value.id === 'reply-1').deliveryStatus, 'delivered');
   assert.equal(sends, 1);
   await assert.rejects(send('reply-1', 'Changed text'), /different reply/);
   await assert.rejects(send('uncertain', 'A second reply'), /transport lost/);
