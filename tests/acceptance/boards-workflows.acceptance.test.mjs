@@ -99,6 +99,58 @@ test('acceptance: a mapped HTTP source previews, imports once, and survives rest
   assert.equal(requests, 3);
 });
 
+test('acceptance: AFIO support status projects to its board while linked development stays independent', async t => {
+  const previous = process.env.CONVOY_TICKET_SOURCE_AFIO_ACCEPTANCE;
+  process.env.CONVOY_TICKET_SOURCE_AFIO_ACCEPTANCE = 'fixture-secret';
+  t.after(() => { if (previous === undefined) delete process.env.CONVOY_TICKET_SOURCE_AFIO_ACCEPTANCE; else process.env.CONVOY_TICKET_SOURCE_AFIO_ACCEPTANCE = previous; });
+  const statuses = ['open', 'in_progress', 'waiting_user', 'resolved', 'closed'];
+  const priorities = ['low', 'normal', 'high', 'urgent', 'normal'];
+  const custom = createCustomTicketSource({
+    resolver: async () => [{ address: '8.8.4.4', family: 4 }],
+    fetcher: async () => new Response(JSON.stringify({ items: statuses.map((status, index) => ({
+      id: String(index + 1), subject: `Report ${index + 1}`, description: 'Reproduce this issue',
+      status, priority: priorities[index], updatedAt: `r${index + 1}`,
+    })) }), { headers: { 'content-type': 'application/json' } }),
+  });
+  const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: createTicketSources({ 'custom-http': custom }) });
+  const supportProject = await f.act('saveProject', { name: 'AFIO Support' });
+  const developmentProject = await f.act('saveProject', { name: 'AFIO Development' });
+  const manifest = {
+    apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+    connection: { baseUrl: 'https://admin.afio.io/api/v1/integrations/', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_AFIO_ACCEPTANCE' } },
+    operations: { list: { method: 'GET', path: 'support-tickets', response: { items: '$.items' } } },
+    mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.subject', description: '$.description', status: '$.status', priority: '$.priority', remoteVersion: '$.updatedAt' },
+    values: { status: { open: 'Open', in_progress: 'In progress', waiting_user: 'Waiting on user', resolved: 'Resolved', closed: 'Closed' }, priority: { low: 'Low', normal: 'Medium', high: 'High', urgent: 'High' } },
+  };
+  const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'AFIO Support', manifest });
+  const board = await f.act('saveBoard', { name: 'AFIO Support', projectIds: [supportProject.id], grouping: { mode: 'field', field: 'status' }, columns: statuses.map((status, index) => ({ id: `column-${status.replaceAll('_', '-')}`, name: manifest.values.status[status], value: manifest.values.status[status] })) });
+  assert.deepEqual(await f.act('importExternalTickets', { connectionId: source.id, projectId: supportProject.id }), { imported: 5, updated: 0 });
+  let state = await f.snapshot();
+  const reports = state.tickets.filter(ticket => ticket.projectId === supportProject.id);
+  assert.deepEqual(reports.map(ticket => ticket.status), ['Open', 'In progress', 'Waiting on user', 'Resolved', 'Closed']);
+  assert.deepEqual(reports.map(ticket => ticket.externalLinks[0].remoteStatus), statuses);
+  assert.deepEqual(state.boards.find(value => value.id === board.id).tickets.map(value => value.columnId), board.columns.map(value => value.id));
+  const changedManifest = structuredClone(manifest);
+  changedManifest.values.priority.urgent = 'Medium';
+  await f.act('saveTicketConnection', { id: source.id, revision: source.revision, organizationId: 'personal', provider: 'custom-http', name: source.name, manifest: changedManifest });
+  assert.deepEqual(await f.act('importExternalTickets', { connectionId: source.id, projectId: supportProject.id }), { imported: 0, updated: 1 });
+  state = await f.snapshot();
+  assert.equal(state.tickets.find(ticket => ticket.id === reports[3].id).priority, 'Medium');
+  assert.equal(state.tickets.find(ticket => ticket.id === reports[3].id).externalLinks[0].remotePriority, 'urgent');
+  await assert.rejects(f.act('setBoardPlacement', { boardId: board.id, ticketId: reports[0].id, revision: reports[0].revision, placement: { columnId: board.columns[1].id } }), /owned by the external source/);
+  await assert.rejects(f.act('updateTicket', { taskId: reports[0].id, revision: reports[0].revision, patch: { status: 'Closed' } }), /owned by the external source/);
+  const development = await f.act('createDevelopmentTicket', { requestId: 'afiod-1', supportTicketId: reports[0].id, supportRevision: reports[0].revision, projectId: developmentProject.id, title: 'Fix reported issue' });
+  assert.equal((await f.act('createDevelopmentTicket', { requestId: 'afiod-1', supportTicketId: reports[0].id, supportRevision: reports[0].revision, projectId: developmentProject.id, title: 'Fix reported issue' })).id, development.id);
+  await f.act('linkDevelopmentTicket', { supportTicketId: reports[1].id, supportRevision: reports[1].revision, developmentTicketId: development.id, developmentRevision: development.revision });
+  await f.act('updateTicket', { taskId: development.id, revision: development.revision, patch: { status: 'Done' } });
+  await f.restart();
+  state = await f.snapshot();
+  assert.equal(state.ticketDevelopmentLinks.length, 2);
+  assert.equal(state.tickets.find(ticket => ticket.id === reports[0].id).status, 'Open');
+  assert.equal(state.tickets.find(ticket => ticket.id === development.id).status, 'Done');
+  assert.equal(state.ticketConnections.find(value => value.id === source.id).capabilities.update, false);
+});
+
 test('acceptance: a conversation can execute and approve a workflow without creating a ticket', async t => {
   const f = await fixture(t);
   const chat = await f.act('createConversation', { requestId: 'ticketless' });

@@ -134,6 +134,14 @@ export function createCommandAuthorization({
       await organization(command.organizationId, 'organization.manage', command, actor);
       return;
     }
+    if (command.action === 'createDevelopmentTicket' || command.action === 'linkDevelopmentTicket' || command.action === 'unlinkDevelopmentTicket') {
+      const support = await ticketId(command.supportTicketId, 'project.write', command, actor);
+      const developmentProjectId = command.action === 'createDevelopmentTicket'
+        ? command.projectId : ticket(command.developmentTicketId)?.projectId;
+      const development = await projectId(developmentProjectId, 'project.write', command, actor);
+      if (project(support.projectId)?.organizationId !== development.organizationId) denied();
+      return;
+    }
     if (command.action === 'deleteTicketConnection' || command.action === 'probeTicketConnection') {
       const existing = state.ticketConnections?.find((value) => value.id === command.id);
       if (!existing) denied();

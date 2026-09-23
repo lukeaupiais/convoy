@@ -33,7 +33,9 @@ export type ExternalTicketLink = {
   remoteTitle?: string;
   remoteDescription?: string;
   remoteStatus?: string;
-  remotePriority?: 'Low' | 'Medium' | 'High';
+  mappedStatus?: string;
+  remotePriority?: string;
+  mappedPriority?: 'Low' | 'Medium' | 'High';
   remoteVersion?: string;
   fieldOwnership?: {
     title: 'convoy' | 'external';
@@ -76,6 +78,7 @@ export type TicketSourceManifest = {
     remoteVersion: string;
     updatedAt?: string;
     url?: string;
+    urlTemplate?: string;
   };
   values?: {
     status?: Record<string, string>;
@@ -132,6 +135,12 @@ export type Ticket = {
   runnerId?: string;
   workflow?: { id: string; name: string; version: number } | null;
   executionStatus?: string;
+};
+export type TicketDevelopmentLink = {
+  id: string;
+  supportTicketId: number;
+  developmentTicketId: number;
+  createdAt: string;
 };
 export type Conversation = {
   id: string;

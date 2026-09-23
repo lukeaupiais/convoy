@@ -67,6 +67,10 @@ function columnFor(board: Board, ticket: Ticket) {
     board.tickets?.find((p) => p.ticketId === ticket.id)?.columnId ?? board.columns[0]?.id ?? ''
   );
 }
+const sourceOwnsBoardField = (board: Board, ticket: Ticket) =>
+  board.grouping.mode === 'field' &&
+  (board.grouping.field === 'status' || board.grouping.field === 'priority') &&
+  ticket.externalLinks?.some((link) => link.fieldOwnership?.[board.grouping.field as 'status' | 'priority'] === 'external');
 
 export function BoardStudio({
   state,
@@ -131,6 +135,12 @@ export function BoardStudio({
           .includes(query.toLowerCase()),
     );
   }, [tickets, board, query, projectName]);
+  const linkedSources = [...new Set(boardTickets.flatMap((ticket) => (ticket.externalLinks ?? []).map((link) => link.connectionId)))];
+  const syncSource = linkedSources.length === 1 ? connections.find((value) => value.id === linkedSources[0] && value.enabled && value.capabilities?.import) : undefined;
+  const needsSupportFollowUp = (ticket: Ticket) =>
+    ticket.origin === 'external' && !['Resolved', 'Closed'].includes(ticket.status) &&
+    (state.ticketDevelopmentLinks ?? []).some((link) => link.supportTicketId === ticket.id &&
+      state.tickets.some((development) => development.id === link.developmentTicketId && development.status === 'Done'));
   const lanes = useMemo(() => {
     const mode = board.swimlanes?.mode ?? 'none';
     if (mode === 'none') return [{ name: '', tickets: boardTickets }];
@@ -326,6 +336,16 @@ export function BoardStudio({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {syncSource && board.projectIds.length === 1 && (
+            <button className="secondary" disabled={saving} onClick={async () => {
+              setSaving(true);
+              try {
+                const response = await command('importExternalTickets', { connectionId: syncSource.id, projectId: board.projectIds[0], limit: 100 });
+                setMessage(`Synced ${syncSource.name}: ${response.result.imported} new, ${response.result.updated} updated.`);
+              } catch (error) { setMessage(`Sync failed: ${(error as Error).message}`); }
+              finally { setSaving(false); }
+            }}>Sync {syncSource.name}</button>
+          )}
         </div>
       </div>
       {editing && (
@@ -768,10 +788,13 @@ export function BoardStudio({
                 <span>CVY-{t.id}</span>
                 <strong>{t.title}</strong>
                 {t.externalPublish && <span aria-label="External creation needs review">⚠</span>}
+                {needsSupportFollowUp(t) && <span>Follow up with customer</span>}
               </button>
               {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
               <Select
                 aria-label={`Move CVY-${t.id}`}
+                disabled={Boolean(sourceOwnsBoardField(board, t))}
+                title={sourceOwnsBoardField(board, t) ? 'Change this status in the external source, then sync.' : undefined}
                 value={columnFor(board, t)}
                 onChange={(e) => void move(t, e.target.value)}
               >
@@ -829,7 +852,7 @@ export function BoardStudio({
                         {cards.map((t) => (
                           <article
                             className="custom-card"
-                            draggable
+                            draggable={!sourceOwnsBoardField(board, t)}
                             key={t.id}
                             onDragStart={(e) => e.dataTransfer.setData('text/plain', String(t.id))}
                           >
@@ -840,6 +863,7 @@ export function BoardStudio({
                               <span className="ticket-card-heading">
                                 <span className="task-id">CVY-{t.id}</span>
                                 {t.externalPublish && <span className="task-id" aria-label="External creation needs review">⚠</span>}
+                                {needsSupportFollowUp(t) && <span className="task-id">Follow up</span>}
                                 {board.cardFields.includes('priority') && (
                                   <span
                                     className={`ticket-priority priority-${t.priority.toLowerCase()}`}
@@ -886,6 +910,8 @@ export function BoardStudio({
                             <Select
                               className="card-move"
                               aria-label={`Move CVY-${t.id}`}
+                              disabled={Boolean(sourceOwnsBoardField(board, t))}
+                              title={sourceOwnsBoardField(board, t) ? 'Change this status in the external source, then sync.' : undefined}
                               value={columnFor(board, t)}
                               onChange={(e) => void move(t, e.target.value)}
                             >

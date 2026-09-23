@@ -93,7 +93,9 @@ test('custom ticket source maps a conventional JSON API into normalized tickets'
       title: 'Broken export',
       description: 'Steps',
       status: 'In progress',
+      rawStatus: 'active',
       priority: 'High',
+      rawPriority: 'urgent',
       remoteVersion: '7',
       updatedAt: '2026-09-22T10:00:00Z',
       url: 'https://tickets.example.com/tickets/41',
@@ -239,4 +241,17 @@ test('adapter rejects oversized pages and unmapped values before Work sees them'
     adapter.listIssues({ manifest: manifest() }, 1),
     /status value is not mapped/,
   );
+});
+
+test('ticket URL template builds a same-origin deep link from the remote ID', async (t) => {
+  credential(t, 'secret');
+  const source = manifest();
+  delete source.mapping.url;
+  source.mapping.urlTemplate = 'https://tickets.example.com/support-tickets/${remoteId}';
+  const adapter = createCustomTicketSource({
+    resolver,
+    fetcher: async () => new Response(JSON.stringify({ data: { items: [{ id: '41', key: 'SUP-41', subject: 'Report', version: 'r1' }] } }), { headers: { 'content-type': 'application/json' } }),
+  });
+  const result = await adapter.listIssues({ name: 'Support', manifest: source }, 10);
+  assert.equal(result[0].url, 'https://tickets.example.com/support-tickets/41');
 });

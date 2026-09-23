@@ -282,6 +282,24 @@ export type RuntimeCommandInputMap = {
     priority?: 'Low' | 'Medium' | 'High';
     customFields?: Record<string, string | number | boolean | null>;
   };
+  createDevelopmentTicket: RequestIdentity & {
+    supportTicketId: number;
+    supportRevision: number;
+    projectId: string;
+    title: string;
+    description?: string;
+  };
+  linkDevelopmentTicket: {
+    supportTicketId: number;
+    supportRevision: number;
+    developmentTicketId: number;
+    developmentRevision: number;
+  };
+  unlinkDevelopmentTicket: {
+    supportTicketId: number;
+    supportRevision: number;
+    developmentTicketId: number;
+  };
   saveTicketConnection: Partial<Pick<TicketConnection, 'id' | 'revision' | 'enabled'>> &
     Pick<TicketConnection, 'organizationId' | 'name'> &
     (
@@ -533,6 +551,9 @@ type RuntimeCommandKnownResults = {
   };
   revokeServicePrincipal: ServicePrincipal;
   createTicket: Ticket;
+  createDevelopmentTicket: Ticket;
+  linkDevelopmentTicket: import('./model/work').TicketDevelopmentLink;
+  unlinkDevelopmentTicket: { supportTicketId: number; developmentTicketId: number };
   saveTicketConnection: TicketConnection;
   deleteTicketConnection: { id: string; deleted: true };
   probeTicketConnection: {

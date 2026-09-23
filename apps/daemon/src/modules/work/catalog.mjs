@@ -6,6 +6,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
   state.projects ??= [{ id: 'agent-platform', organizationId: 'personal', name: 'Agent platform', description: '', revision: 1, placement: { mode: 'none' }, executionProfile: 'ask' }];
   for (const value of state.projects) value.organizationId ??= 'personal';
   state.tickets ??= []; state.ticketRequests ??= {};
+  state.ticketDevelopmentLinks ??= [];
   state.ticketConnections ??= [];
   for (const value of state.ticketConnections) {
     value.enabled ??= true;
@@ -17,6 +18,27 @@ export function createCatalog({ state, save, execution, externalTickets, context
   }
   const project = id => { const p = state.projects.find(p => p.id === id); if (!p) throw new Error('Project not found.'); return p; };
   const ticket = id => state.tickets.find(t => String(t.id) === String(id));
+  const supportTicket = (id, revision) => {
+    const value = ticket(id);
+    if (!value || value.origin !== 'external') throw new Error('Imported support ticket not found.');
+    if (value.revision !== revision) throw new Error('Support ticket changed in another client. Reload before linking.');
+    return value;
+  };
+  const developmentTicket = id => {
+    const value = ticket(id);
+    if (!value || value.origin === 'external') throw new Error('Development ticket not found.');
+    return value;
+  };
+  const linkDevelopment = (support, development) => {
+    if (support.id === development.id || support.projectId === development.projectId) throw new Error('Development work must be in a separate project.');
+    if (project(support.projectId).organizationId !== project(development.projectId).organizationId) throw new Error('Tickets must belong to the same organization.');
+    const existing = state.ticketDevelopmentLinks.find(value => value.supportTicketId === support.id && value.developmentTicketId === development.id);
+    if (existing) return existing;
+    const value = { id: `${support.id}:${development.id}`, supportTicketId: support.id, developmentTicketId: development.id, createdAt: new Date().toISOString() };
+    state.ticketDevelopmentLinks.push(value);
+    support.revision++;
+    return value;
+  };
   const connection = id => {
     const value = state.ticketConnections.find(item => item.id === id);
     if (!value) throw new Error('Ticket connection not found.');
@@ -142,7 +164,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
           if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw new Error('Custom ticket source manifest must be an object.');
           externalTickets?.validateConnection?.({ provider: c.provider, manifest });
         }
-        if (old && c.provider === 'custom-http' && JSON.stringify(old.manifest) !== JSON.stringify(manifest) && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) throw new Error('A connection with linked tickets cannot replace its source manifest. Create another connection.');
+        if (old && c.provider === 'custom-http' && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) {
+          const identity = value => ({ ...value, values: undefined, mapping: { ...value.mapping, urlTemplate: undefined } });
+          if (JSON.stringify(identity(old.manifest)) !== JSON.stringify(identity(manifest))) throw new Error('A connection with linked tickets can change value mappings only. Create another connection for a different source.');
+        }
         if (c.enabled !== undefined && typeof c.enabled !== 'boolean') throw new Error('Connection enabled must be a boolean.');
         const providerFields = c.provider === 'linear' ? { teamId: c.teamId, credentialEnv: c.credentialEnv } : { manifest };
         const capabilities = { import: true, create: c.provider === 'linear', update: c.provider === 'linear' };
@@ -191,6 +216,47 @@ export function createCatalog({ state, save, execution, externalTickets, context
         boards.validateNewTicket(value);
         state.tickets.push(value); state.ticketRequests[request] = id; boards.ensureTicket(value); await save();
         return source ? publish(value, source, request) : value;
+      }
+      if (c.action === 'createDevelopmentTicket') {
+        const request = text(c.requestId, 'Request ID', 100);
+        if (!/^[\w-]+$/.test(request)) throw new Error('Invalid request ID.');
+        const existingId = state.ticketRequests[request];
+        if (existingId) {
+          const existing = developmentTicket(existingId);
+          if (!state.ticketDevelopmentLinks.some(value => value.supportTicketId === c.supportTicketId && value.developmentTicketId === existing.id)) throw new Error('Request ID belongs to a different ticket.');
+          return existing;
+        }
+        const support = supportTicket(c.supportTicketId, c.supportRevision);
+        const owner = project(c.projectId);
+        if (owner.organizationId !== project(support.projectId).organizationId || owner.id === support.projectId) throw new Error('Choose a development project in the same organization.');
+        const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...execution.reservedTicketIds()) + 1;
+        if (id > 9999999999) throw new Error('Ticket ID range exhausted.');
+        const value = { id, projectId: owner.id, ...fields({ title: c.title, description: c.description ?? '', status: 'Backlog' }), revision: 1, origin: 'convoy', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+        boards.validateNewTicket(value);
+        state.tickets.push(value);
+        state.ticketRequests[request] = id;
+        boards.ensureTicket(value);
+        linkDevelopment(support, value);
+        await save();
+        return value;
+      }
+      if (c.action === 'linkDevelopmentTicket') {
+        const support = supportTicket(c.supportTicketId, c.supportRevision);
+        const development = developmentTicket(c.developmentTicketId);
+        if (development.revision !== c.developmentRevision) throw new Error('Development ticket changed in another client. Reload before linking.');
+        const value = linkDevelopment(support, development);
+        await save();
+        return value;
+      }
+      if (c.action === 'unlinkDevelopmentTicket') {
+        const support = supportTicket(c.supportTicketId, c.supportRevision);
+        const development = developmentTicket(c.developmentTicketId);
+        const previous = state.ticketDevelopmentLinks.length;
+        state.ticketDevelopmentLinks = state.ticketDevelopmentLinks.filter(value => value.supportTicketId !== support.id || value.developmentTicketId !== development.id);
+        if (state.ticketDevelopmentLinks.length === previous) throw new Error('Development link not found.');
+        support.revision++;
+        await save();
+        return { supportTicketId: support.id, developmentTicketId: development.id };
       }
       if (c.action === 'publishTicket') {
         const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
@@ -245,20 +311,22 @@ export function createCatalog({ state, save, execution, externalTickets, context
         for (const normalized of remote) {
           const existing = state.tickets.find(t => t.externalLinks?.some(value => value.connectionId === source.id && value.remoteId === normalized.remoteId));
           const ownership = normalized.fieldOwnership ?? { title: 'external', description: 'external' };
-          const remoteLink = { ...link(source, normalized), remoteTitle: normalized.title, remoteDescription: normalized.description ?? '', ...(normalized.status !== undefined ? { remoteStatus: normalized.status } : {}), ...(normalized.priority !== undefined ? { remotePriority: normalized.priority } : {}), fieldOwnership: ownership };
+          const remoteLink = { ...link(source, normalized), remoteTitle: normalized.title, remoteDescription: normalized.description ?? '', ...(normalized.status !== undefined ? { remoteStatus: normalized.rawStatus ?? normalized.status, mappedStatus: normalized.status } : {}), ...(normalized.priority !== undefined ? { remotePriority: normalized.rawPriority ?? normalized.priority, mappedPriority: normalized.priority } : {}), fieldOwnership: ownership };
           if (existing) {
             const previous = existing.externalLinks.find(value => value.connectionId === source.id && value.remoteId === normalized.remoteId);
             remoteLink.fieldOwnership = previous.fieldOwnership ?? remoteLink.fieldOwnership;
             const titleChanged = previous.remoteTitle !== normalized.title;
             const descriptionChanged = previous.remoteDescription !== (normalized.description ?? '');
-            const statusChanged = normalized.status !== undefined && previous.remoteStatus !== undefined && previous.remoteStatus !== normalized.status;
-            const priorityChanged = normalized.priority !== undefined && previous.remotePriority !== undefined && previous.remotePriority !== normalized.priority;
+            const previousStatus = previous.mappedStatus ?? previous.remoteStatus;
+            const previousPriority = previous.mappedPriority ?? previous.remotePriority;
+            const statusChanged = normalized.status !== undefined && previousStatus !== undefined && previousStatus !== normalized.status;
+            const priorityChanged = normalized.priority !== undefined && previousPriority !== undefined && previousPriority !== normalized.priority;
             const changed = titleChanged || descriptionChanged || statusChanged || priorityChanged || previous.remoteVersion !== normalized.remoteVersion;
             const ownedByExternal = field => (remoteLink.fieldOwnership[field] ?? 'external') === 'external';
             const conflict = titleChanged && ownedByExternal('title') && existing.title !== previous.remoteTitle
               || descriptionChanged && ownedByExternal('description') && existing.description !== previous.remoteDescription
-              || statusChanged && ownedByExternal('status') && previous.remoteStatus !== undefined && existing.status !== previous.remoteStatus
-              || priorityChanged && ownedByExternal('priority') && previous.remotePriority !== undefined && existing.priority !== previous.remotePriority;
+              || statusChanged && ownedByExternal('status') && previousStatus !== undefined && existing.status !== previousStatus
+              || priorityChanged && ownedByExternal('priority') && previousPriority !== undefined && existing.priority !== previousPriority;
             const next = { ...existing, externalLinks: existing.externalLinks.map(value => value === previous ? remoteLink : value) };
             if (changed && conflict) {
               remoteLink.syncState = 'error'; remoteLink.message = 'Local and external content changed. Review this ticket.';
@@ -294,8 +362,8 @@ export function createCatalog({ state, save, execution, externalTickets, context
           const patch = {};
           if ((ownership.title ?? 'external') === 'external' && externalLink.remoteTitle !== undefined) patch.title = externalLink.remoteTitle;
           if ((ownership.description ?? 'external') === 'external' && externalLink.remoteDescription !== undefined) patch.description = externalLink.remoteDescription;
-          if ((ownership.status ?? 'external') === 'external' && externalLink.remoteStatus !== undefined) patch.status = externalLink.remoteStatus;
-          if ((ownership.priority ?? 'external') === 'external' && externalLink.remotePriority !== undefined) patch.priority = externalLink.remotePriority;
+          if ((ownership.status ?? 'external') === 'external' && (externalLink.mappedStatus ?? externalLink.remoteStatus) !== undefined) patch.status = externalLink.mappedStatus ?? externalLink.remoteStatus;
+          if ((ownership.priority ?? 'external') === 'external' && (externalLink.mappedPriority ?? externalLink.remotePriority) !== undefined) patch.priority = externalLink.mappedPriority ?? externalLink.remotePriority;
           if (!Object.keys(patch).length) throw new Error('No observed external values are available to apply. Import the source again.');
           boards.validateTicketUpdate(t, patch);
           Object.assign(t, patch, { revision: t.revision + 1 });
@@ -313,6 +381,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const t = ticket(c.taskId); if (!t) throw new Error('Ticket not found.'); if (c.revision !== t.revision) throw new Error('Ticket changed in another client. Reload before saving.');
         const patch = c.patch ?? {};
         if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !['title', 'description', 'status', 'label', 'agent', 'priority', 'customFields'].includes(k))) throw new Error('Unsupported ticket fields. Use placement and workflow commands for execution settings.');
+        for (const field of ['status', 'priority']) if (patch[field] !== undefined && patch[field] !== t[field] && t.externalLinks?.some(value => value.fieldOwnership?.[field] === 'external')) throw new Error(`This ticket's ${field} is owned by the external source.`);
         if (Object.keys(patch).some(k => !['status', 'priority', 'label'].includes(k))) assertEditable(t);
         const contentChanged = ['title', 'description'].some(key => patch[key] !== undefined && patch[key] !== t[key]);
         if (contentChanged && t.externalLinks?.some(value => value.fieldOwnership?.title === 'external' && patch.title !== undefined && patch.title !== t.title || value.fieldOwnership?.description === 'external' && patch.description !== undefined && patch.description !== t.description)) throw new Error('This content is owned by the external source. Edit it there, then import again.');
@@ -373,6 +442,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate', 'setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) return boards.command(c);
       throw new Error('Unknown catalog command.');
     },
-    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ...boards.snapshot() }; },
+    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ...boards.snapshot() }; },
   };
 }

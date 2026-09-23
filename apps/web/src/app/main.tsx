@@ -590,6 +590,7 @@ function App() {
                   ticket={currentTicket}
                   runLabel={runLabel}
                   onRun={() => setTicketView('execution')}
+                  onSelectTicket={(id) => { setSelected(id); setTicketView('details'); }}
                 />
               )}
               {ticketView === 'execution' && liveRuntime && currentTicket && (

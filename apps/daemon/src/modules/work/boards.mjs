@@ -353,6 +353,7 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
         const normalized = normalizePlacement(b, c.placement); state.boardPlacements[String(t.id)] ??= {};
         const column = b.columns.find(value => value.id === normalized.columnId);
         const field = b.grouping?.mode === 'field' ? b.grouping.field : null;
+        if ((field === 'status' || field === 'priority') && t.externalLinks?.some(value => value.fieldOwnership?.[field] === 'external')) throw new Error(`This ticket's ${field} is owned by the external source. Change it there and sync again.`);
         const fieldValue = field ? column.value ?? column.name : null;
         const previousFieldValue = field?.startsWith('custom.') ? t.customFields?.[field.slice(7)] : field ? t[field] : undefined;
         if (field === 'status' && (typeof fieldValue !== 'string' || !fieldValue.trim() || fieldValue.length > 80)) throw new Error('Shared status grouping needs a non-empty status value.');

@@ -112,6 +112,13 @@ export const runtimeCommandContracts = {
     ['requestId', 'projectId', 'title'],
     ['description', 'status', 'label', 'agent', 'priority', 'customFields', 'boardId', 'destination'],
   ),
+  createDevelopmentTicket: contract(
+    ['requestId', 'supportTicketId', 'supportRevision', 'projectId', 'title'], ['description'],
+  ),
+  linkDevelopmentTicket: contract(
+    ['supportTicketId', 'supportRevision', 'developmentTicketId', 'developmentRevision'],
+  ),
+  unlinkDevelopmentTicket: contract(['supportTicketId', 'supportRevision', 'developmentTicketId']),
   saveTicketConnection: contract(
     ['organizationId', 'name', 'provider'],
     ['id', 'revision', 'enabled', 'teamId', 'credentialEnv', 'manifest', 'capabilities'],

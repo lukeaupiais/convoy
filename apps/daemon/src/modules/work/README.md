@@ -17,3 +17,8 @@ Work also owns ticket origin, external issue links, board creation destinations,
 and sync conflict decisions. An injected adapter speaks the external issue API;
 Work persists outbound intent before asking it to create an issue. Board
 placement alone never publishes a ticket.
+
+Imported support tickets may link to local development tickets in another project
+in the same organization. One development ticket may address several support
+reports. The relationship is durable and independent of either board placement;
+finishing development does not change a support ticket's external-owned status.
