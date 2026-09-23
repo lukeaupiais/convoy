@@ -205,6 +205,12 @@ export function createCatalog({ state, save, execution, externalTickets, context
       revision: (previous?.revision ?? 0) + 1, syncedAt: new Date().toISOString() };
     if (previous) Object.assign(previous, record);
     else state.ticketThreads.push(record);
+    for (const reply of state.ticketReplies) {
+      if (reply.ticketId !== t.id || reply.connectionId !== source.id || reply.status !== 'queued' || !reply.remoteId) continue;
+      const message = messages.find(value => value.remoteId === reply.remoteId && value.body === reply.body &&
+        !['user', 'customer'].includes(value.authorRole.toLowerCase()));
+      if (message?.deliveryStatus) reply.deliveryStatus = message.deliveryStatus;
+    }
     if (previous) for (const message of messages) {
       if (seen.has(message.remoteId) || !['user', 'customer'].includes(message.authorRole.toLowerCase())) continue;
       const key = `${id}:ticket_message_received:${message.remoteId}`;
