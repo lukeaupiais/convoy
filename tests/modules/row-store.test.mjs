@@ -18,3 +18,33 @@ test('persistence failure stops later writes and reports fatal loss once', async
   assert.equal(commits, 2);
   assert.equal(failures, 1);
 });
+
+test('versioned library items persist under distinct organization and revision keys', async () => {
+  const rows = new Map();
+  const driver = {
+    load: async () => [...rows.values()],
+    commit: async (changed, removed) => {
+      for (const row of removed) rows.delete(`${row.bucket}:${row.key}`);
+      for (const row of changed) rows.set(`${row.bucket}:${row.key}`, row);
+    },
+    close: async () => {},
+  };
+  const fallback = { skills: [], capabilityProfiles: [], extensions: [] };
+  const store = await createRowStore(driver, fallback);
+  store.data.skills.push(
+    { organizationId: 'personal', name: 'support', version: 1 },
+    { organizationId: 'personal', name: 'support', version: 2 },
+    { organizationId: 'other', name: 'support', version: 1 },
+  );
+  store.data.capabilityProfiles.push(
+    { organizationId: 'personal', id: 'support', version: 1 },
+    { organizationId: 'personal', id: 'support', version: 2 },
+  );
+  store.data.extensions.push(
+    { organizationId: 'personal', id: 'support', revision: 'v1' },
+    { organizationId: 'personal', id: 'support', revision: 'v2' },
+  );
+  await store.save();
+  const reopened = await createRowStore(driver, fallback);
+  assert.deepEqual(reopened.data, store.data);
+});
