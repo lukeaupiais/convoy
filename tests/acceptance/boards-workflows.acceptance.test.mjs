@@ -140,9 +140,10 @@ test('acceptance: imported support starts once and approved escalation starts li
 test('acceptance: a new customer message resumes the matching support wait after a restart', async t => {
   const issue = { remoteId: 'report-3', remoteKey: 'R-3', title: 'Request', description: 'Initial report', remoteVersion: '1' };
   let comments = [{ remoteId: '1', body: 'Initial report', authorRole: 'user', createdAt: '2026-09-23T12:00:00Z' }];
+  let threadUnavailable = true;
   const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: {
     listIssuesPage: async () => ({ items: [issue] }),
-    listComments: async () => comments,
+    listComments: async () => { if (threadUnavailable) throw new Error('thread unavailable'); return comments; },
   } });
   const project = await f.act('saveProject', { name: 'Service project' });
   const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
@@ -159,6 +160,10 @@ test('acceptance: a new customer message resumes the matching support wait after
     { id: 'review', name: 'Review new information', kind: 'human', prompt: 'Review the new message.' },
   ], edges: [{ from: 'wait', to: 'review', outcome: 'success' }] } });
   await f.act('saveWorkflowStartRule', { organizationId: 'personal', revision: 0, rule: { name: 'New reports', projectId: project.id, event: 'ticket_imported', bindingId: binding.id, workflowId: 'reply-wait', workflowVersion: 1, enabled: true } });
+  await assert.rejects(f.act('syncTicketImportBinding', { id: binding.id }), /thread unavailable/);
+  await new Promise(resolve => setTimeout(resolve, 3200));
+  assert.equal(Object.values((await f.snapshot()).sessions ?? {}).some(value => value.flow?.workflowId === 'reply-wait'), false);
+  threadUnavailable = false;
   await f.act('syncTicketImportBinding', { id: binding.id });
   let state = await f.snapshot();
   const support = state.tickets.find(value => value.projectId === project.id);

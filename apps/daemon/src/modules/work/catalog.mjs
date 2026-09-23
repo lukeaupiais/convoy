@@ -182,7 +182,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
       const key = `${binding.id}:${change.next.id}:${event}:${remoteLink.remoteVersion}`;
       if (!state.ticketImportFacts.some(value => value.key === key)) state.ticketImportFacts.push({
         id: key, key, event, projectId: binding.projectId, bindingId: binding.id,
-        ticketId: change.next.id, status: 'pending',
+        ticketId: change.next.id, status: source.capabilities?.threadRead ? 'awaiting_thread' : 'pending',
       });
     }
     await save(); return { imported, updated };
@@ -214,6 +214,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
         ticketId: t.id, messageId: message.remoteId, status: 'pending',
       });
     }
+    for (const fact of state.ticketImportFacts)
+      if (fact.ticketId === t.id && fact.status === 'awaiting_thread' && fact.bindingId &&
+          state.ticketImportBindings.some(value => value.id === fact.bindingId && value.connectionId === source.id))
+        fact.status = 'pending';
     await save();
     return record;
   }
