@@ -86,6 +86,74 @@ test('import preserves remote identity and does not duplicate on repeat', async 
   assert.equal(state.tickets[0].externalLinks[0].remoteId, 'remote-3');
 });
 
+test('one project uses source membership and work type to feed separate boards', async () => {
+  const page = [{ id: 'remote-10', identifier: 'SUP-10', url: 'https://linear.app/issue/SUP-10', title: 'Customer report' }];
+  const { catalog, state } = fixture({ listIssuesPage: async () => ({ items: page }) });
+  const { source } = await setup(catalog);
+  const binding = await catalog.command({ action: 'saveTicketImportBinding', connectionId: source.id, projectId: 'alpha', name: 'Support queue', workType: 'support' });
+  const support = await catalog.command({ action: 'saveBoard', name: 'Support', projectIds: ['alpha'], columns: [{ id: 'open', name: 'Open' }], filters: { workTypes: ['support'], importBindingIds: [binding.id] } });
+  const triage = await catalog.command({ action: 'saveBoard', name: 'Triage', projectIds: ['alpha'], columns: [{ id: 'inbox', name: 'Inbox' }], filters: { workTypes: ['support'] } });
+  const development = await catalog.command({ action: 'saveBoard', name: 'Development', projectIds: ['alpha'], columns: [{ id: 'backlog', name: 'Backlog' }], filters: { workTypes: ['development'] }, creationWorkType: 'development' });
+  assert.equal(catalog.boards.visibleTickets(support).length, 0);
+  assert.deepEqual(await catalog.command({ action: 'syncTicketImportBinding', id: binding.id }), { imported: 1, updated: 0, complete: true, pages: 1 });
+  const imported = state.tickets[0];
+  assert.equal(imported.workType, 'support');
+  assert.equal(catalog.boards.visibleTickets(support).length, 1);
+  assert.equal(catalog.boards.visibleTickets(triage)[0].id, imported.id);
+  assert.equal(catalog.boards.visibleTickets(development).length, 0);
+  const dev = await catalog.command({ action: 'createDevelopmentTicket', requestId: 'dev-10', supportTicketId: imported.id, supportRevision: imported.revision, projectId: 'alpha', title: 'Fix report' });
+  assert.equal(dev.workType, 'development');
+  assert.equal(catalog.boards.visibleTickets(development).length, 1);
+  assert.equal(catalog.boards.visibleTickets(support).length, 1);
+  assert.equal(state.ticketDevelopmentLinks[0].supportTicketId, imported.id);
+  assert.deepEqual(await catalog.command({ action: 'syncTicketImportBinding', id: binding.id }), { imported: 0, updated: 0, complete: true, pages: 1 });
+  assert.equal(state.tickets.length, 2);
+});
+
+test('paged binding resumes after failure and prunes membership only after a complete scan', async () => {
+  let fail = true;
+  const issue = (id) => ({ id, identifier: id, url: `https://linear.app/issue/${id}`, title: id });
+  const pages = { start: { items: [issue('SUP-1')], nextCursor: 'next' }, next: { items: [issue('SUP-2')] } };
+  const { catalog, state } = fixture({ listIssuesPage: async (_source, _limit, cursor) => {
+    if (cursor === 'next' && fail) throw new Error('temporary outage');
+    return pages[cursor ?? 'start'];
+  } });
+  const { source } = await setup(catalog);
+  const binding = await catalog.command({ action: 'saveTicketImportBinding', connectionId: source.id, projectId: 'alpha', name: 'Queue', workType: 'support' });
+  await assert.rejects(catalog.command({ action: 'syncTicketImportBinding', id: binding.id }), /temporary outage/);
+  assert.equal(state.ticketImportBindings[0].cursor, 'next');
+  assert.equal(state.ticketImportMemberships.length, 1);
+  fail = false;
+  assert.deepEqual(await catalog.command({ action: 'syncTicketImportBinding', id: binding.id }), { imported: 1, updated: 0, complete: true, pages: 1 });
+  assert.equal(state.ticketImportMemberships.length, 2);
+  pages.start = { items: [issue('SUP-2')] };
+  await catalog.command({ action: 'syncTicketImportBinding', id: binding.id });
+  assert.equal(state.ticketImportMemberships.length, 1);
+  assert.equal(state.tickets.length, 2);
+});
+
+test('binding refuses to move an already linked remote issue to another project', async () => {
+  const item = { id: 'remote-20', identifier: 'SUP-20', url: 'https://linear.app/issue/SUP-20', title: 'Report' };
+  const { catalog, state } = fixture({ listIssues: async () => [item] });
+  const { source } = await setup(catalog);
+  await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  state.projects.push({ id: 'beta', organizationId: 'org', name: 'Beta', revision: 1 });
+  await assert.rejects(catalog.command({ action: 'saveTicketImportBinding', connectionId: source.id, projectId: 'beta', name: 'Wrong', workType: 'support' }), /another project/);
+  assert.equal(state.tickets[0].projectId, 'alpha');
+});
+
+test('import binding respects a source-filtered board WIP limit atomically', async () => {
+  const issue = (id) => ({ id, identifier: id, url: `https://linear.app/issue/${id}`, title: id });
+  const { catalog, state } = fixture({ listIssuesPage: async () => ({ items: [issue('SUP-1'), issue('SUP-2')] }) });
+  const { source } = await setup(catalog);
+  const binding = await catalog.command({ action: 'saveTicketImportBinding', connectionId: source.id, projectId: 'alpha', name: 'Queue', workType: 'support' });
+  await catalog.command({ action: 'saveBoard', name: 'Capped queue', projectIds: ['alpha'], filters: { importBindingIds: [binding.id] }, columns: [{ id: 'open', name: 'Open', wipLimit: 1 }] });
+  await assert.rejects(catalog.command({ action: 'syncTicketImportBinding', id: binding.id }), /WIP limit/);
+  assert.equal(state.tickets.length, 0);
+  assert.equal(state.ticketImportMemberships.length, 0);
+  assert.equal(state.ticketImportBindings[0].cursor, undefined);
+});
+
 test('Convoy-owned edits update Linear while imported content remains remote-owned', async () => {
   const updates = [];
   const item = { id: 'remote-4', identifier: 'LIN-4', url: 'https://linear.app/acme/issue/LIN-4', title: 'Remote', description: 'Details' };

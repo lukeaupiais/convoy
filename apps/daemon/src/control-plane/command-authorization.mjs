@@ -134,6 +134,14 @@ export function createCommandAuthorization({
       await organization(command.organizationId, 'organization.manage', command, actor);
       return;
     }
+    if (command.action === 'createDevelopmentTicket' || command.action === 'linkDevelopmentTicket' || command.action === 'unlinkDevelopmentTicket') {
+      const support = await ticketId(command.supportTicketId, 'project.write', command, actor);
+      const developmentProjectId = command.action === 'createDevelopmentTicket'
+        ? command.projectId : ticket(command.developmentTicketId)?.projectId;
+      const development = await projectId(developmentProjectId, 'project.write', command, actor);
+      if (project(support.projectId)?.organizationId !== development.organizationId) denied();
+      return;
+    }
     if (command.action === 'deleteTicketConnection' || command.action === 'probeTicketConnection') {
       const existing = state.ticketConnections?.find((value) => value.id === command.id);
       if (!existing) denied();
@@ -159,6 +167,17 @@ export function createCommandAuthorization({
       const value = await projectId(command.projectId, 'project.write', command, actor);
       const connection = state.ticketConnections?.find((item) => item.id === command.connectionId);
       if (!connection || value.organizationId !== connection.organizationId) denied();
+      return;
+    }
+    if (command.action === 'saveTicketImportBinding' || command.action === 'syncTicketImportBinding') {
+      const existing = state.ticketImportBindings?.find((value) => value.id === command.id);
+      if (command.action === 'syncTicketImportBinding' && !existing) denied();
+      if (command.id && !existing) denied();
+      const value = await projectId(existing?.projectId ?? command.projectId, 'project.write', command, actor);
+      const connection = state.ticketConnections?.find((item) => item.id === (existing?.connectionId ?? command.connectionId));
+      if (!connection || connection.organizationId !== value.organizationId) denied();
+      if (existing && command.action === 'saveTicketImportBinding' &&
+        (command.projectId !== existing.projectId || command.connectionId !== existing.connectionId)) denied();
       return;
     }
     if (projectWrite.has(command.action)) {

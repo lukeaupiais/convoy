@@ -3,6 +3,9 @@ import { createCatalog } from './catalog.mjs';
 const commands = [
   'saveProject',
   'createTicket',
+  'createDevelopmentTicket',
+  'linkDevelopmentTicket',
+  'unlinkDevelopmentTicket',
   'saveTicketConnection',
   'deleteTicketConnection',
   'probeTicketConnection',
@@ -11,6 +14,8 @@ const commands = [
   'reconcileTicketPublish',
   'syncExternalTicket',
   'importExternalTickets',
+  'saveTicketImportBinding',
+  'syncTicketImportBinding',
   'updateTicket',
   'attachTicketFile',
   'removeTicketFile',
@@ -47,9 +52,16 @@ export function createWork({ afterCommand = async (_command, result) => result, 
       return {
         projects: value.projects.filter((project) => projectIds.has(project.id)),
         tickets: value.tickets.filter((ticket) => projectIds.has(ticket.projectId)),
+        ticketDevelopmentLinks: value.ticketDevelopmentLinks.filter((link) =>
+          value.tickets.some((ticket) => ticket.id === link.supportTicketId && projectIds.has(ticket.projectId)) &&
+          value.tickets.some((ticket) => ticket.id === link.developmentTicketId && projectIds.has(ticket.projectId)),
+        ),
         ticketConnections: value.ticketConnections.filter((connection) =>
           value.projects.some((project) => projectIds.has(project.id) && project.organizationId === connection.organizationId),
         ),
+        ticketImportBindings: value.ticketImportBindings.filter((binding) => projectIds.has(binding.projectId)),
+        ticketImportMemberships: value.ticketImportMemberships.filter((membership) =>
+          value.ticketImportBindings.some((binding) => binding.id === membership.bindingId && projectIds.has(binding.projectId))),
         boards: value.boards
           .filter(
             (board) =>

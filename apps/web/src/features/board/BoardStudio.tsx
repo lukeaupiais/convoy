@@ -67,6 +67,10 @@ function columnFor(board: Board, ticket: Ticket) {
     board.tickets?.find((p) => p.ticketId === ticket.id)?.columnId ?? board.columns[0]?.id ?? ''
   );
 }
+const sourceOwnsBoardField = (board: Board, ticket: Ticket) =>
+  board.grouping.mode === 'field' &&
+  (board.grouping.field === 'status' || board.grouping.field === 'priority') &&
+  ticket.externalLinks?.some((link) => link.fieldOwnership?.[board.grouping.field as 'status' | 'priority'] === 'external');
 
 export function BoardStudio({
   state,
@@ -122,6 +126,9 @@ export function BoardStudio({
         ids.has(t.id) &&
         (!f.query || `${t.title} ${t.description}`.toLowerCase().includes(f.query.toLowerCase())) &&
         (!f.projectIds?.length || f.projectIds.includes(t.projectId)) &&
+        (!f.origins?.length || f.origins.includes(t.origin ?? 'convoy')) &&
+        (!f.workTypes?.length || f.workTypes.includes(t.workType ?? 'task')) &&
+        (!f.importBindingIds?.length || (state.ticketImportMemberships ?? []).some((m) => m.ticketId === t.id && f.importBindingIds?.includes(m.bindingId))) &&
         (!f.statuses?.length || f.statuses.includes(t.status)) &&
         (!f.labels?.length || f.labels.includes(t.label)) &&
         (!f.agents?.length || f.agents.includes(t.agent)) &&
@@ -130,7 +137,14 @@ export function BoardStudio({
           .toLowerCase()
           .includes(query.toLowerCase()),
     );
-  }, [tickets, board, query, projectName]);
+  }, [tickets, board, query, projectName, state.ticketImportMemberships]);
+  const syncBinding = board.filters.importBindingIds?.length === 1
+    ? state.ticketImportBindings?.find((value) => value.id === board.filters.importBindingIds?.[0] && value.enabled) : undefined;
+  const syncSource = connections.find((value) => value.id === syncBinding?.connectionId && value.enabled);
+  const needsSupportFollowUp = (ticket: Ticket) =>
+    (ticket.workType === 'support' || ticket.workType === undefined && ticket.origin === 'external') && !['Resolved', 'Closed'].includes(ticket.status) &&
+    (state.ticketDevelopmentLinks ?? []).some((link) => link.supportTicketId === ticket.id &&
+      state.tickets.some((development) => development.id === link.developmentTicketId && development.status === 'Done'));
   const lanes = useMemo(() => {
     const mode = board.swimlanes?.mode ?? 'none';
     if (mode === 'none') return [{ name: '', tickets: boardTickets }];
@@ -326,6 +340,16 @@ export function BoardStudio({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {syncSource && syncBinding && (
+            <button className="secondary" disabled={saving} onClick={async () => {
+              setSaving(true);
+              try {
+                const response = await command('syncTicketImportBinding', { id: syncBinding.id, limit: 100 });
+                setMessage(`Synced ${syncSource.name}: ${response.result.imported} new, ${response.result.updated} updated${response.result.complete ? '.' : '; more pages remain.'}`);
+              } catch (error) { setMessage(`Sync failed: ${(error as Error).message}`); }
+              finally { setSaving(false); }
+            }}>Sync {syncSource.name}</button>
+          )}
         </div>
       </div>
       {editing && (
@@ -346,6 +370,14 @@ export function BoardStudio({
           <div className="board-settings-grid">
             <fieldset className="board-integrations">
               <legend>Integrations</legend>
+              <label>
+                Imported ticket set
+                <Select value={draft.filters.importBindingIds?.[0] ?? ''} onChange={(event) => patch({ filters: { ...draft.filters, importBindingIds: event.target.value ? [event.target.value] : undefined } })}>
+                  <option value="">Any source</option>
+                  {(state.ticketImportBindings ?? []).filter((value) => draft.projectIds.includes(value.projectId)).map((value) =>
+                    <option key={value.id} value={value.id}>{value.name}</option>)}
+                </Select>
+              </label>
               <label>
                 New tickets on this board
                 <Select
@@ -385,17 +417,6 @@ export function BoardStudio({
                       setSaving(false);
                     }
                   }}>Preview</button>
-                  <button className="secondary" type="button" disabled={saving || !value.enabled} onClick={async () => {
-                    setSaving(true);
-                    try {
-                      const response = await command('importExternalTickets', { connectionId: value.id, projectId, limit: 50 });
-                      setMessage(`Imported ${response.result.imported} and updated ${response.result.updated} tickets.`);
-                    } catch (error) {
-                      setMessage(`Import failed: ${(error as Error).message}`);
-                    } finally {
-                      setSaving(false);
-                    }
-                  }}>Import tickets</button>
                 </div>
               ))}
               <button className="secondary" type="button" onClick={onManageIntegrations}>Manage connections</button>
@@ -475,6 +496,26 @@ export function BoardStudio({
                 />
               </label>
             )}
+            <label>
+              Ticket source
+              <Select value={draft.filters.origins?.length === 1 ? draft.filters.origins[0] : ''}
+                onChange={(event) => patch({ filters: { ...draft.filters, origins: event.target.value
+                  ? [event.target.value as NonNullable<Ticket['origin']>] : undefined } })}>
+                <option value="">All tickets</option>
+                <option value="external">Imported tickets</option>
+                <option value="convoy">Convoy tickets</option>
+                <option value="browser-import">Browser imports</option>
+                <option value="session-migration">Session migrations</option>
+              </Select>
+            </label>
+            <label>
+              Work type
+              <input value={(draft.filters.workTypes ?? []).join(', ')} placeholder="support, development" onChange={(event) => patch({ filters: { ...draft.filters, workTypes: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) } })} />
+            </label>
+            <label>
+              New ticket work type
+              <input value={draft.creationWorkType ?? 'task'} onChange={(event) => patch({ creationWorkType: event.target.value })} />
+            </label>
             <label>
               Search filter
               <input
@@ -768,10 +809,13 @@ export function BoardStudio({
                 <span>CVY-{t.id}</span>
                 <strong>{t.title}</strong>
                 {t.externalPublish && <span aria-label="External creation needs review">⚠</span>}
+                {needsSupportFollowUp(t) && <span>Follow up with customer</span>}
               </button>
               {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
               <Select
                 aria-label={`Move CVY-${t.id}`}
+                disabled={Boolean(sourceOwnsBoardField(board, t))}
+                title={sourceOwnsBoardField(board, t) ? 'Change this status in the external source, then sync.' : undefined}
                 value={columnFor(board, t)}
                 onChange={(e) => void move(t, e.target.value)}
               >
@@ -818,18 +862,19 @@ export function BoardStudio({
                           {cards.length}
                           {column.wipLimit ? ` / ${column.wipLimit}` : ''}
                         </span>
-                        <button
-                          aria-label={`Add ticket to ${column.name}`}
-                          onClick={() => onNewTicket(board.id, column.id)}
-                        >
-                          <Plus size={15} />
-                        </button>
+                        {(!board.filters.origins?.length || board.filters.origins.includes('convoy')) && !board.filters.importBindingIds?.length &&
+                          <button
+                            aria-label={`Add ticket to ${column.name}`}
+                            onClick={() => onNewTicket(board.id, column.id)}
+                          >
+                            <Plus size={15} />
+                          </button>}
                       </header>
                       <div className="custom-column-cards">
                         {cards.map((t) => (
                           <article
                             className="custom-card"
-                            draggable
+                            draggable={!sourceOwnsBoardField(board, t)}
                             key={t.id}
                             onDragStart={(e) => e.dataTransfer.setData('text/plain', String(t.id))}
                           >
@@ -840,6 +885,7 @@ export function BoardStudio({
                               <span className="ticket-card-heading">
                                 <span className="task-id">CVY-{t.id}</span>
                                 {t.externalPublish && <span className="task-id" aria-label="External creation needs review">⚠</span>}
+                                {needsSupportFollowUp(t) && <span className="task-id">Follow up</span>}
                                 {board.cardFields.includes('priority') && (
                                   <span
                                     className={`ticket-priority priority-${t.priority.toLowerCase()}`}
@@ -886,6 +932,8 @@ export function BoardStudio({
                             <Select
                               className="card-move"
                               aria-label={`Move CVY-${t.id}`}
+                              disabled={Boolean(sourceOwnsBoardField(board, t))}
+                              title={sourceOwnsBoardField(board, t) ? 'Change this status in the external source, then sync.' : undefined}
                               value={columnFor(board, t)}
                               onChange={(e) => void move(t, e.target.value)}
                             >

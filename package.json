@@ -13,7 +13,7 @@
     "build:worker": "node scripts/build-worker.mjs",
     "test:remote": "node scripts/test-remote-worker.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "server": "node apps/daemon/src/bootstrap/index.mjs",
+    "server": "node --env-file-if-exists=.env apps/daemon/src/bootstrap/index.mjs",
     "backup": "node scripts/convoy-backup.mjs backup",
     "restore": "node scripts/convoy-backup.mjs restore",
     "migrate:postgres": "node scripts/migrate-persistence.mjs",
@@ -24,7 +24,7 @@
     "terminal": "node apps/cli/src/cli.mjs terminal",
     "sessions": "node apps/cli/src/cli.mjs sessions",
     "desktop:install": "node node_modules/electron/install.js",
-    "desktop:dev": "npm run desktop:install && node scripts/desktop-dev.mjs",
+    "desktop:dev": "npm run desktop:install && node --env-file-if-exists=.env scripts/desktop-dev.mjs",
     "desktop": "npm run build && npm run desktop:install && electron .",
     "package:desktop": "npm run build && npm run build:worker && npm run build:worker -- bun-linux-arm64 && npm run desktop:install && electron-builder --publish never"
   },

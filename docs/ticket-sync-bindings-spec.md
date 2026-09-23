@@ -1,8 +1,11 @@
 # Ticket sync bindings: project routing and board projection spec
 
-Status: Proposed. The current manual import accepts a project from the calling
-UI. Persistent routing, binding-owned status policy, scheduling, and binding
-diagnostics are not implemented.
+Status: Partially implemented. Manual import bindings now persist a connection,
+destination project, work type, page cursor, and source membership. Sync runs by
+binding ID, and boards select tickets independently. A connection currently has
+one binding; its remote scope and status mapping remain configured on the
+connection. Binding-owned policy revisions, project status definitions, global
+routing claims, scheduled attempts, and migration plans remain proposed below.
 
 ## Purpose
 

@@ -154,14 +154,23 @@ export function validateCustomTicketSourceManifest(input) {
       }
     }
     const response = object(operation.response, `${name} response mapping is required.`);
-    keys(response, name === 'list' ? ['items', 'nextCursor'] : ['item'], `Unknown ${name} response field`);
+    keys(response, name === 'list' ? ['items', 'nextCursor', 'total'] : ['item'], `Unknown ${name} response field`);
     selector(response[name === 'list' ? 'items' : 'item'], `${name} response selector`);
     if (response.nextCursor !== undefined) selector(response.nextCursor, 'Next cursor selector');
+    if (response.total !== undefined) selector(response.total, 'Total selector');
+    if (name === 'list' && (response.nextCursor || response.total) &&
+      !operation.path.includes('${cursor}') && !Object.values(operation.query ?? {}).includes('${cursor}'))
+      throw new Error('Paged list operation must send its cursor.');
   }
   const mapping = object(manifest.mapping, 'Manifest mapping is required.');
-  keys(mapping, ['remoteId', 'remoteKey', 'title', 'description', 'status', 'priority', 'remoteVersion', 'updatedAt', 'url'], 'Unknown mapping field');
+  keys(mapping, ['remoteId', 'remoteKey', 'title', 'description', 'status', 'priority', 'remoteVersion', 'updatedAt', 'url', 'urlTemplate'], 'Unknown mapping field');
   for (const name of ['remoteId', 'remoteKey', 'title', 'remoteVersion']) selector(mapping[name], `${name} selector`);
   for (const name of ['description', 'status', 'priority', 'updatedAt', 'url']) if (mapping[name] !== undefined) selector(mapping[name], `${name} selector`);
+  if (mapping.urlTemplate !== undefined) {
+    if (mapping.url !== undefined || typeof mapping.urlTemplate !== 'string' || mapping.urlTemplate.split('${remoteId}').length !== 2 || mapping.urlTemplate.replace('${remoteId}', '').includes('${')) throw new Error('Ticket URL template must contain exactly one ${remoteId} and cannot accompany a URL selector.');
+    const target = new URL(mapping.urlTemplate.replace('${remoteId}', 'id'));
+    if (target.protocol !== 'https:' || target.origin !== new URL(connection.baseUrl).origin || target.username || target.password) throw new Error('Ticket URL template must use the ticket source HTTPS origin.');
+  }
   if (manifest.values !== undefined) {
     object(manifest.values, 'Value mappings must be an object.');
     keys(manifest.values, ['status', 'priority'], 'Unknown value mapping');
@@ -191,11 +200,12 @@ function credential(connection, manifest) {
 function normalize(manifest, item) {
   object(item, 'Remote ticket must be an object.');
   const mapping = manifest.mapping;
+  const remoteId = mappedString(item, mapping.remoteId, 'Remote ID', 200);
   const statusRaw = mapping.status ? readSelector(item, mapping.status) : undefined;
   const priorityRaw = mapping.priority ? readSelector(item, mapping.priority) : undefined;
   const priority = mapValue(manifest.values, 'priority', priorityRaw);
   if (priority !== undefined && !allowedPriorities.has(priority)) throw new Error(`Mapped priority is unsupported: ${priority}.`);
-  const urlValue = mapping.url ? mappedString(item, mapping.url, 'Remote URL', 2000, true) : undefined;
+  const urlValue = mapping.url ? mappedString(item, mapping.url, 'Remote URL', 2000, true) : mapping.urlTemplate?.replace('${remoteId}', encodeURIComponent(remoteId));
   let url;
   if (urlValue) {
     const parsed = new URL(urlValue);
@@ -203,12 +213,14 @@ function normalize(manifest, item) {
     url = parsed.href;
   }
   return {
-    remoteId: mappedString(item, mapping.remoteId, 'Remote ID', 200),
+    remoteId,
     remoteKey: mappedString(item, mapping.remoteKey, 'Remote key', 200),
     title: mappedString(item, mapping.title, 'Remote title', 200),
     description: mapping.description ? mappedString(item, mapping.description, 'Remote description', 12000, true) ?? '' : '',
     status: mapValue(manifest.values, 'status', statusRaw),
+    rawStatus: statusRaw == null ? undefined : String(statusRaw),
     priority,
+    rawPriority: priorityRaw == null ? undefined : String(priorityRaw),
     remoteVersion: mappedString(item, mapping.remoteVersion, 'Remote version', 500),
     updatedAt: mapping.updatedAt ? mappedString(item, mapping.updatedAt, 'Remote updated time', 100, true) : undefined,
     url,
@@ -268,11 +280,28 @@ export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, a
       return { sourceName: connection.name, sample, itemCount: items.length };
     },
     async listIssues(connection, limit) {
-      const { manifest, operation, body } = await request(connection, 'list', { limit });
+      return (await this.listIssuesPage(connection, limit)).items;
+    },
+    async listIssuesPage(connection, limit, cursor) {
+      const { manifest, operation, body } = await request(connection, 'list', { limit, cursor: cursor ?? '0' });
       const items = readSelector(body, operation.response.items);
       if (!Array.isArray(items)) throw new Error('Ticket source item selector did not return an array.');
       if (items.length > limit || items.length > 100) throw new Error('Ticket source returned too many records.');
-      return items.map((item) => normalize(manifest, item));
+      let nextCursor;
+      if (operation.response.nextCursor) {
+        const next = readSelector(body, operation.response.nextCursor);
+        if (next !== undefined && next !== null && next !== '') nextCursor = String(next);
+      } else if (operation.response.total) {
+        const total = readSelector(body, operation.response.total);
+        if (!Number.isSafeInteger(total) || total < 0 || !Number.isSafeInteger(Number(cursor ?? 0)) || Number(cursor ?? 0) < 0) throw new Error('Ticket source returned an invalid pagination total.');
+        const offset = Number(cursor ?? 0) + items.length;
+        if (offset < total) {
+          if (!items.length) throw new Error('Ticket source returned an empty page before the total was reached.');
+          nextCursor = String(offset);
+        }
+      }
+      return { items: items.map((item) => normalize(manifest, item)), nextCursor,
+        mayBeTruncated: !operation.response.nextCursor && !operation.response.total };
     },
     async getIssue(connection, remoteId) {
       const { manifest, operation, body } = await request(connection, 'get', { remoteId });

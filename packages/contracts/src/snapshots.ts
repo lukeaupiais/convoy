@@ -27,7 +27,17 @@ import type {
   ProviderOutcome,
 } from './model/providers';
 import type { ApprovalRule, Instruction, Session } from './model/session';
-import type { Board, BoardTemplate, Conversation, Project, Ticket, TicketConnection } from './model/work';
+import type {
+  Board,
+  BoardTemplate,
+  Conversation,
+  Project,
+  Ticket,
+  TicketConnection,
+  TicketDevelopmentLink,
+  TicketImportBinding,
+  TicketImportMembership,
+} from './model/work';
 import type {
   WorkflowDefinition,
   WorkflowStartRule,
@@ -56,7 +66,10 @@ export type RuntimeSnapshot = {
   conversations: Conversation[];
   projects: Project[];
   tickets: Ticket[];
+  ticketDevelopmentLinks?: TicketDevelopmentLink[];
   ticketConnections?: TicketConnection[];
+  ticketImportBindings?: TicketImportBinding[];
+  ticketImportMemberships?: TicketImportMembership[];
   environments: Environment[];
   environmentAccessBindings?: EnvironmentAccessBinding[];
   runnerEnrollments?: RunnerEnrollment[];

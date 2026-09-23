@@ -282,6 +282,24 @@ export type RuntimeCommandInputMap = {
     priority?: 'Low' | 'Medium' | 'High';
     customFields?: Record<string, string | number | boolean | null>;
   };
+  createDevelopmentTicket: RequestIdentity & {
+    supportTicketId: number;
+    supportRevision: number;
+    projectId: string;
+    title: string;
+    description?: string;
+  };
+  linkDevelopmentTicket: {
+    supportTicketId: number;
+    supportRevision: number;
+    developmentTicketId: number;
+    developmentRevision: number;
+  };
+  unlinkDevelopmentTicket: {
+    supportTicketId: number;
+    supportRevision: number;
+    developmentTicketId: number;
+  };
   saveTicketConnection: Partial<Pick<TicketConnection, 'id' | 'revision' | 'enabled'>> &
     Pick<TicketConnection, 'organizationId' | 'name'> &
     (
@@ -305,6 +323,16 @@ export type RuntimeCommandInputMap = {
     resolution?: 'local' | 'remote';
   };
   importExternalTickets: { connectionId: string; projectId: string; limit?: number };
+  saveTicketImportBinding: {
+    id?: string;
+    revision?: number;
+    connectionId: string;
+    projectId: string;
+    name: string;
+    workType: string;
+    enabled?: boolean;
+  };
+  syncTicketImportBinding: { id: string; limit?: number };
   decide: SessionTarget & {
     approvalId: string;
     decision?: 'allow_once' | 'allow_always' | 'deny';
@@ -533,6 +561,9 @@ type RuntimeCommandKnownResults = {
   };
   revokeServicePrincipal: ServicePrincipal;
   createTicket: Ticket;
+  createDevelopmentTicket: Ticket;
+  linkDevelopmentTicket: import('./model/work').TicketDevelopmentLink;
+  unlinkDevelopmentTicket: { supportTicketId: number; developmentTicketId: number };
   saveTicketConnection: TicketConnection;
   deleteTicketConnection: { id: string; deleted: true };
   probeTicketConnection: {
@@ -550,6 +581,8 @@ type RuntimeCommandKnownResults = {
   reconcileTicketPublish: Ticket;
   syncExternalTicket: Ticket;
   importExternalTickets: { imported: number; updated: number };
+  saveTicketImportBinding: import('./model/work').TicketImportBinding;
+  syncTicketImportBinding: { imported: number; updated: number; complete: boolean; pages: number };
   exportSkill: { files: Record<string, string>; source: string };
   importTickets: { imported: number; conflicts: number[] };
   openTicketConversation: Conversation;

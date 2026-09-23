@@ -1,10 +1,12 @@
 node_modules
 dist/
 dist-worker/
+/dist-worker
 desktop-dist/
 *.tsbuildinfo
 .DS_Store
 .convoy/
+/.convoy
 .convoy-worktrees/
 .playwright-cli/
 output/

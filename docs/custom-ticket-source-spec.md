@@ -1,8 +1,8 @@
 # Custom ticket source: product and architecture spec
 
 Status: Manual read-only import foundation implemented: versioned manifest
-validation, connection probe, normalized sample preview, dry run, and bounded
-manual import. Guided mapping, durable cursors, per-record diagnostics,
+validation, connection probe, normalized sample preview, dry run, and paged
+project import bindings. Guided mapping, per-record diagnostics,
 scheduling, webhook hints, outbound operations, and transformation extensions
 remain future slices.
 

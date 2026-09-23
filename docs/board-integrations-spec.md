@@ -17,13 +17,21 @@ the variable name, never the key. Test, edit, disable, or delete unused
 connections there. Enable a connection as a destination in Board settings,
 then choose **Convoy only**, **Ask each time**, or **Create in [connection]**.
 
-The current connector imports up to 50 team issues on demand, creates issues
+The current connector imports team issues on demand through a project import
+binding, creates issues
 when selected, and sends title and description edits on tickets created by
 Convoy. Imported tickets take title and description from Linear. Conflicting
 remote edits are shown on the ticket for explicit resolution. A remote creation
 with an uncertain outcome must be reconciled before another attempt. Webhooks,
-scheduled polling, other fields, OAuth, and Azure DevOps/Asana/custom adapters
+scheduled polling, other fields, OAuth, and Azure DevOps/Asana adapters
 are not implemented yet.
+
+An import binding selects a connection, destination project, and work type.
+Its cursor is saved after each imported page and a completed scan updates its
+membership set. Boards select tickets by project, work type, and optionally an
+import binding. Several boards can show the same ticket. A source can be bound
+to one project; use separate connections for distinct remote source scopes.
+Creating a board or adding a ticket to a board does not create an import binding.
 
 ## Goal
 

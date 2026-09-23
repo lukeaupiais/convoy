@@ -9,6 +9,10 @@ export function createTicketSources(adapters) {
     assertReady(connection) { return adapter(connection).assertReady?.(connection); },
     probe(connection) { return adapter(connection).probe(connection); },
     listIssues(connection, limit) { return adapter(connection).listIssues(connection, limit); },
+    async listIssuesPage(connection, limit, cursor) {
+      const value = adapter(connection);
+      return value.listIssuesPage ? value.listIssuesPage(connection, limit, cursor) : { items: await value.listIssues(connection, limit) };
+    },
     getIssue(connection, remoteId) { return adapter(connection).getIssue(connection, remoteId); },
     createIssue(connection, ticket) {
       const value = adapter(connection);
