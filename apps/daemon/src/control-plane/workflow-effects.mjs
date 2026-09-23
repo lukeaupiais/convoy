@@ -99,7 +99,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       fact.status = 'observed';
       await save();
     }
-    state.ticketImportFacts = (state.ticketImportFacts ?? []).filter((fact) => fact.status === 'pending');
+    state.ticketImportFacts = (state.ticketImportFacts ?? []).filter((fact) => fact.status !== 'observed');
     await save();
   }
 
