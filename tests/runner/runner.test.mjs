@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, symlink, link, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, symlink, link, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,6 +13,25 @@ import { createRunners } from '../../apps/daemon/src/adapters/runners/runners.mj
 import { sshArgs } from '../../packages/runner/src/index.mjs';
 import { createRpc } from '../../packages/runner/src/index.mjs';
 import { spawn } from 'node:child_process';
+
+test('workspace fingerprint ignores large clean tracked files but detects changed content', async t => {
+  const repository = await mkdtemp(join(tmpdir(), 'convoy-fingerprint-test-'));
+  t.after(() => rm(repository, { recursive: true, force: true }));
+  await processRun('git', ['init', repository]);
+  await writeFile(join(repository, 'large.bin'), Buffer.alloc(10_000_001));
+  await writeFile(join(repository, 'small.txt'), 'before');
+  await processRun('git', ['add', 'large.bin', 'small.txt'], { cwd: repository });
+  const commit = await processRun('git', ['-c', 'user.name=Convoy Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'fixture'], { cwd: repository });
+  assert.equal(commit.code, 0);
+  const workspace = await executeRunner({ action: 'provision', repository, workspaceId: 'large-clean-repository' });
+  const before = await executeRunner({ action: 'diff', workspace: workspace.path });
+  assert.equal(before.truncated, false);
+  await writeFile(join(workspace.path, 'small.txt'), 'after');
+  const changed = await executeRunner({ action: 'diff', workspace: workspace.path });
+  assert.notEqual(changed.digest, before.digest);
+  await writeFile(join(workspace.path, 'small.txt'), 'before');
+  assert.equal((await executeRunner({ action: 'diff', workspace: workspace.path })).digest, before.digest);
+});
 test('portable adapter transports JSON without interpolating request values', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'convoy-ssh-contract-'));
   await writeFile(join(root, 'hello.txt'), 'remote-contract');
