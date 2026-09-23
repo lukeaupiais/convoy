@@ -12,6 +12,7 @@ shared contracts when changing code or UI copy.
 - [Workflow selection and start automations](architecture/workflow-selection-and-automation-spec.md)
 - [Board integrations product and behavior spec](board-integrations-spec.md)
 - [Custom ticket source product and architecture spec](custom-ticket-source-spec.md)
+- [Ticket sync bindings, project routing, and board projection](ticket-sync-bindings-spec.md)
 - [Extension contract](architecture/extensions.md)
 - [Command execution](command-execution.md)
 - [Portable local and SSH workers](portable-workers.md)

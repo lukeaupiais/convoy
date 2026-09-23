@@ -14,14 +14,18 @@ an HTTP ticket source with a declarative mapping. Convoy uses one built-in
 adapter to call that source and normalize its records into external ticket
 observations.
 
-This is a general integration surface. Product-specific names, endpoints,
-status values, credentials, and transformations belong to the configured
-connection, not to Convoy source code.
+This is a general integration surface. Product-specific names, endpoints, raw
+status identities, credentials, and representational transformations belong to
+the configured connection or adapter, not to Convoy source code. Routing into a
+Convoy project, mapping remote status identities to project statuses, and field
+direction belong to the ticket sync binding.
 
 The [board integrations spec](board-integrations-spec.md) remains authoritative
-for Ticket origin, external links, field ownership, publishing, conflict
-resolution, and board behavior. This document defines how a custom source
-supplies normalized external ticket operations to that model.
+for Ticket origin, external links, publishing, conflict presentation, and board
+behavior. The [ticket sync bindings spec](ticket-sync-bindings-spec.md) is
+authoritative for field direction and how a remote scope is persistently routed
+into a Convoy project and projected onto boards. This document defines how a
+custom source supplies normalized external ticket operations to those models.
 
 ## Goals
 
@@ -55,8 +59,9 @@ supplies normalized external ticket operations to that model.
 by a validated manifest and attached to a governed ticket connection.
 
 **Source manifest** — Versioned declarative description of HTTP operations,
-response selection, normalized field mappings, value mappings, capabilities,
-and sync defaults. It contains no credential values.
+response selection, representation normalization, and capabilities. It
+contains no credential values, Convoy project IDs, board IDs, routing policy,
+or field-direction policy.
 
 **Remote ticket observation** — Normalized, validated representation of one
 remote record at a specific remote version. It is input to Work; it is not a
@@ -78,11 +83,11 @@ Configuration UI -> typed Convoy command
 Work -> ticket sync coordinator -> custom HTTP adapter -> remote ticket API
   |              |
   |              -> cursor, attempt, and effect records
-  -> tickets, external links, field ownership, conflicts
+  -> bindings, tickets, external links, field direction, conflicts
 ```
 
-- Work owns Tickets, external links, normalized field validation, field
-  ownership, and conflict decisions.
+- Work owns bindings, Tickets, external links, normalized field validation,
+  field direction, routing claims, and conflict decisions.
 - The control plane owns authorization, scheduling, durable attempt ordering,
   retries, and uncertain-effect reconciliation.
 - The custom HTTP adapter owns manifest evaluation, HTTP protocol translation,
@@ -164,21 +169,18 @@ mapping:
   url: $.url
 
 values:
-  status:
-    new: Backlog
-    investigating: In progress
-    resolved: Done
   priority:
     low: Low
     normal: Medium
     urgent: High
-
-ownership:
-  title: external
-  description: external
-  status: external
-  priority: external
 ```
+
+The currently implemented manual slice still accepts `values.status` and
+`ownership` in the manifest for compatibility. The binding migration moves
+those Convoy policy decisions into an immutable binding revision. Thereafter
+the manifest emits a stable raw status ID and optional display name; manifest
+enum mappings remain limited to representation normalization such as remote
+priority aliases.
 
 `credential` is a reference, never a secret value. The current manual slice
 requires a `CONVOY_TICKET_SOURCE_*` environment-variable reference. Encrypted
@@ -229,7 +231,7 @@ type RemoteTicketObservation = {
   remoteKey: string;
   title: string;
   description: string;
-  status?: string;
+  status?: { id: string; name?: string };
   priority?: string;
   url?: string;
   remoteVersion: string;
@@ -303,7 +305,7 @@ Webhook support is an optimization after polling works correctly.
 Outbound operations are not part of the first release. When added, each must
 define:
 
-- explicit field ownership and permission;
+- explicit field direction and permission;
 - an idempotency key derived from a durable Convoy effect;
 - an optimistic remote-version precondition where supported;
 - response selectors that confirm the remote identity and version;
@@ -336,18 +338,17 @@ retry. Convoy must not claim success until the remote result is confirmed.
 
 ## Configuration experience
 
-The primary flow is:
+The source-connection flow is:
 
 ```text
 Name and base URL
   -> authentication
   -> fetch sample
-  -> map identity and fields
-  -> map enum values and ownership
+  -> map remote identity and fields
   -> validate
-  -> dry run
-  -> save manual connection
-  -> optionally enable schedule
+  -> save connection
+  -> configure scope, project routing, field direction, and schedule through a
+     ticket sync binding
 ```
 
 The UI should provide:
@@ -472,8 +473,9 @@ Before Slice 1 implementation begins, decide and record:
 1. The exact selector grammar and its complexity limits.
 2. Whether one malformed record rejects a whole page, as specified here, or is
    quarantined while the rest commit. The safer default is whole-page rejection.
-3. The normalized status and priority vocabularies and behavior for unmapped
-   optional values.
+3. The normalized priority vocabulary and behavior for unmapped optional
+   values. Stable remote status identity and project mapping are defined by the
+   ticket sync binding specification.
 4. Cursor maximum size and whether cursors require encryption at rest.
 5. The deployment-level network policy and explicit private-destination
    authorization model.
