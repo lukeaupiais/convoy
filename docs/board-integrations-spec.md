@@ -1,5 +1,8 @@
 # Board integrations: product and behavior spec
 
+Project routing and status-to-board projection are specified in the [ticket
+sync bindings spec](ticket-sync-bindings-spec.md).
+
 Status: Linear first slice implemented; remaining platforms and background sync
 are future work. This document states the intended complete behavior.
 
@@ -115,7 +118,8 @@ somewhere else.
 
 ## Sync behavior
 
-- Import is scoped to selected projects, teams, or queries within a connection.
+- Import is scoped by a persistent ticket sync binding that selects a remote
+  project, team, queue, or query and routes it to exactly one Convoy project.
   Repeated import of the same remote item updates the existing linked ticket;
   it does not create duplicates. Import never changes an existing ticket's
   origin merely because it was seen again.
