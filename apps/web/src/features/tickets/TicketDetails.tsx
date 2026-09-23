@@ -195,7 +195,6 @@ export function TicketDetails({
   const [fieldError, setFieldError] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [remoteIssueId, setRemoteIssueId] = useState('');
-  const [developmentProjectId, setDevelopmentProjectId] = useState('');
   const [developmentTicketId, setDevelopmentTicketId] = useState('');
   const [developmentTitle, setDevelopmentTitle] = useState('');
   const [linkBusy, setLinkBusy] = useState(false);
@@ -207,13 +206,12 @@ export function TicketDetails({
     .filter((link) => link.developmentTicketId === ticket.id)
     .map((link) => state.tickets.find((value) => value.id === link.supportTicketId))
     .filter((value): value is Ticket => Boolean(value));
-  const organizationId = state.projects.find((project) => project.id === ticket.projectId)?.organizationId;
-  const developmentProjects = state.projects.filter((project) => project.organizationId === organizationId && project.id !== ticket.projectId);
   const availableDevelopmentTickets = state.tickets.filter((value) =>
-    value.origin !== 'external' && value.projectId !== ticket.projectId &&
-    state.projects.find((project) => project.id === value.projectId)?.organizationId === organizationId &&
+    value.origin === 'convoy' && value.projectId === ticket.projectId &&
     !linkedDevelopment.some((linked) => linked.id === value.id));
-  const statusBoard = state.boards.find((board) => board.projectIds.includes(ticket.projectId) && board.grouping.mode === 'field' && board.grouping.field === 'status');
+  const statusBoard = state.boards.find((board) => board.projectIds.includes(ticket.projectId) &&
+    (!board.filters.origins?.length || board.filters.origins.includes(ticket.origin ?? 'convoy')) &&
+    board.grouping.mode === 'field' && board.grouping.field === 'status');
   const statusChoices = [...new Set([...(statusBoard?.columns.map((column) => column.value ?? column.name) ?? ['Backlog', 'Ready', 'In progress', 'In review', 'Done']), ticket.status])];
   const availableConnections = (state.ticketConnections ?? []).filter((connection) =>
     connection.enabled && connection.organizationId === state.projects.find((project) => project.id === ticket.projectId)?.organizationId &&
@@ -294,19 +292,13 @@ export function TicketDetails({
               } catch (error) { setMessage((error as Error).message); }
               finally { setLinkBusy(false); }
             }}>Link item</button>
-            <label>Development project
-              <Select value={developmentProjectId} onChange={(event) => setDevelopmentProjectId(event.target.value)}>
-                <option value="">Choose project…</option>
-                {developmentProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-              </Select>
-            </label>
             <label>New item title<input value={developmentTitle} onChange={(event) => setDevelopmentTitle(event.target.value)} placeholder={ticket.title} /></label>
-            <button className="secondary" disabled={linkBusy || !developmentProjectId} onClick={async () => {
+            <button className="secondary" disabled={linkBusy} onClick={async () => {
               setLinkBusy(true);
               try {
                 const result = await command('createDevelopmentTicket', {
                   requestId: crypto.randomUUID(), supportTicketId: ticket.id, supportRevision: revision,
-                  projectId: developmentProjectId, title: developmentTitle.trim() || ticket.title,
+                  projectId: ticket.projectId, title: developmentTitle.trim() || ticket.title,
                   description: `Reported in support ticket #${ticket.id}.\n\n${ticket.description}`,
                 });
                 setDevelopmentTitle(''); setMessage(`Development item #${result.result.id} created and linked.`);

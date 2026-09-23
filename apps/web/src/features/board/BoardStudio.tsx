@@ -126,6 +126,7 @@ export function BoardStudio({
         ids.has(t.id) &&
         (!f.query || `${t.title} ${t.description}`.toLowerCase().includes(f.query.toLowerCase())) &&
         (!f.projectIds?.length || f.projectIds.includes(t.projectId)) &&
+        (!f.origins?.length || f.origins.includes(t.origin ?? 'convoy')) &&
         (!f.statuses?.length || f.statuses.includes(t.status)) &&
         (!f.labels?.length || f.labels.includes(t.label)) &&
         (!f.agents?.length || f.agents.includes(t.agent)) &&
@@ -496,6 +497,18 @@ export function BoardStudio({
               </label>
             )}
             <label>
+              Ticket source
+              <Select value={draft.filters.origins?.length === 1 ? draft.filters.origins[0] : ''}
+                onChange={(event) => patch({ filters: { ...draft.filters, origins: event.target.value
+                  ? [event.target.value as NonNullable<Ticket['origin']>] : undefined } })}>
+                <option value="">All tickets</option>
+                <option value="external">Imported tickets</option>
+                <option value="convoy">Convoy tickets</option>
+                <option value="browser-import">Browser imports</option>
+                <option value="session-migration">Session migrations</option>
+              </Select>
+            </label>
+            <label>
               Search filter
               <input
                 value={draft.filters.query ?? ''}
@@ -841,12 +854,13 @@ export function BoardStudio({
                           {cards.length}
                           {column.wipLimit ? ` / ${column.wipLimit}` : ''}
                         </span>
-                        <button
-                          aria-label={`Add ticket to ${column.name}`}
-                          onClick={() => onNewTicket(board.id, column.id)}
-                        >
-                          <Plus size={15} />
-                        </button>
+                        {(!board.filters.origins?.length || board.filters.origins.includes('convoy')) &&
+                          <button
+                            aria-label={`Add ticket to ${column.name}`}
+                            onClick={() => onNewTicket(board.id, column.id)}
+                          >
+                            <Plus size={15} />
+                          </button>}
                       </header>
                       <div className="custom-column-cards">
                         {cards.map((t) => (

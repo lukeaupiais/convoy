@@ -170,6 +170,7 @@ export type BoardPlacement = {
 
 export type BoardFilters = {
   projectIds?: string[];
+  origins?: NonNullable<Ticket['origin']>[];
   statuses?: string[];
   labels?: string[];
   agents?: string[];

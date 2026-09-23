@@ -26,12 +26,11 @@ export function createCatalog({ state, save, execution, externalTickets, context
   };
   const developmentTicket = id => {
     const value = ticket(id);
-    if (!value || value.origin === 'external') throw new Error('Development ticket not found.');
+    if (!value || value.origin !== 'convoy') throw new Error('Development ticket not found.');
     return value;
   };
   const linkDevelopment = (support, development) => {
-    if (support.id === development.id || support.projectId === development.projectId) throw new Error('Development work must be in a separate project.');
-    if (project(support.projectId).organizationId !== project(development.projectId).organizationId) throw new Error('Tickets must belong to the same organization.');
+    if (support.id === development.id || support.projectId !== development.projectId) throw new Error('Development work must belong to the same project as its support ticket.');
     const existing = state.ticketDevelopmentLinks.find(value => value.supportTicketId === support.id && value.developmentTicketId === development.id);
     if (existing) return existing;
     const value = { id: `${support.id}:${development.id}`, supportTicketId: support.id, developmentTicketId: development.id, createdAt: new Date().toISOString() };
@@ -213,6 +212,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...execution.reservedTicketIds()) + 1;
         if (id > 9999999999) throw new Error('Ticket ID range exhausted.');
         const value = { id, projectId: c.projectId, ...values, revision: 1, origin: 'convoy', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+        if (board) boards.assertTicketVisible(board.id, value);
         boards.validateNewTicket(value);
         state.tickets.push(value); state.ticketRequests[request] = id; boards.ensureTicket(value); await save();
         return source ? publish(value, source, request) : value;
@@ -228,7 +228,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         }
         const support = supportTicket(c.supportTicketId, c.supportRevision);
         const owner = project(c.projectId);
-        if (owner.organizationId !== project(support.projectId).organizationId || owner.id === support.projectId) throw new Error('Choose a development project in the same organization.');
+        if (owner.id !== support.projectId) throw new Error('Development work must belong to the support project.');
         const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...execution.reservedTicketIds()) + 1;
         if (id > 9999999999) throw new Error('Ticket ID range exhausted.');
         const value = { id, projectId: owner.id, ...fields({ title: c.title, description: c.description ?? '', status: 'Backlog' }), revision: 1, origin: 'convoy', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };

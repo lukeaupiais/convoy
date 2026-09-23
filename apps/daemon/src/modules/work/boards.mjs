@@ -67,6 +67,10 @@ function filters(input = {}, projectIds) {
     result.projectIds = uniqueList(input.projectIds, 'Project filters');
     if (projectIds && result.projectIds.some(id => !projectIds.includes(id))) throw new Error('Board filter contains an unavailable project.');
   }
+  if (input.origins !== undefined) {
+    result.origins = uniqueList(input.origins, 'Ticket origins', 4);
+    if (result.origins.some(value => !['convoy', 'external', 'browser-import', 'session-migration'].includes(value))) throw new Error('Unknown ticket origin.');
+  }
   for (const key of ['statuses', 'labels', 'agents', 'priorities']) if (input[key] !== undefined) result[key] = uniqueList(input[key], `Filter ${key}`, 100);
   if (input.query !== undefined) result.query = optionalText(input.query, 'Board query', 200);
   return result;
@@ -238,6 +242,7 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
     {
       if (!selectedProjects.has(t.projectId)) return false;
       const f = boardValue.filters ?? {};
+      if (f.origins?.length && !f.origins.includes(t.origin ?? 'convoy')) return false;
       if (f.statuses?.length && !f.statuses.includes(t.status)) return false;
       if (f.labels?.length && !f.labels.includes(t.label)) return false;
       if (f.agents?.length && !f.agents.includes(t.agent)) return false;
@@ -303,6 +308,9 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
   }
   return {
     board, template, visibleTickets, computedPlacement, validateTicketUpdate, validateNewTicket, validateTicketBatch,
+    assertTicketVisible(boardId, value) {
+      if (!isVisible(board(boardId), value)) throw new Error('Ticket is excluded by this board’s membership filters.');
+    },
     validateColumnDeletion(boardId, columnId) {
       const b = board(boardId); const c = b.columns.find(value => value.id === columnId); if (!c) throw new Error('Column not found.');
       if (workflowReferencesColumn(boardId, columnId)) throw new Error(`Column ${c.name} is referenced by a workflow and cannot be deleted.`);
@@ -349,6 +357,7 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
         const b = board(c.boardId); const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
         if (c.revision !== t.revision) throw new Error('Ticket changed in another client. Reload before placing it.');
         if (b.projectIds?.length && !b.projectIds.includes(t.projectId)) throw new Error('Ticket project is not available on this board.');
+        if (!isVisible(b, t)) throw new Error('Ticket is excluded by this board’s membership filters.');
         const fromColumnId = computedPlacement(b, t).columnId;
         const normalized = normalizePlacement(b, c.placement); state.boardPlacements[String(t.id)] ??= {};
         const column = b.columns.find(value => value.id === normalized.columnId);
