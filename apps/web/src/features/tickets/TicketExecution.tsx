@@ -79,6 +79,8 @@ export function TicketExecution({
   const nodes = session?.workflow?.nodes ?? session?.workflow?.steps ?? [];
   const node = nodes.find((n) => n.id === flow?.nodeId);
   const visited = new Set(flow?.history?.map((h) => h.nodeId));
+  const shownNodes =
+    flow?.status === 'completed' ? nodes.filter((item) => visited.has(item.id ?? '')) : nodes;
   const canRevise = session?.workflow?.edges?.some(
     (e) => e.from === flow?.nodeId && e.outcome === 'changes_requested',
   );
@@ -152,6 +154,277 @@ export function TicketExecution({
         <p role="alert" className="execution-error">
           {error}
         </p>
+      )}
+      {session && (
+        <>
+          {!focusedArtifactReview && (
+            <header className="execution-heading">
+              <div>
+                <small>Workflow</small>
+                <h2>{session.workflow?.name ?? 'Agent session'}</h2>
+                <span role="status">
+                  {(flow?.status ?? session.status)
+                    .replaceAll('_', ' ')
+                    .replace(/^./, (letter) => letter.toUpperCase())}
+                </span>
+              </div>
+              <button
+                className="secondary"
+                onClick={() => openChat(session.conversationId ?? session.id)}
+              >
+                Agent chat
+                <ArrowUpRight size={14} />
+              </button>
+            </header>
+          )}
+          {!focusedArtifactReview && !!shownNodes.length && (
+            <div className="execution-progress">
+              <h3>{flow?.status === 'completed' ? 'Steps taken' : 'Steps'}</h3>
+              <ol className="execution-steps" aria-label="Workflow progress">
+                {shownNodes.map((n) => (
+                  <li
+                    key={n.id}
+                    className={
+                      active && n.id === flow?.nodeId
+                        ? 'current'
+                        : visited.has(n.id ?? '')
+                          ? 'visited'
+                          : ''
+                    }
+                  >
+                    {visited.has(n.id ?? '') ? (
+                      <Check size={13} />
+                    ) : (
+                      <span className="execution-dot" />
+                    )}
+                    <span>{n.name}</span>
+                    {active && n.id === flow?.nodeId && <small>Current</small>}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {!focusedArtifactReview && node && active && (
+            <div className="execution-objective">
+              <strong>{node.name}</strong>
+              <p>{node.prompt}</p>
+            </div>
+          )}
+          {!focusedArtifactReview && session.partial && (
+            <p className="execution-output">{session.partial}</p>
+          )}
+          {failure &&
+            ['failed', 'interrupted', 'awaiting_submission'].includes(
+              flow?.status ?? session.status,
+            ) && (
+              <p role="status" className="execution-error">
+                {failure.message ?? failure.text ?? failure.type.replaceAll('_', ' ')}
+              </p>
+            )}
+          {session.pending && (
+            <div className="execution-decision">
+              <strong>Approve operation · {session.pending.tool}</strong>
+              <pre>{JSON.stringify(session.pending.args, null, 2)}</pre>
+              <div className="execution-actions">
+                <button
+                  className="primary"
+                  disabled={working}
+                  onClick={() =>
+                    void act('decide', { approvalId: session.pending!.id, allow: true })
+                  }
+                >
+                  Approve once
+                </button>
+                <button
+                  className="secondary"
+                  disabled={working}
+                  onClick={() =>
+                    void act('decide', { approvalId: session.pending!.id, allow: false })
+                  }
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          )}
+          {session.pendingQuestion && (
+            <div className="execution-decision">
+              <strong>{session.pendingQuestion.question}</strong>
+              <textarea
+                aria-label="Answer agent"
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+              />
+              <button
+                className="primary"
+                disabled={working || !answer.trim()}
+                onClick={() =>
+                  void act('answerQuestion', { questionId: session.pendingQuestion!.id, answer })
+                }
+              >
+                Send answer
+              </button>
+            </div>
+          )}
+          {flow?.lastSubmission && capturedSubmission && (
+            <ArtifactReview
+              sessionId={session.id}
+              submission={flow.lastSubmission}
+              waitingForDecision={flow.status === 'waiting_gate'}
+              canRevise={!!canRevise}
+              focused={focusedArtifactReview}
+              working={working}
+              onApprove={() => void act('approveGate', { instance: flow.instance })}
+              onRequestChanges={(revisionFeedback) =>
+                void act('requestChanges', {
+                  instance: flow.instance,
+                  feedback: revisionFeedback,
+                })
+              }
+            />
+          )}
+          {flow?.lastSubmission && !capturedSubmission && flow.status !== 'completed' && (
+            <div className="execution-evidence">
+              <strong>Latest submission · {flow.lastSubmission.step}</strong>
+              <p>{flow.lastSubmission.summary}</p>
+              {flow.lastSubmission.artifacts?.map((path) => (
+                <code key={String(path)}>{String(path)}</code>
+              ))}
+            </div>
+          )}
+          {!focusedArtifactReview && session.workspace && (
+            <details className="execution-evidence">
+              <summary>Changes & verification</summary>
+              <button
+                className="secondary"
+                disabled={working || busy}
+                onClick={() => void act('diff')}
+              >
+                Refresh changes
+              </button>
+              {session.review && (
+                <pre>
+                  {session.review.status || 'No tracked changes'}
+                  {'\n'}
+                  {session.review.diff}
+                </pre>
+              )}
+              {session.review?.truncated && (
+                <p>Diff truncated. Inspect the full worktree before accepting.</p>
+              )}
+              {session.checks.map((c, i) => (
+                <details key={i}>
+                  <summary>
+                    {c.code === 0 ? 'Passed' : 'Failed'} · {c.command}
+                  </summary>
+                  <pre>{c.output}</pre>
+                </details>
+              ))}
+            </details>
+          )}
+          {flow?.status === 'waiting_gate' && !capturedSubmission && (
+            <div className="execution-decision">
+              <strong>Review required</strong>
+              <button
+                className="primary"
+                disabled={working}
+                onClick={() => void act('approveGate', { instance: flow.instance })}
+              >
+                Approve step
+              </button>
+              {canRevise ? (
+                <>
+                  <textarea
+                    aria-label="Revision feedback"
+                    placeholder="What should change?"
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                  />
+                  <button
+                    className="secondary"
+                    disabled={working || !feedback.trim()}
+                    onClick={() =>
+                      void act('requestChanges', { instance: flow.instance, feedback })
+                    }
+                  >
+                    Request changes
+                  </button>
+                </>
+              ) : (
+                <p className="execution-note">This gate has no revision route configured.</p>
+              )}
+            </div>
+          )}
+          {!focusedArtifactReview && active && (
+            <div className="execution-actions">
+                <button
+                  className="secondary"
+                  disabled={working}
+                  onClick={() => void act('pauseWorkflow')}
+                >
+                  Pause
+                </button>
+                <button
+                  className="secondary"
+                  disabled={working}
+                  onClick={() => {
+                    if (
+                      confirm(
+                        'Cancel this workflow? Its worktree and conversation will be preserved.',
+                      )
+                    )
+                      void act('cancelWorkflow');
+                  }}
+                >
+                  Cancel run
+                </button>
+                {[
+                  'ready',
+                  'paused',
+                  'interrupted',
+                  'failed',
+                  'awaiting_submission',
+                  'awaiting_continue',
+                ].includes(flow?.status ?? '') && (
+                  <button
+                    className="primary"
+                    disabled={working || busy}
+                    onClick={() => void act('continueWorkflow', { instance: flow!.instance })}
+                  >
+                    Continue
+                  </button>
+                )}
+            </div>
+          )}
+          {!focusedArtifactReview && (
+            <details className="execution-evidence">
+              <summary>Activity</summary>
+              {session.events
+                .slice(-30)
+                .reverse()
+                .map((e) => (
+                  <div key={e.seq}>
+                    <small>
+                      {new Date(e.at).toLocaleTimeString()} · {e.type.replaceAll('_', ' ')}
+                    </small>
+                    <p>{e.message ?? e.summary ?? e.text}</p>
+                  </div>
+                ))}
+            </details>
+          )}
+          {!focusedArtifactReview && (
+            <details className="execution-evidence">
+              <summary>Session controls & recovery</summary>
+              <p className="execution-note">
+                {session.workspace
+                  ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
+                  : (session.queueReason ?? 'No worktree provisioned')}
+                {session.assignment && ` · ${session.assignment.state}`}
+              </p>
+              <SessionControls session={session} state={state} />
+            </details>
+          )}
+        </>
       )}
       {!active && !busy && (
         <details className="execution-setup" open={!session?.flow}>
@@ -277,307 +550,6 @@ export function TicketExecution({
             </button>
           )}
         </details>
-      )}
-      {session && (
-        <>
-          {!focusedArtifactReview && (
-            <header className="execution-heading">
-              <div>
-                <strong>
-                  {session.workflow?.name ?? 'Agent session'}
-                  {session.workflow && ` · v${session.workflow.version}`}
-                </strong>
-                <span>
-                  {flow?.status.replaceAll('_', ' ') ?? session.status.replaceAll('_', ' ')}
-                </span>
-              </div>
-              <button
-                className="secondary"
-                onClick={() => openChat(session.conversationId ?? session.id)}
-              >
-                Open conversation
-                <ArrowUpRight size={14} />
-              </button>
-            </header>
-          )}
-          {!focusedArtifactReview && (
-            <p className="execution-note">
-              {session.workspace
-                ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
-                : (session.queueReason ?? 'No worktree provisioned')}
-              {session.assignment && ` · ${session.assignment.state}`}
-            </p>
-          )}
-          {!focusedArtifactReview && !!nodes.length && (
-            <ol className="execution-steps" aria-label="Workflow progress">
-              {nodes.map((n) => (
-                <li
-                  key={n.id}
-                  className={
-                    active && n.id === flow?.nodeId
-                      ? 'current'
-                      : visited.has(n.id ?? '')
-                        ? 'visited'
-                        : ''
-                  }
-                >
-                  {visited.has(n.id ?? '') ? (
-                    <Check size={13} />
-                  ) : (
-                    <span className="execution-dot" />
-                  )}
-                  <span>{n.name}</span>
-                  {active && n.id === flow?.nodeId && <small>Current</small>}
-                </li>
-              ))}
-            </ol>
-          )}
-          {!focusedArtifactReview && node && active && (
-            <div className="execution-objective">
-              <strong>{node.name}</strong>
-              <p>{node.prompt}</p>
-            </div>
-          )}
-          {!focusedArtifactReview && session.partial && (
-            <p className="execution-output">{session.partial}</p>
-          )}
-          {failure &&
-            ['failed', 'interrupted', 'awaiting_submission'].includes(
-              flow?.status ?? session.status,
-            ) && (
-              <p role="status" className="execution-error">
-                {failure.message ?? failure.text ?? failure.type.replaceAll('_', ' ')}
-              </p>
-            )}
-          {session.pending && (
-            <div className="execution-decision">
-              <strong>Approve operation · {session.pending.tool}</strong>
-              <pre>{JSON.stringify(session.pending.args, null, 2)}</pre>
-              <div className="execution-actions">
-                <button
-                  className="primary"
-                  disabled={working}
-                  onClick={() =>
-                    void act('decide', { approvalId: session.pending!.id, allow: true })
-                  }
-                >
-                  Approve once
-                </button>
-                <button
-                  className="secondary"
-                  disabled={working}
-                  onClick={() =>
-                    void act('decide', { approvalId: session.pending!.id, allow: false })
-                  }
-                >
-                  Deny
-                </button>
-              </div>
-            </div>
-          )}
-          {session.pendingQuestion && (
-            <div className="execution-decision">
-              <strong>{session.pendingQuestion.question}</strong>
-              <textarea
-                aria-label="Answer agent"
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-              />
-              <button
-                className="primary"
-                disabled={working || !answer.trim()}
-                onClick={() =>
-                  void act('answerQuestion', { questionId: session.pendingQuestion!.id, answer })
-                }
-              >
-                Send answer
-              </button>
-            </div>
-          )}
-          {flow?.lastSubmission && capturedSubmission && (
-            <ArtifactReview
-              sessionId={session.id}
-              submission={flow.lastSubmission}
-              waitingForDecision={flow.status === 'waiting_gate'}
-              canRevise={!!canRevise}
-              focused={focusedArtifactReview}
-              working={working}
-              onApprove={() => void act('approveGate', { instance: flow.instance })}
-              onRequestChanges={(revisionFeedback) =>
-                void act('requestChanges', {
-                  instance: flow.instance,
-                  feedback: revisionFeedback,
-                })
-              }
-            />
-          )}
-          {flow?.lastSubmission && !capturedSubmission && (
-            <div className="execution-evidence">
-              <strong>Latest submission · {flow.lastSubmission.step}</strong>
-              <p>{flow.lastSubmission.summary}</p>
-              {flow.lastSubmission.artifacts?.map((path) => (
-                <code key={String(path)}>{String(path)}</code>
-              ))}
-            </div>
-          )}
-          {!focusedArtifactReview && session.workspace && (
-            <details className="execution-evidence">
-              <summary>Changes & verification</summary>
-              <button
-                className="secondary"
-                disabled={working || busy}
-                onClick={() => void act('diff')}
-              >
-                Refresh changes
-              </button>
-              {session.review && (
-                <pre>
-                  {session.review.status || 'No tracked changes'}
-                  {'\n'}
-                  {session.review.diff}
-                </pre>
-              )}
-              {session.review?.truncated && (
-                <p>Diff truncated. Inspect the full worktree before accepting.</p>
-              )}
-              {session.checks.map((c, i) => (
-                <details key={i}>
-                  <summary>
-                    {c.code === 0 ? 'Passed' : 'Failed'} · {c.command}
-                  </summary>
-                  <pre>{c.output}</pre>
-                </details>
-              ))}
-            </details>
-          )}
-          {flow?.status === 'waiting_gate' && !capturedSubmission && (
-            <div className="execution-decision">
-              <strong>Review required</strong>
-              <button
-                className="primary"
-                disabled={working}
-                onClick={() => void act('approveGate', { instance: flow.instance })}
-              >
-                Approve step
-              </button>
-              {canRevise ? (
-                <>
-                  <textarea
-                    aria-label="Revision feedback"
-                    placeholder="What should change?"
-                    value={feedback}
-                    onChange={(e) => setFeedback(e.target.value)}
-                  />
-                  <button
-                    className="secondary"
-                    disabled={working || !feedback.trim()}
-                    onClick={() =>
-                      void act('requestChanges', { instance: flow.instance, feedback })
-                    }
-                  >
-                    Request changes
-                  </button>
-                </>
-              ) : (
-                <p className="execution-note">This gate has no revision route configured.</p>
-              )}
-            </div>
-          )}
-          {!focusedArtifactReview && (
-            <div className="execution-actions">
-              {active && (
-                <>
-                  <button
-                    className="secondary"
-                    disabled={working}
-                    onClick={() => void act('pauseWorkflow')}
-                  >
-                    Pause
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={working}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          'Cancel this workflow? Its worktree and conversation will be preserved.',
-                        )
-                      )
-                        void act('cancelWorkflow');
-                    }}
-                  >
-                    Cancel run
-                  </button>
-                  {[
-                    'ready',
-                    'paused',
-                    'interrupted',
-                    'failed',
-                    'awaiting_submission',
-                    'awaiting_continue',
-                  ].includes(flow?.status ?? '') && (
-                    <button
-                      className="primary"
-                      disabled={working || busy}
-                      onClick={() => void act('continueWorkflow', { instance: flow!.instance })}
-                    >
-                      Continue
-                    </button>
-                  )}
-                </>
-              )}
-              {flow?.status === 'completed' && ticket.status !== 'Done' && (
-                <button
-                  className="primary"
-                  disabled={working}
-                  onClick={async () => {
-                    setWorking(true);
-                    try {
-                      await command('updateTicket', {
-                        taskId: ticket.id,
-                        revision: ticket.revision,
-                        patch: { status: 'Done' },
-                      });
-                    } catch (e) {
-                      setError((e as Error).message);
-                    } finally {
-                      setWorking(false);
-                    }
-                  }}
-                >
-                  Mark ticket done
-                </button>
-              )}
-            </div>
-          )}
-          {!focusedArtifactReview && flow?.status === 'completed' && (
-            <p className="execution-note">
-              Workflow complete. Ticket status and board-local columns remain separate.
-            </p>
-          )}
-          {!focusedArtifactReview && (
-            <details className="execution-evidence">
-              <summary>Activity</summary>
-              {session.events
-                .slice(-30)
-                .reverse()
-                .map((e) => (
-                  <div key={e.seq}>
-                    <small>
-                      {new Date(e.at).toLocaleTimeString()} · {e.type.replaceAll('_', ' ')}
-                    </small>
-                    <p>{e.message ?? e.summary ?? e.text}</p>
-                  </div>
-                ))}
-            </details>
-          )}
-          {!focusedArtifactReview && (
-            <details className="execution-evidence">
-              <summary>Session controls & recovery</summary>
-              <SessionControls session={session} state={state} />
-            </details>
-          )}
-        </>
       )}
     </section>
   );

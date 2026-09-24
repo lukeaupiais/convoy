@@ -214,18 +214,18 @@ function App() {
   );
   const currentFlowStatus = currentExecution?.flow?.status;
   const runLabel = !currentExecution
-    ? 'Run'
+    ? 'Start workflow'
     : currentFlowStatus === 'waiting_gate'
-      ? 'Review'
+      ? 'Review workflow'
       : currentFlowStatus === 'completed'
-        ? 'View result'
+        ? 'View workflow'
         : currentFlowStatus === 'failed' ||
             currentExecution.status === 'failed' ||
             currentExecution.status === 'interrupted'
-          ? 'Inspect'
+          ? 'View workflow'
           : currentFlowStatus && currentFlowStatus !== 'cancelled'
-            ? 'View run'
-            : 'Run again';
+            ? 'View workflow'
+            : 'Start workflow';
   const linkedConversations =
     liveRuntime?.conversations?.filter((conversation) =>
       conversation.linkedTicketIds.includes(current?.id ?? -1),
