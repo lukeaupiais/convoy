@@ -5,9 +5,13 @@
 }
 .execution-setup > summary {
   cursor: pointer;
-  font-size: 18px;
-  font-weight: 550;
-  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.ticket-execution:has(.execution-heading) .execution-setup {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
 }
 .execution-fields {
   display: grid;
@@ -17,17 +21,17 @@
 .execution-fields label {
   display: grid;
   gap: 6px;
-  color: #e4ded3;
+  color: var(--ink);
   font-size: 12px;
   min-width: 0;
 }
 .execution-fields .select-trigger {
-  background: #474039;
+  background: var(--surface);
 }
 .execution-note {
   font-size: 12px;
   line-height: 1.65;
-  color: #d2cabe;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 .execution-heading {
@@ -38,11 +42,28 @@
 }
 .execution-heading > div {
   display: grid;
-  gap: 6px;
+  gap: 7px;
+}
+.execution-heading h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 550;
+  line-height: 1.25;
+}
+.execution-heading small {
+  color: var(--muted);
+  font-size: 11px;
 }
 .execution-heading span {
-  color: #d6b685;
+  color: var(--sea);
   font-size: 12px;
+  font-weight: 600;
+}
+.execution-progress h3 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 .execution-steps {
   display: grid;
@@ -58,20 +79,20 @@
   padding: 8px 10px;
   border-radius: 6px;
   font-size: 13px;
-  color: #d2cabe;
+  color: var(--ink);
 }
 .execution-steps li.current {
-  background: #51483d;
-  color: #f5f2ec;
+  background: var(--surface-2);
+  color: var(--ink);
 }
 .execution-steps small {
   margin-left: auto;
-  color: #d6b685;
+  color: var(--muted);
 }
 .execution-dot {
   width: 7px;
   height: 7px;
-  border: 1px solid #c5a574;
+  border: 1px solid var(--line-strong);
   border-radius: 50%;
   margin: 3px;
 }
@@ -83,6 +104,13 @@
   border-radius: 9px;
   min-width: 0;
 }
+.execution-evidence {
+  padding: 0;
+  border-radius: 4px;
+}
+.execution-evidence > :not(summary) {
+  margin: 0 14px 14px;
+}
 .execution-objective p,
 .execution-evidence p {
   white-space: pre-wrap;
@@ -93,12 +121,12 @@
 .execution-decision {
   display: grid;
   gap: 12px;
-  background: #443c32;
+  background: var(--surface-2);
 }
 .execution-decision textarea {
   min-height: 90px;
   padding: 10px;
-  background: #302c28;
+  background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -122,7 +150,9 @@
 .execution-evidence summary {
   cursor: pointer;
   font-size: 13px;
-  margin-bottom: 10px;
+  min-height: 44px;
+  padding: 10px 14px;
+  line-height: 24px;
 }
 .execution-evidence code {
   display: block;
@@ -131,8 +161,8 @@
 }
 .execution-error {
   padding: 12px;
-  background: #513c31;
-  color: #f0cbb3;
+  background: #f7dfd6;
+  color: #79351f;
   border-radius: 7px;
   font-size: 13px;
 }
