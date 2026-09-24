@@ -35,6 +35,7 @@ import type {
   Ticket,
   TicketConnection,
   TicketDevelopmentLink,
+  TicketRelation,
   TicketImportBinding,
   TicketImportMembership,
   TicketThread,
@@ -69,6 +70,7 @@ export type RuntimeSnapshot = {
   projects: Project[];
   tickets: Ticket[];
   ticketDevelopmentLinks?: TicketDevelopmentLink[];
+  ticketRelations?: TicketRelation[];
   ticketConnections?: TicketConnection[];
   ticketImportBindings?: TicketImportBinding[];
   ticketImportMemberships?: TicketImportMembership[];

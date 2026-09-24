@@ -11,6 +11,7 @@ export type WorkflowActionOperation =
   | 'inspect_changes'
   | 'create_ticket'
   | 'create_development_ticket'
+  | 'create_related_ticket'
   | 'update_ticket'
   | 'move_ticket';
 export type WorkflowConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
@@ -40,7 +41,7 @@ export type WorkflowStep = {
   skills?: string[];
   model?: string;
   condition?: WorkflowCondition;
-  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource?: 'active_ticket' | 'linked_development'; status?: string };
+  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource?: 'active_ticket' | 'related_ticket' | 'linked_development'; relationKind?: string; status?: string };
   x?: number;
   y?: number;
 };

@@ -141,10 +141,6 @@ export function BoardStudio({
   const syncBinding = board.filters.importBindingIds?.length === 1
     ? state.ticketImportBindings?.find((value) => value.id === board.filters.importBindingIds?.[0] && value.enabled) : undefined;
   const syncSource = connections.find((value) => value.id === syncBinding?.connectionId && value.enabled);
-  const needsSupportFollowUp = (ticket: Ticket) =>
-    (ticket.workType === 'support' || ticket.workType === undefined && ticket.origin === 'external') && !['Resolved', 'Closed'].includes(ticket.status) &&
-    (state.ticketDevelopmentLinks ?? []).some((link) => link.supportTicketId === ticket.id &&
-      state.tickets.some((development) => development.id === link.developmentTicketId && development.status === 'Done'));
   const lanes = useMemo(() => {
     const mode = board.swimlanes?.mode ?? 'none';
     if (mode === 'none') return [{ name: '', tickets: boardTickets }];
@@ -510,7 +506,7 @@ export function BoardStudio({
             </label>
             <label>
               Work type
-              <input value={(draft.filters.workTypes ?? []).join(', ')} placeholder="support, development" onChange={(event) => patch({ filters: { ...draft.filters, workTypes: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) } })} />
+              <input value={(draft.filters.workTypes ?? []).join(', ')} placeholder="Type names, separated by commas" onChange={(event) => patch({ filters: { ...draft.filters, workTypes: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) } })} />
             </label>
             <label>
               New ticket work type
@@ -809,7 +805,6 @@ export function BoardStudio({
                 <span>CVY-{t.id}</span>
                 <strong>{t.title}</strong>
                 {t.externalPublish && <span aria-label="External creation needs review">⚠</span>}
-                {needsSupportFollowUp(t) && <span>Follow up with customer</span>}
               </button>
               {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
               <Select
@@ -885,7 +880,6 @@ export function BoardStudio({
                               <span className="ticket-card-heading">
                                 <span className="task-id">CVY-{t.id}</span>
                                 {t.externalPublish && <span className="task-id" aria-label="External creation needs review">⚠</span>}
-                                {needsSupportFollowUp(t) && <span className="task-id">Follow up</span>}
                                 {board.cardFields.includes('priority') && (
                                   <span
                                     className={`ticket-priority priority-${t.priority.toLowerCase()}`}

@@ -19,7 +19,6 @@ export function createConversations({ state, catalog, save, event, makeSession, 
   function link(s, id) { const t = ticket(id); const c = current(s); if (!c.linkedTicketIds.includes(t.id)) { c.linkedTicketIds.push(t.id); event(s, 'ticket_linked', { ticketId: t.id, title: t.title }); } return t; }
   function idle(s) { if (busy(s) || s.queuedInput || s.flow && !['completed', 'cancelled'].includes(s.flow.status)) throw new Error('Finish, stop, or cancel the active work before changing assignment.'); if (s.assignment?.state === 'uncertain') throw new Error('Reconcile the uncertain execution before changing assignment.'); }
   function bind(s, t) {
-    if (t.status === 'Done') throw new Error('Reopen this completed ticket before assigning execution.');
     if (s.activeTicketId && s.activeTicketId !== t.id) throw new Error('This session already has an active assignment. Release it before taking another ticket.');
     const other = sessionFor(t);
     if (other && other.id !== s.id && other.activeTicketId === t.id) throw new Error('Ticket is already assigned to another session.');

@@ -51,6 +51,14 @@ test('ticket-free workspace starts lazily and keeps history and agent when takin
   assert.ok(JSON.stringify(f.prompts.at(-1).messages).includes('blue architecture'));
 });
 
+test('conversation assignment treats ticket status as project data', async t => {
+  const f = await fixture(t);
+  const ticket = await f.ticket('Archived-by-project');
+  await f.act('updateTicket', { taskId: ticket.id, revision: ticket.revision, patch: { status: 'Done' } });
+  const assigned = await f.chat('requestExecution', { ticketId: ticket.id, mode: 'continue', brief: 'Review this record', requestId: 'assign-project-status' });
+  assert.equal(assigned.ticketId, ticket.id);
+});
+
 test('chat workspace validation is atomic and project restrictions cannot be bypassed',async t=>{
   const f=await fixture(t);
   await f.act('registerRunner',{name:'Restricted',kind:'local',repository:'/fixture',projectIds:[]});

@@ -52,7 +52,6 @@ export function createTicketRun({
     const ticket = catalog.ticket(command.ticketId);
     if (!ticket) throw new Error('Ticket not found.');
     if (ticket.revision !== command.revision) throw new Error('Ticket changed. Review the current ticket before starting.');
-    if (ticket.status === 'Done') throw new Error('Reopen this completed ticket before running it.');
     if (!['new', 'continue'].includes(command.mode)) throw new Error('Choose a new or existing session.');
 
     const definition = resolveWorkflow(command.workflowId, command.workflowVersion, ticket.projectId);

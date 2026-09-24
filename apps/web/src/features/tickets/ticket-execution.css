@@ -59,11 +59,22 @@
   font-size: 12px;
   font-weight: 600;
 }
-.execution-progress h3 {
-  margin: 0 0 10px;
-  color: var(--muted);
-  font-size: 11px;
+.execution-progress {
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.execution-progress > summary {
+  cursor: pointer;
+  padding: 11px 13px;
+  color: var(--ink);
+  font-size: 12px;
   font-weight: 600;
+}
+.execution-progress[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+.execution-progress .execution-steps {
+  padding: 8px;
 }
 .execution-steps {
   display: grid;

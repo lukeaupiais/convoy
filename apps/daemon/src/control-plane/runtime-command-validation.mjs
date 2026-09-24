@@ -115,6 +115,9 @@ export const runtimeCommandContracts = {
   createDevelopmentTicket: contract(
     ['requestId', 'supportTicketId', 'supportRevision', 'projectId', 'title'], ['description'],
   ),
+  createRelatedTicket: contract(['requestId', 'sourceTicketId', 'sourceRevision', 'title'], ['description', 'boardId', 'status', 'kind']),
+  linkTickets: contract(['sourceTicketId', 'sourceRevision', 'targetTicketId', 'targetRevision'], ['kind']),
+  unlinkTickets: contract(['relationId', 'sourceRevision']),
   linkDevelopmentTicket: contract(
     ['supportTicketId', 'supportRevision', 'developmentTicketId', 'developmentRevision'],
   ),

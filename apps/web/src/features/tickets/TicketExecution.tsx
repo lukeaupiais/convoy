@@ -178,8 +178,8 @@ export function TicketExecution({
             </header>
           )}
           {!focusedArtifactReview && !!shownNodes.length && (
-            <div className="execution-progress">
-              <h3>{flow?.status === 'completed' ? 'Steps taken' : 'Steps'}</h3>
+            <details className="execution-progress">
+              <summary>{flow?.status === 'completed' ? 'Steps taken' : 'Workflow steps'}</summary>
               <ol className="execution-steps" aria-label="Workflow progress">
                 {shownNodes.map((n) => (
                   <li
@@ -202,7 +202,7 @@ export function TicketExecution({
                   </li>
                 ))}
               </ol>
-            </div>
+            </details>
           )}
           {!focusedArtifactReview && node && active && (
             <div className="execution-objective">
@@ -357,43 +357,43 @@ export function TicketExecution({
           )}
           {!focusedArtifactReview && active && (
             <div className="execution-actions">
-                <button
-                  className="secondary"
-                  disabled={working}
-                  onClick={() => void act('pauseWorkflow')}
-                >
-                  Pause
-                </button>
-                <button
-                  className="secondary"
-                  disabled={working}
-                  onClick={() => {
-                    if (
-                      confirm(
-                        'Cancel this workflow? Its worktree and conversation will be preserved.',
-                      )
+              <button
+                className="secondary"
+                disabled={working}
+                onClick={() => void act('pauseWorkflow')}
+              >
+                Pause
+              </button>
+              <button
+                className="secondary"
+                disabled={working}
+                onClick={() => {
+                  if (
+                    confirm(
+                      'Cancel this workflow? Its worktree and conversation will be preserved.',
                     )
-                      void act('cancelWorkflow');
-                  }}
+                  )
+                    void act('cancelWorkflow');
+                }}
+              >
+                Cancel run
+              </button>
+              {[
+                'ready',
+                'paused',
+                'interrupted',
+                'failed',
+                'awaiting_submission',
+                'awaiting_continue',
+              ].includes(flow?.status ?? '') && (
+                <button
+                  className="primary"
+                  disabled={working || busy}
+                  onClick={() => void act('continueWorkflow', { instance: flow!.instance })}
                 >
-                  Cancel run
+                  Continue
                 </button>
-                {[
-                  'ready',
-                  'paused',
-                  'interrupted',
-                  'failed',
-                  'awaiting_submission',
-                  'awaiting_continue',
-                ].includes(flow?.status ?? '') && (
-                  <button
-                    className="primary"
-                    disabled={working || busy}
-                    onClick={() => void act('continueWorkflow', { instance: flow!.instance })}
-                  >
-                    Continue
-                  </button>
-                )}
+              )}
             </div>
           )}
           {!focusedArtifactReview && (
@@ -527,12 +527,9 @@ export function TicketExecution({
           {!state.auth.connected && (
             <p role="status">Connect your provider account in Chat before starting.</p>
           )}
-          {ticket.status === 'Done' && (
-            <p role="status">Reopen this ticket before starting another run.</p>
-          )}
           <button
             className="primary"
-            disabled={working || !workflow || !state.auth.connected || ticket.status === 'Done'}
+            disabled={working || !workflow || !state.auth.connected}
             onClick={() => void launch()}
           >
             <Play size={14} />

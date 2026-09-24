@@ -289,6 +289,23 @@ export type RuntimeCommandInputMap = {
     title: string;
     description?: string;
   };
+  createRelatedTicket: RequestIdentity & {
+    sourceTicketId: number;
+    sourceRevision: number;
+    title: string;
+    description?: string;
+    boardId?: string;
+    status?: string;
+    kind?: string;
+  };
+  linkTickets: {
+    sourceTicketId: number;
+    sourceRevision: number;
+    targetTicketId: number;
+    targetRevision: number;
+    kind?: string;
+  };
+  unlinkTickets: { relationId: string; sourceRevision: number };
   linkDevelopmentTicket: {
     supportTicketId: number;
     supportRevision: number;
@@ -566,6 +583,9 @@ type RuntimeCommandKnownResults = {
   revokeServicePrincipal: ServicePrincipal;
   createTicket: Ticket;
   createDevelopmentTicket: Ticket;
+  createRelatedTicket: Ticket;
+  linkTickets: import('./model/work').TicketRelation;
+  unlinkTickets: { relationId: string };
   linkDevelopmentTicket: import('./model/work').TicketDevelopmentLink;
   unlinkDevelopmentTicket: { supportTicketId: number; developmentTicketId: number };
   saveTicketConnection: TicketConnection;

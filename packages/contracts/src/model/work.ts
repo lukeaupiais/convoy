@@ -208,6 +208,14 @@ export type TicketDevelopmentLink = {
   developmentTicketId: number;
   createdAt: string;
 };
+/** Direction records provenance; kind is an opaque project/workflow-defined value. */
+export type TicketRelation = {
+  id: string;
+  sourceTicketId: number;
+  targetTicketId: number;
+  kind: string;
+  createdAt: string;
+};
 export type Conversation = {
   id: string;
   sessionId: string;

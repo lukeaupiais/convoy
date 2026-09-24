@@ -16,10 +16,11 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (node.kind === 'wait') {
     const waitFor = node.waitFor;
     if (!waitFor || !['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(waitFor.event) ||
-        !['active_ticket', 'linked_development'].includes(waitFor.ticketSource ?? 'active_ticket') ||
+        !['active_ticket', 'related_ticket', 'linked_development'].includes(waitFor.ticketSource ?? 'active_ticket') ||
+        waitFor.relationKind !== undefined && !safeId(waitFor.relationKind) ||
         waitFor.status !== undefined && (typeof waitFor.status !== 'string' || !waitFor.status.trim() || waitFor.status.length > 80))
       throw new Error(`${node.name}: choose a supported ticket event to wait for.`);
-    node.waitFor = { event: waitFor.event, ticketSource: waitFor.ticketSource ?? 'active_ticket', ...(waitFor.status ? { status: waitFor.status } : {}) };
+    node.waitFor = { event: waitFor.event, ticketSource: waitFor.ticketSource ?? 'active_ticket', ...(waitFor.relationKind ? { relationKind: waitFor.relationKind } : {}), ...(waitFor.status ? { status: waitFor.status } : {}) };
   }
   if (node.kind !== 'branch') node.prompt = required(original.prompt ?? `${node.name} completed by the workflow.`, `Objective for ${node.name}`);
   else if (node.prompt !== undefined) {
@@ -40,12 +41,13 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (node.kind === 'check' || node.requiresCheck) node.checkCommand = required(node.checkCommand, `${node.name}: exact check command`, 4000);
   if (node.kind === 'action') {
     const operation = node.operation ?? node.action ?? node.boardAction?.type ?? 'inspect_changes';
-    if (!['inspect_changes', 'create_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
+    if (!['inspect_changes', 'create_ticket', 'create_related_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
     node.operation = operation; if (!node.input && node.boardAction && typeof node.boardAction === 'object') node.input = { boardId: node.boardAction.boardId, columnId: node.boardAction.columnId };
     const input = node.input ?? node.args ?? node.payload;
     if (operation !== 'inspect_changes' && (!input || typeof input !== 'object' || Array.isArray(input))) throw new Error(`${node.name}: board action input is required.`);
     if (operation === 'create_ticket' && (typeof input.title !== 'string' || !input.title.trim() || typeof input.projectId !== 'string' || !input.projectId.trim())) throw new Error(`${node.name}: create_ticket needs title and projectId.`);
     if (operation === 'create_development_ticket' && input.title !== undefined && (typeof input.title !== 'string' || !input.title.trim())) throw new Error(`${node.name}: create_development_ticket title must be non-empty text.`);
+    if (operation === 'create_related_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.kind !== undefined && !safeId(input.kind))) throw new Error(`${node.name}: create_related_ticket needs a title and an optional safe relation kind.`);
     if (operation === 'update_ticket' && input.ticketSource !== 'active_ticket' && input.ticketSource !== 'last_created' && input.ticketId === undefined && input.taskId === undefined) throw new Error(`${node.name}: update_ticket needs a ticket target.`);
     if (operation === 'move_ticket' && (typeof input.boardId !== 'string' || (!input.columnId && !input.placement?.columnId))) throw new Error(`${node.name}: move_ticket needs boardId and columnId.`);
     delete node.action;

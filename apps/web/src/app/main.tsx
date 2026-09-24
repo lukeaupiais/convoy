@@ -216,7 +216,7 @@ function App() {
   const runLabel = !currentExecution
     ? 'Start workflow'
     : currentFlowStatus === 'waiting_gate'
-      ? 'Review workflow'
+      ? 'Review submission'
       : currentFlowStatus === 'completed'
         ? 'View workflow'
         : currentFlowStatus === 'failed' ||
@@ -290,9 +290,13 @@ function App() {
   const placementBoard = newTaskPlacement
     ? liveRuntime?.boards.find((board) => board.id === newTaskPlacement.boardId)
     : undefined;
-  const boardDefaultConnection = placementBoard?.creationPolicy?.mode === 'connection'
-    ? liveRuntime?.ticketConnections?.find((connection) => connection.id === placementBoard.creationPolicy?.connectionId && connection.enabled)
-    : undefined;
+  const boardDefaultConnection =
+    placementBoard?.creationPolicy?.mode === 'connection'
+      ? liveRuntime?.ticketConnections?.find(
+          (connection) =>
+            connection.id === placementBoard.creationPolicy?.connectionId && connection.enabled,
+        )
+      : undefined;
   const selectedDestination = newTaskDestination || boardDefaultConnection?.id || 'convoy';
   return (
     <div className={`app ${collapsed ? 'nav-collapsed' : ''}`}>
@@ -526,7 +530,7 @@ function App() {
           }}
         >
           <section
-            className="detail task-detail ticket-detail dialog"
+            className={`detail task-detail ticket-detail dialog${ticketView === 'details' ? ' ticket-workspace-dialog' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-label={`Ticket CVY-${current.id}`}
@@ -590,7 +594,10 @@ function App() {
                   ticket={currentTicket}
                   runLabel={runLabel}
                   onRun={() => setTicketView('execution')}
-                  onSelectTicket={(id) => { setSelected(id); setTicketView('details'); }}
+                  onSelectTicket={(id) => {
+                    setSelected(id);
+                    setTicketView('details');
+                  }}
                 />
               )}
               {ticketView === 'execution' && liveRuntime && currentTicket && (
@@ -682,9 +689,11 @@ function App() {
                 }
                 createRequest.current = '';
                 setNewTask(null);
-                setToast(createdTicket.externalPublish
-                  ? `Ticket CVY-${createdTicket.id} was saved, but remote creation needs review.`
-                  : 'Ticket saved for all clients.');
+                setToast(
+                  createdTicket.externalPublish
+                    ? `Ticket CVY-${createdTicket.id} was saved, but remote creation needs review.`
+                    : 'Ticket saved for all clients.',
+                );
               } catch (e) {
                 setToast((e as Error).message);
               } finally {
@@ -759,19 +768,44 @@ function App() {
                   name="destination"
                   required
                   onChange={(event) => setNewTaskDestination(event.target.value)}
-                  defaultValue={placementBoard.creationPolicy?.mode === 'connection'
-                    ? boardDefaultConnection?.id ?? 'convoy'
-                    : placementBoard.creationPolicy?.mode === 'ask' ? '' : 'convoy'}
+                  defaultValue={
+                    placementBoard.creationPolicy?.mode === 'connection'
+                      ? (boardDefaultConnection?.id ?? 'convoy')
+                      : placementBoard.creationPolicy?.mode === 'ask'
+                        ? ''
+                        : 'convoy'
+                  }
                 >
-                  {placementBoard.creationPolicy?.mode === 'ask' && <option value="" disabled>Choose destination</option>}
+                  {placementBoard.creationPolicy?.mode === 'ask' && (
+                    <option value="" disabled>
+                      Choose destination
+                    </option>
+                  )}
                   <option value="convoy">Convoy only</option>
                   {(liveRuntime?.ticketConnections ?? [])
-                    .filter((connection) => connection.enabled && placementBoard.destinationConnectionIds?.includes(connection.id) && liveRuntime?.projects.some((project) =>
-                      placementBoard.projectIds.includes(project.id) && project.organizationId === connection.organizationId))
-                    .map((connection) => <option key={connection.id} value={connection.id}>{connection.name}</option>)}
+                    .filter(
+                      (connection) =>
+                        connection.enabled &&
+                        placementBoard.destinationConnectionIds?.includes(connection.id) &&
+                        liveRuntime?.projects.some(
+                          (project) =>
+                            placementBoard.projectIds.includes(project.id) &&
+                            project.organizationId === connection.organizationId,
+                        ),
+                    )
+                    .map((connection) => (
+                      <option key={connection.id} value={connection.id}>
+                        {connection.name}
+                      </option>
+                    ))}
                 </Select>
-                {placementBoard.creationPolicy?.mode === 'connection' && !boardDefaultConnection &&
-                  <small role="alert">The board’s external connection is unavailable. Choose an available destination.</small>}
+                {placementBoard.creationPolicy?.mode === 'connection' &&
+                  !boardDefaultConnection && (
+                    <small role="alert">
+                      The board’s external connection is unavailable. Choose an available
+                      destination.
+                    </small>
+                  )}
               </label>
             )}
             <p className="muted">
