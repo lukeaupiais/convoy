@@ -184,6 +184,7 @@ export function TicketDetails({
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
   const [description, setDescription] = useState(ticket.description);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [revision, setRevision] = useState(ticket.revision);
@@ -249,6 +250,8 @@ export function TicketDetails({
   const hasActivity = Boolean(
     threadConnection || replyConnection || thread?.messages.length || replies.length,
   );
+  const descriptionIsLong =
+    ticket.description.length > 480 || ticket.description.split(/\r?\n/).length > 8;
   const statusBoards = state.boards.filter(
     (board) =>
       board.tickets.some((placement) => placement.ticketId === ticket.id) &&
@@ -297,6 +300,7 @@ export function TicketDetails({
       setDescription(ticket.description);
     }
   }, [ticket.revision, ticket.description, editing]);
+  useEffect(() => setDescriptionExpanded(false), [ticket.id, ticket.description]);
   const patchField = (key: string, value: TicketScalar) =>
     setCustomFields((fields) => ({ ...fields, [key]: value }));
   function removeField(key: string) {
@@ -340,187 +344,199 @@ export function TicketDetails({
         )}
         <div className="ticket-workspace-grid">
           <div className="ticket-workspace-main">
-            {hasActivity ? (
-              <>
-                <section className="ticket-activity" aria-label="Ticket messages">
-                  <div className="ticket-section-heading">
-                    <h3>Messages</h3>
-                    <div className="ticket-activity-actions">
-                      {threadConnection && (
+            <section className="ticket-record-content" aria-label="Ticket description">
+              <h3>Description</h3>
+              {ticket.description ? (
+                <>
+                  <div
+                    id={`ticket-description-${ticket.id}`}
+                    className={
+                      descriptionIsLong && !descriptionExpanded
+                        ? 'ticket-description-collapsed'
+                        : undefined
+                    }
+                  >
+                    <MarkdownDocument text={ticket.description} />
+                  </div>
+                  {descriptionIsLong && (
+                    <button
+                      type="button"
+                      className="ticket-description-toggle"
+                      aria-controls={`ticket-description-${ticket.id}`}
+                      aria-expanded={descriptionExpanded}
+                      onClick={() => setDescriptionExpanded((value) => !value)}
+                    >
+                      {descriptionExpanded ? 'Show less' : 'Show more'}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <p className="ticket-empty">No description.</p>
+              )}
+            </section>
+            {hasActivity && (
+              <section className="ticket-activity" aria-label="Ticket messages">
+                <div className="ticket-section-heading">
+                  <h3>Messages</h3>
+                  <div className="ticket-activity-actions">
+                    {threadConnection && (
+                      <button
+                        className="secondary"
+                        onClick={async () => {
+                          try {
+                            await command('syncExternalTicketThread', {
+                              ticketId: ticket.id,
+                              connectionId: threadConnection.connectionId,
+                            });
+                            setMessage('Messages refreshed.');
+                          } catch (error) {
+                            setMessage((error as Error).message);
+                          }
+                        }}
+                      >
+                        Refresh
+                      </button>
+                    )}
+                    {replyConnection && (
+                      <button
+                        className="secondary"
+                        onClick={() => setShowReplyComposer((value) => !value)}
+                      >
+                        {showReplyComposer ? 'Cancel' : 'Reply'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {thread?.messages.map((entry) => (
+                  <article className="ticket-message" key={entry.remoteId}>
+                    <div>
+                      <strong>
+                        {['user', 'customer'].includes(entry.authorRole.toLowerCase())
+                          ? 'Requester'
+                          : entry.authorRole.toLowerCase() === 'system'
+                            ? 'System'
+                            : 'Team'}
+                      </strong>
+                      <time dateTime={entry.createdAt}>
+                        {new Date(entry.createdAt).toLocaleString()}
+                      </time>
+                      {entry.deliveryStatus && (
+                        <span>
+                          {entry.deliveryStatus[0].toUpperCase() + entry.deliveryStatus.slice(1)}
+                        </span>
+                      )}
+                    </div>
+                    <p>{entry.body}</p>
+                  </article>
+                ))}
+                {replies
+                  .filter(
+                    (reply) => !thread?.messages.some((entry) => entry.remoteId === reply.remoteId),
+                  )
+                  .map((reply) => (
+                    <article className="ticket-message" key={reply.id}>
+                      <div>
+                        <strong>Team</strong>
+                        <span>{reply.deliveryStatus ?? reply.status}</span>
+                      </div>
+                      <p>{reply.body}</p>
+                    </article>
+                  ))}
+                {!thread?.messages.length && !replies.length && (
+                  <p className="ticket-empty">
+                    {thread ? 'No messages yet.' : 'Messages not loaded.'}
+                  </p>
+                )}
+                {replyConnection && showReplyComposer && (
+                  <div className="ticket-reply-composer">
+                    <textarea
+                      aria-label="Reply"
+                      placeholder="Write a reply…"
+                      value={replyDraft}
+                      onChange={(event) => setReplyDraft(event.target.value)}
+                      maxLength={12000}
+                      rows={4}
+                    />
+                    <button
+                      className="secondary"
+                      disabled={replyBusy || !replyDraft.trim() || Boolean(uncertainReply)}
+                      onClick={async () => {
+                        setReplyBusy(true);
+                        try {
+                          await command('postExternalTicketReply', {
+                            requestId: crypto.randomUUID(),
+                            ticketId: ticket.id,
+                            connectionId: replyConnection.connectionId,
+                            body: replyDraft.trim(),
+                          });
+                          setReplyDraft('');
+                          setShowReplyComposer(false);
+                          setMessage('Reply queued. Check delivery status in the source.');
+                        } catch (error) {
+                          setMessage((error as Error).message);
+                        } finally {
+                          setReplyBusy(false);
+                        }
+                      }}
+                    >
+                      Send reply
+                    </button>
+                  </div>
+                )}
+                {uncertainReply && (
+                  <div role="alert">
+                    <p>Reply outcome needs review in the source before another send.</p>
+                    <p>{uncertainReply.body}</p>
+                    {thread?.messages
+                      .filter(
+                        (entry) =>
+                          entry.body === uncertainReply.body &&
+                          !['user', 'customer'].includes(entry.authorRole.toLowerCase()),
+                      )
+                      .map((entry) => (
                         <button
+                          key={entry.remoteId}
                           className="secondary"
+                          disabled={replyBusy}
                           onClick={async () => {
+                            setReplyBusy(true);
                             try {
-                              await command('syncExternalTicketThread', {
-                                ticketId: ticket.id,
-                                connectionId: threadConnection.connectionId,
+                              await command('reconcileExternalTicketReply', {
+                                requestId: uncertainReply.id,
+                                remoteId: entry.remoteId,
                               });
-                              setMessage('Messages refreshed.');
+                              setMessage('Reply matched to the source conversation.');
                             } catch (error) {
                               setMessage((error as Error).message);
+                            } finally {
+                              setReplyBusy(false);
                             }
                           }}
                         >
-                          Refresh
+                          Confirm source message {entry.remoteId}
                         </button>
-                      )}
-                      {replyConnection && (
-                        <button
-                          className="secondary"
-                          onClick={() => setShowReplyComposer((value) => !value)}
-                        >
-                          {showReplyComposer ? 'Cancel' : 'Reply'}
-                        </button>
-                      )}
-                    </div>
+                      ))}
+                    <button
+                      className="secondary"
+                      disabled={replyBusy}
+                      onClick={async () => {
+                        setReplyBusy(true);
+                        try {
+                          await command('reconcileExternalTicketReply', {
+                            requestId: uncertainReply.id,
+                            confirmNotPosted: true,
+                          });
+                          setMessage('Marked not posted after review.');
+                        } catch (error) {
+                          setMessage((error as Error).message);
+                        } finally {
+                          setReplyBusy(false);
+                        }
+                      }}
+                    >
+                      Confirm no reply was posted
+                    </button>
                   </div>
-                  {thread?.messages.map((entry) => (
-                    <article className="ticket-message" key={entry.remoteId}>
-                      <div>
-                        <strong>
-                          {['user', 'customer'].includes(entry.authorRole.toLowerCase())
-                            ? 'Requester'
-                            : entry.authorRole.toLowerCase() === 'system'
-                              ? 'System'
-                              : 'Team'}
-                        </strong>
-                        <time dateTime={entry.createdAt}>
-                          {new Date(entry.createdAt).toLocaleString()}
-                        </time>
-                        {entry.deliveryStatus && (
-                          <span>
-                            {entry.deliveryStatus[0].toUpperCase() + entry.deliveryStatus.slice(1)}
-                          </span>
-                        )}
-                      </div>
-                      <p>{entry.body}</p>
-                    </article>
-                  ))}
-                  {replies
-                    .filter(
-                      (reply) =>
-                        !thread?.messages.some((entry) => entry.remoteId === reply.remoteId),
-                    )
-                    .map((reply) => (
-                      <article className="ticket-message" key={reply.id}>
-                        <div>
-                          <strong>Team</strong>
-                          <span>{reply.deliveryStatus ?? reply.status}</span>
-                        </div>
-                        <p>{reply.body}</p>
-                      </article>
-                    ))}
-                  {!thread?.messages.length && !replies.length && (
-                    <p className="ticket-empty">
-                      {thread ? 'No messages yet.' : 'Messages not loaded.'}
-                    </p>
-                  )}
-                  {replyConnection && showReplyComposer && (
-                    <div className="ticket-reply-composer">
-                      <textarea
-                        aria-label="Reply"
-                        placeholder="Write a reply…"
-                        value={replyDraft}
-                        onChange={(event) => setReplyDraft(event.target.value)}
-                        maxLength={12000}
-                        rows={4}
-                      />
-                      <button
-                        className="secondary"
-                        disabled={replyBusy || !replyDraft.trim() || Boolean(uncertainReply)}
-                        onClick={async () => {
-                          setReplyBusy(true);
-                          try {
-                            await command('postExternalTicketReply', {
-                              requestId: crypto.randomUUID(),
-                              ticketId: ticket.id,
-                              connectionId: replyConnection.connectionId,
-                              body: replyDraft.trim(),
-                            });
-                            setReplyDraft('');
-                            setShowReplyComposer(false);
-                            setMessage('Reply queued. Check delivery status in the source.');
-                          } catch (error) {
-                            setMessage((error as Error).message);
-                          } finally {
-                            setReplyBusy(false);
-                          }
-                        }}
-                      >
-                        Send reply
-                      </button>
-                    </div>
-                  )}
-                  {uncertainReply && (
-                    <div role="alert">
-                      <p>Reply outcome needs review in the source before another send.</p>
-                      <p>{uncertainReply.body}</p>
-                      {thread?.messages
-                        .filter(
-                          (entry) =>
-                            entry.body === uncertainReply.body &&
-                            !['user', 'customer'].includes(entry.authorRole.toLowerCase()),
-                        )
-                        .map((entry) => (
-                          <button
-                            key={entry.remoteId}
-                            className="secondary"
-                            disabled={replyBusy}
-                            onClick={async () => {
-                              setReplyBusy(true);
-                              try {
-                                await command('reconcileExternalTicketReply', {
-                                  requestId: uncertainReply.id,
-                                  remoteId: entry.remoteId,
-                                });
-                                setMessage('Reply matched to the source conversation.');
-                              } catch (error) {
-                                setMessage((error as Error).message);
-                              } finally {
-                                setReplyBusy(false);
-                              }
-                            }}
-                          >
-                            Confirm source message {entry.remoteId}
-                          </button>
-                        ))}
-                      <button
-                        className="secondary"
-                        disabled={replyBusy}
-                        onClick={async () => {
-                          setReplyBusy(true);
-                          try {
-                            await command('reconcileExternalTicketReply', {
-                              requestId: uncertainReply.id,
-                              confirmNotPosted: true,
-                            });
-                            setMessage('Marked not posted after review.');
-                          } catch (error) {
-                            setMessage((error as Error).message);
-                          } finally {
-                            setReplyBusy(false);
-                          }
-                        }}
-                      >
-                        Confirm no reply was posted
-                      </button>
-                    </div>
-                  )}
-                </section>
-                {ticket.description && (
-                  <details className="ticket-request-details">
-                    <summary>Request details</summary>
-                    <MarkdownDocument text={ticket.description} />
-                  </details>
-                )}
-              </>
-            ) : (
-              <section className="ticket-record-content" aria-label="Ticket description">
-                <h3>Description</h3>
-                {ticket.description ? (
-                  <MarkdownDocument text={ticket.description} />
-                ) : (
-                  <p className="ticket-empty">No description.</p>
                 )}
               </section>
             )}
