@@ -284,7 +284,7 @@ export function TicketDetails({
         {ticket.description && <MarkdownDocument text={ticket.description} />}
         <TicketFiles ticket={ticket} editing={false} revisionChanged={setRevision} />
         {(hasActivity || hasRelatedWork) && <nav className="ticket-detail-tabs" aria-label="Ticket sections">
-          {hasActivity && <button type="button" className={visibleTab === 'activity' ? 'selected' : ''} aria-pressed={visibleTab === 'activity'} onClick={() => setActiveTab('activity')}>Activity</button>}
+          {hasActivity && <button type="button" className={visibleTab === 'activity' ? 'selected' : ''} aria-pressed={visibleTab === 'activity'} onClick={() => setActiveTab('activity')}>Messages</button>}
           {hasRelatedWork && <button type="button" className={visibleTab === 'related' ? 'selected' : ''} aria-pressed={visibleTab === 'related'} onClick={() => setActiveTab('related')}>Related work{linkedDevelopment.length + linkedSupport.length > 0 ? ` · ${linkedDevelopment.length + linkedSupport.length}` : ''}</button>}
           {hasDetails && <button type="button" className={visibleTab === 'details' ? 'selected' : ''} aria-pressed={visibleTab === 'details'} onClick={() => setActiveTab('details')}>Details</button>}
         </nav>}
@@ -349,7 +349,7 @@ export function TicketDetails({
         )}
         </div>}
         {visibleTab === 'activity' && hasActivity && (
-          <section className="ticket-tab-panel ticket-activity" aria-label="Ticket activity">
+          <section className="ticket-tab-panel ticket-activity" aria-label="Ticket messages">
             <div className="ticket-activity-actions">
               {threadConnection && <button className="secondary" onClick={async () => {
                 try { await command('syncExternalTicketThread', { ticketId: ticket.id, connectionId: threadConnection.connectionId }); setMessage('Messages refreshed.'); }
