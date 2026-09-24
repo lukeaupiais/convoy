@@ -24,6 +24,11 @@ export function createTicketSources(adapters) {
       if (!value.postReply) throw new Error('This ticket source does not support replies.');
       return value.postReply(connection, remoteId, body, requestId);
     },
+    setStatus(connection, remoteId, input) {
+      const value = adapter(connection);
+      if (!value.setStatus) throw new Error('This ticket source does not support status writes.');
+      return value.setStatus(connection, remoteId, input);
+    },
     createIssue(connection, ticket) {
       const value = adapter(connection);
       if (!value.createIssue) throw new Error('This ticket source is read-only.');

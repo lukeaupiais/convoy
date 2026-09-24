@@ -188,7 +188,7 @@ export function createCommandAuthorization({
       if (!connection || project(value.projectId)?.organizationId !== connection.organizationId) denied();
       return;
     }
-    if (command.action === 'postExternalTicketReply') {
+    if (command.action === 'postExternalTicketReply' || command.action === 'setExternalTicketStatus') {
       const value = await ticketId(command.ticketId, 'project.write', command, actor);
       const connection = state.ticketConnections?.find((item) => item.id === command.connectionId);
       if (!connection || project(value.projectId)?.organizationId !== connection.organizationId) denied();

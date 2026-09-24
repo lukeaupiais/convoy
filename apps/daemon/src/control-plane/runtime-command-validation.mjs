@@ -137,6 +137,7 @@ export const runtimeCommandContracts = {
   syncTicketImportBinding: contract(['id'], ['limit']),
   syncExternalTicketThread: contract(['ticketId', 'connectionId']),
   postExternalTicketReply: contract(['requestId', 'ticketId', 'connectionId', 'body']),
+  setExternalTicketStatus: contract(['requestId', 'ticketId', 'connectionId', 'status'], ['evidenceReplyRequestId']),
   reconcileExternalTicketReply: contract(['requestId'], ['remoteId', 'confirmNotPosted']),
   decide: session(['approvalId'], ['allow', 'decision']),
   deleteBoard: contract(['id', 'revision']),

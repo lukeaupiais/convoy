@@ -85,6 +85,33 @@ test('custom source replies with a separate credential and stable request ID', a
   assert.throws(() => validateCustomTicketSourceManifest(noWrite), /separate write authentication/);
 });
 
+test('custom source writes status with declared request fields and maps the confirmed response', async t => {
+  credential(t, 'read-secret');
+  const previous = process.env.CONVOY_TICKET_SOURCE_WRITE_TEST;
+  process.env.CONVOY_TICKET_SOURCE_WRITE_TEST = 'write-secret';
+  t.after(() => { if (previous === undefined) delete process.env.CONVOY_TICKET_SOURCE_WRITE_TEST; else process.env.CONVOY_TICKET_SOURCE_WRITE_TEST = previous; });
+  const configured = manifest();
+  configured.values.status.waiting = 'Waiting';
+  configured.connection.writeAuthentication = { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_WRITE_TEST' };
+  configured.operations.status = { method: 'PATCH', path: 'tickets/${remoteId}/status',
+    request: { status: 'state', remoteVersion: 'expectedRevision', remoteVersionType: 'integer',
+      evidenceMessageId: 'replyId', evidenceMessageIdType: 'integer' },
+    response: { item: '$.ticket' } };
+  const adapter = createCustomTicketSource({ resolver, fetcher: async (url, options) => {
+    assert.equal(new URL(url).pathname, '/api/tickets/41/status');
+    assert.equal(options.method, 'PATCH');
+    assert.equal(options.headers.Authorization, 'Bearer write-secret');
+    assert.equal(options.headers['Idempotency-Key'], 'status-41');
+    assert.deepEqual(JSON.parse(options.body), { state: 'waiting', expectedRevision: 4, replyId: 12 });
+    return new Response(JSON.stringify({ ticket: { id: '41', key: 'SUP-41', subject: 'Question', state: 'waiting', version: 5 } }), { headers: { 'content-type': 'application/json' } });
+  } });
+  const result = await adapter.setStatus({ manifest: configured }, '41', {
+    status: 'waiting', remoteVersion: '4', evidenceMessageId: '12', requestId: 'status-41',
+  });
+  assert.equal(result.status, 'Waiting');
+  assert.equal(result.remoteVersion, '5');
+});
+
 test('custom source follows an offset using a declared total', async (t) => {
   credential(t, 'secret');
   const requested = [];

@@ -108,11 +108,12 @@ export type WorkflowTriggerFailure = {
   at?: string;
 };
 export type WorkflowTrigger = WorkflowTriggerFailure & {
-  status: 'pending' | 'started' | 'failed' | 'conflict' | 'blocked_active';
+  status: 'pending' | 'started' | 'failed' | 'conflict' | 'blocked_active' | 'coalesced';
   ruleId?: string;
   ruleRevision?: number;
   activeSessionId?: string;
   activeRunId?: string;
+  coalescedInto?: string;
   attempts?: number;
   lastRetryAt?: string;
 };

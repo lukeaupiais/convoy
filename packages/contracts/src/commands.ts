@@ -341,6 +341,7 @@ export type RuntimeCommandInputMap = {
   };
   syncExternalTicketThread: { ticketId: number; connectionId: string };
   postExternalTicketReply: RequestIdentity & { ticketId: number; connectionId: string; body: string };
+  setExternalTicketStatus: RequestIdentity & { ticketId: number; connectionId: string; status: string; evidenceReplyRequestId?: string };
   reconcileExternalTicketReply: { requestId: string; remoteId?: string; confirmNotPosted?: true };
   importExternalTickets: { connectionId: string; projectId: string; limit?: number };
   saveTicketImportBinding: {

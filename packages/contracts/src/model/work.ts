@@ -174,6 +174,18 @@ export type TicketReply = {
   deliveryStatus?: string;
   message?: string;
 };
+export type TicketStatusChange = {
+  id: string;
+  ticketId: number;
+  connectionId: string;
+  status: string;
+  evidenceReplyRequestId?: string;
+  remoteVersion: string;
+  state: 'pending' | 'outcome-unknown' | 'rejected' | 'applied';
+  resultRemoteVersion?: string;
+  message?: string;
+  createdAt: string;
+};
 export type Ticket = {
   id: number;
   executionSessionId?: string;
