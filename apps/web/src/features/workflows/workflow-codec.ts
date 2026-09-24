@@ -3,7 +3,7 @@ import { newId } from '../../shared/lib/browser';
 
 export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait';
 export type SessionMode = 'continue' | 'new' | 'reuse';
-export type ActionOperation = 'inspect_changes' | 'create_ticket' | 'create_development_ticket' | 'update_ticket' | 'move_ticket';
+export type ActionOperation = 'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'create_development_ticket' | 'update_ticket' | 'move_ticket';
 export type ConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type ConditionOperator = 'equals' | 'notEquals' | 'exists';
 export type ConditionValueType = 'text' | 'number' | 'boolean' | 'null';
@@ -32,7 +32,7 @@ export type GraphNode = {
   operation?: ActionOperation;
   input?: ActionInput;
   condition?: Condition;
-  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource: 'active_ticket' | 'linked_development'; status?: string };
+  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource: 'active_ticket' | 'related_ticket' | 'linked_development'; relationKind?: string; status?: string };
   session?: { mode: SessionMode; name?: string; target?: string };
   permissions?: string;
   maxRounds?: number;
@@ -283,7 +283,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
       ? (value.artifact as Record<string, unknown>)
       : undefined;
   const rawOperation = String(value.operation ?? value.action ?? 'inspect_changes');
-  const operation = ['inspect_changes', 'create_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(
+  const operation = ['inspect_changes', 'create_ticket', 'create_related_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(
     rawOperation,
   )
     ? (rawOperation as ActionOperation)
@@ -400,7 +400,8 @@ export function safeNode(raw: unknown, index: number): GraphNode {
       event: ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(String(rawWait?.event))
         ? rawWait?.event as 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'
         : 'ticket_message_received',
-      ticketSource: rawWait?.ticketSource === 'linked_development' ? 'linked_development' : 'active_ticket',
+      ticketSource: rawWait?.ticketSource === 'linked_development' ? 'linked_development' : rawWait?.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket',
+      ...(rawWait?.relationKind ? { relationKind: String(rawWait.relationKind) } : {}),
       ...(rawWait?.status ? { status: String(rawWait.status) } : {}),
     } : undefined,
     outcomes,
@@ -631,6 +632,7 @@ export function actionInputDefaults(operation: ActionOperation): ActionInput {
       agent: 'Unassigned',
       priority: 'Medium',
     };
+  if (operation === 'create_related_ticket') return { title: '', description: '', kind: 'related' };
   if (operation === 'update_ticket') return { ticketSource: 'active_ticket', patch: {} };
   if (operation === 'move_ticket')
     return { ticketSource: 'active_ticket', boardId: '', columnId: '' };

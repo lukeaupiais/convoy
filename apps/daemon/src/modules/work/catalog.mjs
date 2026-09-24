@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { createBoards } from './boards.mjs';
+import { createLegacyDevelopmentCommands, migrateLegacyDevelopmentLinks } from './legacy-development-compat.mjs';
 import { requiredText as text } from '../../shared/validation.mjs';
 export const phases = ['Backlog', 'Ready', 'In progress', 'In review', 'Done'];
 export function createCatalog({ state, save, execution, externalTickets, contextFiles, referencedColumn, referencedBoard }) {
   state.projects ??= [{ id: 'agent-platform', organizationId: 'personal', name: 'Agent platform', description: '', revision: 1, placement: { mode: 'none' }, executionProfile: 'ask' }];
   for (const value of state.projects) value.organizationId ??= 'personal';
   state.tickets ??= []; state.ticketRequests ??= {};
-  state.ticketDevelopmentLinks ??= [];
+  migrateLegacyDevelopmentLinks(state);
   state.ticketImportFacts ??= [];
   state.ticketThreads ??= [];
   state.ticketReplies ??= [];
@@ -22,24 +23,24 @@ export function createCatalog({ state, save, execution, externalTickets, context
   }
   const project = id => { const p = state.projects.find(p => p.id === id); if (!p) throw new Error('Project not found.'); return p; };
   const ticket = id => state.tickets.find(t => String(t.id) === String(id));
-  const supportTicket = (id, revision) => {
+  const relationKind = value => {
+    const kind = text(value ?? 'related', 'Relation kind', 80);
+    if (!/^[\w-]+$/.test(kind)) throw new Error('Relation kind must use letters, numbers, hyphens or underscores.');
+    return kind;
+  };
+  const sourceTicket = (id, revision) => {
     const value = ticket(id);
-    if (!value || (value.workType ?? (value.origin === 'external' ? 'support' : 'task')) !== 'support') throw new Error('Imported support ticket not found.');
-    if (value.revision !== revision) throw new Error('Support ticket changed in another client. Reload before linking.');
+    if (!value) throw new Error('Source ticket not found.');
+    if (value.revision !== revision) throw new Error('Source ticket changed in another client. Reload before linking.');
     return value;
   };
-  const developmentTicket = id => {
-    const value = ticket(id);
-    if (!value || (value.workType ?? (value.origin === 'convoy' ? 'development' : 'task')) !== 'development') throw new Error('Development ticket not found.');
-    return value;
-  };
-  const linkDevelopment = (support, development) => {
-    if (support.id === development.id || support.projectId !== development.projectId) throw new Error('Development work must belong to the same project as its support ticket.');
-    const existing = state.ticketDevelopmentLinks.find(value => value.supportTicketId === support.id && value.developmentTicketId === development.id);
+  const linkTickets = (source, target, kind, bumpRevision = true) => {
+    if (source.id === target.id || source.projectId !== target.projectId) throw new Error('Related tickets must be distinct and belong to the same project.');
+    const existing = state.ticketRelations.find(value => value.sourceTicketId === source.id && value.targetTicketId === target.id && value.kind === kind);
     if (existing) return existing;
-    const value = { id: `${support.id}:${development.id}`, supportTicketId: support.id, developmentTicketId: development.id, createdAt: new Date().toISOString() };
-    state.ticketDevelopmentLinks.push(value);
-    support.revision++;
+    const value = { id: randomUUID(), sourceTicketId: source.id, targetTicketId: target.id, kind, createdAt: new Date().toISOString() };
+    state.ticketRelations.push(value);
+    if (bumpRevision) source.revision++;
     return value;
   };
   const connection = id => {
@@ -102,6 +103,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
     state.ticketStatusMigrationVersion = 1;
   }
   const boards = createBoards({ state, save, projects: state.projects, ticket, referencedColumn, referencedBoard });
+  const legacyDevelopment = createLegacyDevelopmentCommands({ state, ticket, project, fields, boards, execution, save, linkTickets });
   const syncingBindings = new Set();
   async function importPage(c, source, remote, binding, runId, nextCursor) {
     const planned = []; let imported = 0; let updated = 0;
@@ -271,16 +273,16 @@ export function createCatalog({ state, save, execution, externalTickets, context
   function assertEditable(t, queuedPlacement = false) { execution.assertEditable(t, queuedPlacement); }
   return {
     project, ticket, assertEditable, boards,
-    supportContext(ticketId) {
+    ticketContext(ticketId) {
       const thread = state.ticketThreads.find(value => value.ticketId === ticketId);
-      const developmentTickets = (state.ticketDevelopmentLinks ?? [])
-        .filter(value => value.supportTicketId === ticketId)
-        .map(value => state.tickets.find(ticket => ticket.id === value.developmentTicketId))
-        .filter(Boolean)
-        .map(value => ({ id: value.id, title: value.title, status: value.status }));
+      const relatedTickets = (state.ticketRelations ?? [])
+        .filter(value => value.sourceTicketId === ticketId || value.targetTicketId === ticketId)
+        .map(value => ({ relation: value, ticket: state.tickets.find(ticket => ticket.id === (value.sourceTicketId === ticketId ? value.targetTicketId : value.sourceTicketId)) }))
+        .filter(value => value.ticket)
+        .map(value => ({ id: value.ticket.id, title: value.ticket.title, status: value.ticket.status, kind: value.relation.kind }));
       return { thread: thread ? { syncedAt: thread.syncedAt, totalMessages: thread.messages.length,
         messages: thread.messages.slice(-20).map(value => ({ ...value, body: value.body.slice(0, 1500) })) } : null,
-      developmentTickets };
+      relatedTickets };
     },
     async readAttachment(ticketId, attachmentId) {
       const t = ticket(ticketId); if (!t) throw new Error('Ticket not found.');
@@ -366,46 +368,51 @@ export function createCatalog({ state, save, execution, externalTickets, context
         state.tickets.push(value); state.ticketRequests[request] = id; boards.ensureTicket(value); await save();
         return source ? publish(value, source, request) : value;
       }
-      if (c.action === 'createDevelopmentTicket') {
+      if (['createDevelopmentTicket', 'linkDevelopmentTicket', 'unlinkDevelopmentTicket'].includes(c.action)) return legacyDevelopment(c);
+      if (c.action === 'createRelatedTicket') {
         const request = text(c.requestId, 'Request ID', 100);
         if (!/^[\w-]+$/.test(request)) throw new Error('Invalid request ID.');
+        const kind = relationKind(c.kind);
         const existingId = state.ticketRequests[request];
         if (existingId) {
-          const existing = developmentTicket(existingId);
-          if (!state.ticketDevelopmentLinks.some(value => value.supportTicketId === c.supportTicketId && value.developmentTicketId === existing.id)) throw new Error('Request ID belongs to a different ticket.');
+          const existing = ticket(existingId);
+          if (!existing || !state.ticketRelations.some(value => value.sourceTicketId === c.sourceTicketId && value.targetTicketId === existing.id && value.kind === kind)) throw new Error('Request ID belongs to a different ticket.');
           return existing;
         }
-        const support = supportTicket(c.supportTicketId, c.supportRevision);
-        const owner = project(c.projectId);
-        if (owner.id !== support.projectId) throw new Error('Development work must belong to the support project.');
+        const source = sourceTicket(c.sourceTicketId, c.sourceRevision);
+        const board = c.boardId ? boards.board(c.boardId) : null;
+        if (board && !board.projectIds.includes(source.projectId)) throw new Error('Project is not available on this board.');
         const id = Math.max(0, ...state.tickets.map(t => Number(t.id)), ...execution.reservedTicketIds()) + 1;
         if (id > 9999999999) throw new Error('Ticket ID range exhausted.');
-        const value = { id, projectId: owner.id, ...fields({ title: c.title, description: c.description ?? '', status: 'Backlog' }), revision: 1, origin: 'convoy', workType: 'development', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+        const initialStatus = c.status || (board?.grouping.mode === 'field' && board.grouping.field === 'status' ? board.columns[0]?.value ?? board.columns[0]?.name : undefined);
+        const value = { id, projectId: source.projectId, ...fields({ title: c.title, description: c.description, status: initialStatus }), revision: 1, origin: 'convoy', workType: board?.creationWorkType ?? 'task', placement: { mode: 'inherit' }, executionProfile: 'inherit', createdAt: new Date().toISOString() };
+        if (board) boards.assertTicketVisible(board.id, value);
         boards.validateNewTicket(value);
         state.tickets.push(value);
         state.ticketRequests[request] = id;
         boards.ensureTicket(value);
-        linkDevelopment(support, value);
+        linkTickets(source, value, kind);
         await save();
         return value;
       }
-      if (c.action === 'linkDevelopmentTicket') {
-        const support = supportTicket(c.supportTicketId, c.supportRevision);
-        const development = developmentTicket(c.developmentTicketId);
-        if (development.revision !== c.developmentRevision) throw new Error('Development ticket changed in another client. Reload before linking.');
-        const value = linkDevelopment(support, development);
+      if (c.action === 'linkTickets') {
+        const source = sourceTicket(c.sourceTicketId, c.sourceRevision);
+        const target = ticket(c.targetTicketId);
+        if (!target) throw new Error('Target ticket not found.');
+        if (target.revision !== c.targetRevision) throw new Error('Target ticket changed in another client. Reload before linking.');
+        const value = linkTickets(source, target, relationKind(c.kind));
         await save();
         return value;
       }
-      if (c.action === 'unlinkDevelopmentTicket') {
-        const support = supportTicket(c.supportTicketId, c.supportRevision);
-        const development = developmentTicket(c.developmentTicketId);
-        const previous = state.ticketDevelopmentLinks.length;
-        state.ticketDevelopmentLinks = state.ticketDevelopmentLinks.filter(value => value.supportTicketId !== support.id || value.developmentTicketId !== development.id);
-        if (state.ticketDevelopmentLinks.length === previous) throw new Error('Development link not found.');
-        support.revision++;
+      if (c.action === 'unlinkTickets') {
+        const relation = state.ticketRelations.find(value => value.id === c.relationId);
+        if (!relation) throw new Error('Ticket relation not found.');
+        const source = sourceTicket(relation.sourceTicketId, c.sourceRevision);
+        state.ticketRelations = state.ticketRelations.filter(value => value.id !== relation.id);
+        if (relation.kind === 'legacy-development') state.ticketDevelopmentLinks = state.ticketDevelopmentLinks.filter(value => value.supportTicketId !== relation.sourceTicketId || value.developmentTicketId !== relation.targetTicketId);
+        source.revision++;
         await save();
-        return { supportTicketId: support.id, developmentTicketId: development.id };
+        return { relationId: relation.id };
       }
       if (c.action === 'publishTicket') {
         const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
@@ -672,6 +679,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate', 'setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) return boards.command(c);
       throw new Error('Unknown catalog command.');
     },
-    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ...boards.snapshot() }; },
+    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ticketRelations: state.ticketRelations, ...boards.snapshot() }; },
   };
 }

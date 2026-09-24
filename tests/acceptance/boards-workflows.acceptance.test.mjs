@@ -85,6 +85,89 @@ test('acceptance: one project has independent imported and development boards ac
   assert.equal(snapshot.tickets.filter(value => value.projectId === project.id).length, 2);
 });
 
+test('acceptance: project-defined boards and ticket relations survive restart', async t => {
+  const f = await fixture(t, { persistenceBackend: 'sqlite' });
+  const project = await f.act('saveProject', { name: 'Editorial' });
+  const incoming = await f.act('saveBoard', {
+    name: 'Incoming', projectIds: [project.id], filters: { workTypes: ['request'] },
+    creationWorkType: 'request', grouping: { mode: 'field', field: 'status' },
+    columns: [{ id: 'requested', name: 'Requested', value: 'Requested' }],
+  });
+  const production = await f.act('saveBoard', {
+    name: 'Production', projectIds: [project.id], filters: { workTypes: ['article'] },
+    creationWorkType: 'article', grouping: { mode: 'field', field: 'status' },
+    columns: [{ id: 'drafting', name: 'Drafting', value: 'Drafting' }, { id: 'published', name: 'Published', value: 'Published' }],
+  });
+  const request = await f.act('createTicket', { requestId: 'editorial-request', projectId: project.id, boardId: incoming.id, title: 'Profile a researcher', status: 'Requested' });
+  await assert.rejects(f.act('createRelatedTicket', { requestId: 'invalid-relation', sourceTicketId: request.id, sourceRevision: request.revision, title: 'Invalid', kind: 'bad kind' }), /Relation kind/);
+  assert.equal((await f.snapshot()).tickets.filter(value => value.projectId === project.id).length, 1);
+  const article = await f.act('createRelatedTicket', { requestId: 'editorial-article', sourceTicketId: request.id, sourceRevision: request.revision, title: 'Researcher profile', boardId: production.id, kind: 'fulfills' });
+  assert.equal(article.workType, 'article');
+  assert.equal(article.status, 'Drafting');
+  await assert.rejects(f.act('createRelatedTicket', { requestId: 'editorial-cross-project', sourceTicketId: request.id, sourceRevision: request.revision + 1, title: 'Wrong board', boardId: 'default-board' }), /Not authorized|Project is not available/);
+  await f.restart();
+  const state = await f.snapshot();
+  assert.equal(state.boards.find(value => value.id === incoming.id).tickets.length, 1);
+  assert.equal(state.boards.find(value => value.id === production.id).tickets.length, 1);
+  assert.deepEqual(state.ticketRelations.map(value => ({ source: value.sourceTicketId, target: value.targetTicketId, kind: value.kind })), [{ source: request.id, target: article.id, kind: 'fulfills' }]);
+  const relation = state.ticketRelations[0];
+  await f.act('unlinkTickets', { relationId: relation.id, sourceRevision: state.tickets.find(value => value.id === request.id).revision });
+  assert.equal((await f.snapshot()).ticketRelations.length, 0);
+});
+
+test('acceptance: a workflow creates project-defined related work', async t => {
+  const f = await fixture(t, { persistenceBackend: 'sqlite' });
+  const project = await f.act('saveProject', { name: 'Editorial workflow' });
+  const board = await f.act('saveBoard', {
+    name: 'Production', projectIds: [project.id], filters: { workTypes: ['article'] },
+    creationWorkType: 'article', grouping: { mode: 'field', field: 'status' },
+    columns: [{ id: 'drafting', name: 'Drafting', value: 'Drafting' }, { id: 'published', name: 'Published', value: 'Published' }],
+  });
+  const request = await f.act('createTicket', { requestId: 'editorial-flow-request', projectId: project.id, title: 'Write a profile' });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  await f.act('saveWorkflow', { projectId: project.id, workflow: { id: 'editorial-review', name: 'Editorial review', nodes: [
+    { id: 'approve', kind: 'human', name: 'Approve profile', prompt: 'Review the request.' },
+    { id: 'create', kind: 'action', name: 'Create article', operation: 'create_related_ticket', input: { title: 'Researcher profile', boardId: board.id, kind: 'fulfills' } },
+    { id: 'wait', kind: 'wait', name: 'Wait for publication', prompt: 'Wait for the article.', waitFor: { event: 'ticket_updated', ticketSource: 'related_ticket', relationKind: 'fulfills', status: 'Published' } },
+    { id: 'release', kind: 'human', name: 'Review publication', prompt: 'Review the published article.' },
+  ], edges: [{ from: 'approve', to: 'create', outcome: 'approved' }, { from: 'create', to: 'wait', outcome: 'success' }, { from: 'wait', to: 'release', outcome: 'success' }] } });
+  await f.act('runTicket', { requestId: 'editorial-flow-run', ticketId: request.id, revision: request.revision, workflowId: 'editorial-review', workflowVersion: 1, model: 'fixture', mode: 'new' });
+  let state = await f.snapshot();
+  const session = state.sessions.find(value => value.activeTicketId === request.id);
+  assert.equal(session.flow.status, 'waiting_gate');
+  await f.act('claim', { sessionId: session.id });
+  await f.act('approveGate', { sessionId: session.id, instance: session.flow.instance });
+  state = await until(async () => { const snapshot = await f.snapshot(); return snapshot.ticketRelations?.length === 1 ? snapshot : null; });
+  assert.equal(state.ticketRelations[0].kind, 'fulfills');
+  const article = state.tickets.find(value => value.id === state.ticketRelations[0].targetTicketId);
+  assert.equal(article.status, 'Drafting');
+  assert.equal(state.sessions.find(value => value.id === session.id).flow.status, 'waiting_event');
+  await f.act('updateTicket', { taskId: article.id, revision: article.revision, patch: { status: 'Published' } });
+  state = await f.snapshot();
+  assert.equal(state.sessions.find(value => value.id === session.id).flow.nodeId, 'release');
+  assert.equal(state.sessions.find(value => value.id === session.id).flow.status, 'waiting_gate');
+  await f.restart();
+  assert.equal((await f.snapshot()).ticketRelations.length, 1);
+});
+
+test('acceptance: legacy links migrate once and generic unlink does not resurrect them', async t => {
+  const f = await fixture(t);
+  const source = await f.act('createTicket', { requestId: 'legacy-source', projectId: 'agent-platform', title: 'Original request' });
+  const target = await f.act('createTicket', { requestId: 'legacy-target', projectId: 'agent-platform', title: 'Follow-up item' });
+  await f.restartLegacy(state => {
+    state.ticketDevelopmentLinks = [{ id: `${source.id}:${target.id}`, supportTicketId: source.id, developmentTicketId: target.id, createdAt: '2026-09-23T00:00:00Z' }];
+    delete state.ticketRelations;
+  });
+  let state = await f.snapshot();
+  assert.equal(state.ticketRelations.length, 1);
+  assert.equal(state.ticketRelations[0].kind, 'legacy-development');
+  await f.act('unlinkTickets', { relationId: state.ticketRelations[0].id, sourceRevision: source.revision });
+  await f.restart();
+  state = await f.snapshot();
+  assert.equal(state.ticketRelations.length, 0);
+  assert.equal(state.ticketDevelopmentLinks.length, 0);
+});
+
 test('acceptance: an enabled import binding polls without an operator command', async t => {
   let calls = 0;
   const f = await fixture(t, { externalTickets: {

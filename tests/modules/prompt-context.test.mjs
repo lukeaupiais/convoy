@@ -83,7 +83,7 @@ test('stable epoch excludes runtime data while updates append after its prefix',
     { id: 4, title: 'Ticket' },
     { thread: { syncedAt: '2026-09-23T00:00:00Z', totalMessages: 1,
       messages: [{ remoteId: 'message-1', authorRole: 'customer', body: 'Customer detail' }] },
-      developmentTickets: [{ id: 5, title: 'Fix', status: 'Backlog' }] },
+      relatedTickets: [{ id: 5, title: 'Fix', status: 'Backlog', kind: 'related' }] },
   );
   const messages = [{ role: 'user', content: 'Please continue' }];
   assert.equal(promptContext.recordTurnSnapshot(messages, snapshot), true);

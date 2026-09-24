@@ -1006,7 +1006,7 @@ function NodeInspector({
           <summary>Event to resume this workflow</summary>
           <label>Event
             <select value={node.waitFor?.event ?? 'ticket_message_received'} onChange={(event) => onPatch(node.id, { waitFor: { ...node.waitFor, event: event.target.value as NonNullable<GraphNode['waitFor']>['event'], ticketSource: node.waitFor?.ticketSource ?? 'active_ticket' } })}>
-              <option value="ticket_message_received">Customer message received</option>
+              <option value="ticket_message_received">Source message received</option>
               <option value="ticket_source_updated">Imported ticket updated</option>
               <option value="ticket_updated">Local ticket updated</option>
             </select>
@@ -1014,9 +1014,13 @@ function NodeInspector({
           <label>Ticket
             <select value={node.waitFor?.ticketSource ?? 'active_ticket'} onChange={(event) => onPatch(node.id, { waitFor: { event: node.waitFor?.event ?? 'ticket_message_received', ticketSource: event.target.value as NonNullable<GraphNode['waitFor']>['ticketSource'], status: node.waitFor?.status } })}>
               <option value="active_ticket">Active ticket</option>
-              <option value="linked_development">Linked development ticket</option>
+              <option value="related_ticket">Related ticket</option>
+              {node.waitFor?.ticketSource === 'linked_development' && <option value="linked_development">Linked development ticket (legacy)</option>}
             </select>
           </label>
+          {node.waitFor?.ticketSource === 'related_ticket' && <label>Relation kind (optional)
+            <input value={node.waitFor.relationKind ?? ''} onChange={(event) => onPatch(node.id, { waitFor: { ...node.waitFor!, relationKind: event.target.value || undefined } })} />
+          </label>}
           <label>Required status (optional)
             <input value={node.waitFor?.status ?? ''} onChange={(event) => onPatch(node.id, { waitFor: { event: node.waitFor?.event ?? 'ticket_message_received', ticketSource: node.waitFor?.ticketSource ?? 'active_ticket', status: event.target.value || undefined } })} />
           </label>
@@ -1125,7 +1129,8 @@ function ActionFields({
         >
           <option value="inspect_changes">Inspect changes</option>
           <option value="create_ticket">Create ticket</option>
-          <option value="create_development_ticket">Create linked development ticket</option>
+          <option value="create_related_ticket">Create related ticket</option>
+          {operation === 'create_development_ticket' && <option value="create_development_ticket">Create linked development ticket (legacy)</option>}
           <option value="update_ticket">Update ticket</option>
           <option value="move_ticket">Move ticket</option>
         </select>
@@ -1145,6 +1150,20 @@ function ActionFields({
         <>
           {field('title', 'Title (defaults to support ticket)')}
           {field('description', 'Description (defaults to support report)')}
+        </>
+      )}
+      {operation === 'create_related_ticket' && (
+        <>
+          {field('title', 'Title')}
+          {field('description', 'Description')}
+          {field('kind', 'Relation kind', 'related')}
+          <label>Board (optional)
+            <select value={displayValue(input.boardId)} onChange={(event) => onPatchInput(node.id, 'boardId', event.target.value)}>
+              <option value="">Project default</option>
+              {boards.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          </label>
+          {field('status', 'Status (optional)')}
         </>
       )}
       {operation === 'update_ticket' && (

@@ -131,7 +131,7 @@ export function createAgentExecution({
           const turnSnapshot = promptContext.turnSnapshot(
             s,
             s.activeTicketId ? catalog.ticket(s.activeTicketId) : null,
-            s.activeTicketId ? catalog.supportContext(s.activeTicketId) : null,
+            s.activeTicketId ? catalog.ticketContext(s.activeTicketId) : null,
           );
           if (promptContext.recordTurnSnapshot(s.messages, turnSnapshot)) await store.save();
           const latestUserIndex = s.messages.findLastIndex((message) => message.role === 'user');
