@@ -1,6 +1,6 @@
 .ticket-detail .ticket-summary {
   display: grid;
-  gap: 12px;
+  gap: 0;
   padding: 0;
   border: 0;
   background: transparent;
@@ -10,6 +10,12 @@
   display: flex;
   align-items: flex-start;
   gap: 12px;
+}
+.ticket-detail .ticket-summary > header,
+.ticket-detail .ticket-summary-properties,
+.ticket-detail .ticket-summary > .artifact-markdown,
+.ticket-detail .ticket-files {
+  margin-bottom: 14px;
 }
 .ticket-detail .ticket-summary h2 {
   flex: 1;
@@ -21,10 +27,11 @@
   min-height: 27px;
   padding: 4px 9px;
 }
+.ticket-header-actions { display: flex; gap: 6px; }
 .ticket-detail .ticket-summary-properties {
   display: flex;
   flex-wrap: wrap;
-  gap: 0;
+  gap: 8px;
   padding: 0;
   border: 0;
   color: #55706b;
@@ -36,13 +43,19 @@
   background: transparent;
   color: inherit;
 }
-.ticket-detail .ticket-summary-properties span:not(:last-child)::after {
-  content: ' · ';
-  white-space: pre;
+.ticket-detail .ticket-summary-properties a {
+  margin-left: auto;
+  color: #275f71;
+  text-decoration: none;
+}
+.ticket-detail .ticket-summary-properties a:hover {
+  text-decoration: underline;
 }
 .ticket-summary > .artifact-markdown {
-  padding-top: 12px;
-  border-top: 1px solid #a6aaa0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
   color: #294542;
   font-family: 'MS Sans Serif', Tahoma, Verdana, 'Segoe UI', sans-serif;
 }
@@ -52,19 +65,82 @@
 .ticket-summary > .artifact-markdown > :last-child {
   margin-bottom: 0;
 }
-.ticket-summary > .ticket-primary-action {
-  display: contents;
+.ticket-detail-tabs {
+  display: flex;
+  gap: 18px;
+  border-bottom: 1px solid #aaa99f;
 }
-.ticket-summary > .ticket-primary-action button {
-  position: relative;
-  z-index: 1;
-  width: auto;
-  justify-self: end;
-  margin-top: 4px;
+.ticket-detail-tabs button {
+  min-height: 34px;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #63746d;
+  font-size: 12px;
 }
-.ticket-summary > .ticket-primary-action button:active {
-  transform: none;
+.ticket-detail-tabs button.selected {
+  border-bottom-color: #123d62;
+  color: #17393d;
+  font-weight: 700;
 }
+.ticket-tab-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0 4px;
+}
+.ticket-activity-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.ticket-activity-actions button {
+  min-height: 26px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.ticket-message {
+  padding: 0 0 13px;
+  border-bottom: 1px solid #d5d8ce;
+}
+.ticket-message > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: #758078;
+  font-size: 11px;
+}
+.ticket-message strong { color: #234745; }
+.ticket-message p {
+  margin: 8px 0 0;
+  color: #294542;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.ticket-empty { margin: 14px 0; color: #758078; font-size: 12px; }
+.ticket-reply-composer { display: grid; gap: 8px; }
+.ticket-reply-composer textarea {
+  width: 100%;
+  min-height: 100px;
+  padding: 10px;
+  border: 1px solid #9ea99f;
+  background: #fffdf0;
+  color: #294542;
+  resize: vertical;
+}
+.ticket-reply-composer button { justify-self: end; }
+.ticket-related-work { display: grid; gap: 8px; }
+.ticket-related-row { display: flex; align-items: center; gap: 8px; }
+.ticket-related-row > button:first-child { flex: 1; text-align: left; }
+.ticket-related-add { padding-top: 3px; }
+.ticket-related-add > summary { width: max-content; cursor: pointer; color: #275f71; font-size: 12px; }
+.ticket-related-add[open] { display: grid; gap: 9px; }
+.ticket-source-details { align-content: start; }
+.ticket-facts { display: grid; gap: 8px; margin: 0; }
+.ticket-facts > div { display: grid; grid-template-columns: 95px 1fr; gap: 10px; font-size: 12px; }
+.ticket-facts dt { color: #758078; }
+.ticket-facts dd { margin: 0; color: #294542; overflow-wrap: anywhere; }
 .ticket-files {
   display: grid;
   gap: 6px;
@@ -229,9 +305,7 @@
   .ticket-detail .ticket-summary h2 {
     font-size: 16px;
   }
-  .ticket-summary > .ticket-primary-action button {
-    width: 100%;
-  }
+  .ticket-header-actions { flex-wrap: wrap; justify-content: flex-end; }
   .ticket-file-list {
     display: grid;
   }
