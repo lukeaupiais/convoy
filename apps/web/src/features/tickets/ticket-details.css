@@ -121,17 +121,42 @@
   align-content: start;
   gap: 13px;
 }
-.ticket-record-content .artifact-markdown,
-.ticket-request-details .artifact-markdown {
+.ticket-record-content .artifact-markdown {
   color: #294542;
   line-height: 1.6;
 }
 .ticket-record-content h3 {
   margin-bottom: 15px;
 }
-.ticket-record-content .artifact-markdown > :first-child,
-.ticket-request-details .artifact-markdown > :first-child {
+.ticket-record-content .artifact-markdown > :first-child {
   margin-top: 0;
+}
+.ticket-description-collapsed {
+  position: relative;
+  max-height: 7.5rem;
+  overflow: hidden;
+}
+.ticket-description-collapsed::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2.5rem;
+  background: linear-gradient(transparent, #fffdf4);
+  content: '';
+  pointer-events: none;
+}
+.ticket-description-toggle {
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #245b6c;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ticket-description-toggle:hover {
+  text-decoration: underline;
 }
 .ticket-review-card {
   display: grid;
@@ -157,18 +182,10 @@
 .ticket-review-card button {
   justify-self: start;
 }
-.ticket-request-details {
-  border-top: 1px solid #d6d9cc;
-  padding-top: 15px;
-}
-.ticket-request-details summary,
 .ticket-context-more summary {
   cursor: pointer;
   color: #365c58;
   font-size: 12px;
-}
-.ticket-request-details[open] summary {
-  margin-bottom: 14px;
 }
 .ticket-context-more[open] summary {
   margin-bottom: 12px;
@@ -229,7 +246,9 @@
   color: #55726c;
   font-size: 11px;
 }
-.ticket-link-management[open] > button { margin-top: 8px; }
+.ticket-link-management[open] > button {
+  margin-top: 8px;
+}
 .ticket-record-link {
   display: grid;
   gap: 3px;
