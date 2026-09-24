@@ -155,166 +155,27 @@ export function TicketExecution({
           {error}
         </p>
       )}
-      {!active && !busy && (
-        <details className="execution-setup" open={!session?.flow}>
-          <summary>{session?.flow ? 'Run again' : 'Run this ticket'}</summary>
-          <div className="execution-fields">
-            <label>
-              Profile
-              <ProfilePicker
-                state={state}
-                value={profile}
-                onChange={setProfile}
-                disabled={working || pendingRequest}
-              />
-            </label>
-            <label>
-              Workflow
-              <Select
-                aria-label="Run workflow"
-                value={workflow}
-                disabled={working || pendingRequest}
-                onChange={(e) => setWorkflow(e.target.value)}
-              >
-                <option value="" disabled>
-                  Choose workflow
-                </option>
-                {versions.map((w) => (
-                  <option key={w.id} value={`${w.id}@${w.version}`}>
-                    {w.name} · v{w.version}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label>
-              Agent session
-              <Select
-                aria-label="Execution session"
-                value={target}
-                disabled={working || pendingRequest}
-                onChange={(e) => {
-                  setTarget(e.target.value);
-                  setEnvironment('inherit');
-                }}
-              >
-                <option value="new">New session · fresh context</option>
-                {eligible.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    Continue · {s.title}
-                  </option>
-                ))}
-              </Select>
-            </label>
-            <label>
-              Environment
-              <Select
-                aria-label="Execution environment"
-                value={fixed ? 'inherit' : environment}
-                disabled={fixed || working || pendingRequest}
-                onChange={(e) => setEnvironment(e.target.value)}
-              >
-                <option value="inherit">
-                  {fixed ? 'Keep existing worktree' : 'Ticket / project default'}
-                </option>
-                <option value="none">Text only · no filesystem</option>
-                {state.runnerPools.map((p) => (
-                  <option key={p.id} value={`pool:${p.id}`}>
-                    Pool · {p.name}
-                  </option>
-                ))}
-                {state.runners
-                  .filter((r) => r.enabled && r.projectIds.includes(ticket.projectId))
-                  .map((r) => (
-                    <option key={r.id} value={`runner:${r.id}`}>
-                      {r.name} ·{' '}
-                      {state.environments.find((e) => e.id === r.environmentId)?.name ?? r.kind}
-                      {!r.online ? ' · offline' : ''}
-                    </option>
-                  ))}
-              </Select>
-            </label>
-            <label>
-              Model
-              <Select
-                aria-label="Execution model"
-                value={model}
-                disabled={working || pendingRequest}
-                onChange={(e) => setModel(e.target.value)}
-              >
-                {state.models.map((m) => (
-                  <option key={m.id}>{m.id}</option>
-                ))}
-              </Select>
-            </label>
-          </div>
-          <p className="execution-note">
-            {target === 'new'
-              ? 'Uses the ticket description as context. Prior conversation history and worktrees are not copied.'
-              : 'Keeps this conversation’s context and existing worktree.'}{' '}
-            Board columns change only through configured actions.
-          </p>
-          {!state.auth.connected && (
-            <p role="status">Connect your provider account in Chat before starting.</p>
-          )}
-          {ticket.status === 'Done' && (
-            <p role="status">Reopen this ticket before starting another run.</p>
-          )}
-          <button
-            className="primary"
-            disabled={working || !workflow || !state.auth.connected || ticket.status === 'Done'}
-            onClick={() => void launch()}
-          >
-            <Play size={14} />
-            {working ? 'Starting…' : pendingRequest ? 'Retry same run request' : 'Run ticket'}
-          </button>
-          {pendingRequest && !working && (
-            <button
-              className="secondary"
-              onClick={() => {
-                request.current = '';
-                setPendingRequest(false);
-              }}
-            >
-              Change launch settings
-            </button>
-          )}
-        </details>
-      )}
       {session && (
         <>
           {!focusedArtifactReview && (
             <header className="execution-heading">
               <div>
-                <strong>
-                  {session.workflow?.name ?? 'Agent session'}
-                  {session.workflow && ` · v${session.workflow.version}`}
-                </strong>
-                <span>
-                  {flow?.status.replaceAll('_', ' ') ?? session.status.replaceAll('_', ' ')}
+                <small>Workflow</small>
+                <h2>{session.workflow?.name ?? 'Agent session'}</h2>
+                <span role="status">
+                  {(flow?.status ?? session.status)
+                    .replaceAll('_', ' ')
+                    .replace(/^./, (letter) => letter.toUpperCase())}
                 </span>
               </div>
               <button
                 className="secondary"
                 onClick={() => openChat(session.conversationId ?? session.id)}
               >
-                Open conversation
+                Agent chat
                 <ArrowUpRight size={14} />
               </button>
             </header>
-          )}
-          {!focusedArtifactReview && (
-            <p className="execution-note">
-              {session.workspace
-                ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
-                : (session.queueReason ?? 'No worktree provisioned')}
-              {session.assignment && ` · ${session.assignment.state}`}
-            </p>
-          )}
-          {flow?.status === 'completed' && (
-            <section className="execution-outcome" aria-label="Completed workflow">
-              <h2>Workflow completed</h2>
-              {flow.lastSubmission?.summary && <p>{flow.lastSubmission.summary}</p>}
-            </section>
           )}
           {!focusedArtifactReview && !!shownNodes.length && (
             <details className="execution-progress">
@@ -494,48 +355,44 @@ export function TicketExecution({
               )}
             </div>
           )}
-          {!focusedArtifactReview && (
+          {!focusedArtifactReview && active && (
             <div className="execution-actions">
-              {active && (
-                <>
-                  <button
-                    className="secondary"
-                    disabled={working}
-                    onClick={() => void act('pauseWorkflow')}
-                  >
-                    Pause
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={working}
-                    onClick={() => {
-                      if (
-                        confirm(
-                          'Cancel this workflow? Its worktree and conversation will be preserved.',
-                        )
-                      )
-                        void act('cancelWorkflow');
-                    }}
-                  >
-                    Cancel run
-                  </button>
-                  {[
-                    'ready',
-                    'paused',
-                    'interrupted',
-                    'failed',
-                    'awaiting_submission',
-                    'awaiting_continue',
-                  ].includes(flow?.status ?? '') && (
-                    <button
-                      className="primary"
-                      disabled={working || busy}
-                      onClick={() => void act('continueWorkflow', { instance: flow!.instance })}
-                    >
-                      Continue
-                    </button>
-                  )}
-                </>
+              <button
+                className="secondary"
+                disabled={working}
+                onClick={() => void act('pauseWorkflow')}
+              >
+                Pause
+              </button>
+              <button
+                className="secondary"
+                disabled={working}
+                onClick={() => {
+                  if (
+                    confirm(
+                      'Cancel this workflow? Its worktree and conversation will be preserved.',
+                    )
+                  )
+                    void act('cancelWorkflow');
+                }}
+              >
+                Cancel run
+              </button>
+              {[
+                'ready',
+                'paused',
+                'interrupted',
+                'failed',
+                'awaiting_submission',
+                'awaiting_continue',
+              ].includes(flow?.status ?? '') && (
+                <button
+                  className="primary"
+                  disabled={working || busy}
+                  onClick={() => void act('continueWorkflow', { instance: flow!.instance })}
+                >
+                  Continue
+                </button>
               )}
             </div>
           )}
@@ -558,10 +415,138 @@ export function TicketExecution({
           {!focusedArtifactReview && (
             <details className="execution-evidence">
               <summary>Session controls & recovery</summary>
+              <p className="execution-note">
+                {session.workspace
+                  ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
+                  : (session.queueReason ?? 'No worktree provisioned')}
+                {session.assignment && ` · ${session.assignment.state}`}
+              </p>
               <SessionControls session={session} state={state} />
             </details>
           )}
         </>
+      )}
+      {!active && !busy && (
+        <details className="execution-setup" open={!session?.flow}>
+          <summary>{session?.flow ? 'Run again' : 'Run this ticket'}</summary>
+          <div className="execution-fields">
+            <label>
+              Profile
+              <ProfilePicker
+                state={state}
+                value={profile}
+                onChange={setProfile}
+                disabled={working || pendingRequest}
+              />
+            </label>
+            <label>
+              Workflow
+              <Select
+                aria-label="Run workflow"
+                value={workflow}
+                disabled={working || pendingRequest}
+                onChange={(e) => setWorkflow(e.target.value)}
+              >
+                <option value="" disabled>
+                  Choose workflow
+                </option>
+                {versions.map((w) => (
+                  <option key={w.id} value={`${w.id}@${w.version}`}>
+                    {w.name} · v{w.version}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label>
+              Agent session
+              <Select
+                aria-label="Execution session"
+                value={target}
+                disabled={working || pendingRequest}
+                onChange={(e) => {
+                  setTarget(e.target.value);
+                  setEnvironment('inherit');
+                }}
+              >
+                <option value="new">New session · fresh context</option>
+                {eligible.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    Continue · {s.title}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label>
+              Environment
+              <Select
+                aria-label="Execution environment"
+                value={fixed ? 'inherit' : environment}
+                disabled={fixed || working || pendingRequest}
+                onChange={(e) => setEnvironment(e.target.value)}
+              >
+                <option value="inherit">
+                  {fixed ? 'Keep existing worktree' : 'Ticket / project default'}
+                </option>
+                <option value="none">Text only · no filesystem</option>
+                {state.runnerPools.map((p) => (
+                  <option key={p.id} value={`pool:${p.id}`}>
+                    Pool · {p.name}
+                  </option>
+                ))}
+                {state.runners
+                  .filter((r) => r.enabled && r.projectIds.includes(ticket.projectId))
+                  .map((r) => (
+                    <option key={r.id} value={`runner:${r.id}`}>
+                      {r.name} ·{' '}
+                      {state.environments.find((e) => e.id === r.environmentId)?.name ?? r.kind}
+                      {!r.online ? ' · offline' : ''}
+                    </option>
+                  ))}
+              </Select>
+            </label>
+            <label>
+              Model
+              <Select
+                aria-label="Execution model"
+                value={model}
+                disabled={working || pendingRequest}
+                onChange={(e) => setModel(e.target.value)}
+              >
+                {state.models.map((m) => (
+                  <option key={m.id}>{m.id}</option>
+                ))}
+              </Select>
+            </label>
+          </div>
+          <p className="execution-note">
+            {target === 'new'
+              ? 'Uses the ticket description as context. Prior conversation history and worktrees are not copied.'
+              : 'Keeps this conversation’s context and existing worktree.'}{' '}
+            Board columns change only through configured actions.
+          </p>
+          {!state.auth.connected && (
+            <p role="status">Connect your provider account in Chat before starting.</p>
+          )}
+          <button
+            className="primary"
+            disabled={working || !workflow || !state.auth.connected}
+            onClick={() => void launch()}
+          >
+            <Play size={14} />
+            {working ? 'Starting…' : pendingRequest ? 'Retry same run request' : 'Run ticket'}
+          </button>
+          {pendingRequest && !working && (
+            <button
+              className="secondary"
+              onClick={() => {
+                request.current = '';
+                setPendingRequest(false);
+              }}
+            >
+              Change launch settings
+            </button>
+          )}
+        </details>
       )}
     </section>
   );

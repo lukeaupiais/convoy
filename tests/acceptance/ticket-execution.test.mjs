@@ -213,6 +213,20 @@ test('ticket run: validation and foreign controller prevent side effects', async
   assert.equal(state.tickets[0].revision, f.ticket.revision);
   assert.equal(f.prompts.length, 0);
 });
+test('ticket run: status values do not define whether a workflow may start', async (t) => {
+  const f = await fixture(t);
+  const updated = await f.act('updateTicket', {
+    taskId: f.ticket.id,
+    revision: f.ticket.revision,
+    patch: { status: 'Done' },
+  });
+  const run = await f.act('runTicket', {
+    ...f.launch,
+    revision: updated.revision,
+    requestId: 'run-with-project-status',
+  });
+  assert.equal(run.ticketId, f.ticket.id);
+});
 test('ticket run: active run cannot be replaced or started twice', async (t) => {
   const f = await fixture(t);
   const one = await f.act('runTicket', f.launch);
