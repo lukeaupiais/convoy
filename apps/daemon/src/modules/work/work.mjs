@@ -4,6 +4,9 @@ const commands = [
   'saveProject',
   'createTicket',
   'createDevelopmentTicket',
+  'createRelatedTicket',
+  'linkTickets',
+  'unlinkTickets',
   'linkDevelopmentTicket',
   'unlinkDevelopmentTicket',
   'saveTicketConnection',
@@ -59,6 +62,9 @@ export function createWork({ afterCommand = async (_command, result) => result, 
           value.tickets.some((ticket) => ticket.id === link.supportTicketId && projectIds.has(ticket.projectId)) &&
           value.tickets.some((ticket) => ticket.id === link.developmentTicketId && projectIds.has(ticket.projectId)),
         ),
+        ticketRelations: value.ticketRelations.filter((link) =>
+          value.tickets.some((ticket) => ticket.id === link.sourceTicketId && projectIds.has(ticket.projectId)) &&
+          value.tickets.some((ticket) => ticket.id === link.targetTicketId && projectIds.has(ticket.projectId))),
         ticketConnections: value.ticketConnections.filter((connection) =>
           value.projects.some((project) => projectIds.has(project.id) && project.organizationId === connection.organizationId),
         ),

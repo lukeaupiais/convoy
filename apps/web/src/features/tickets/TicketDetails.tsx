@@ -195,16 +195,37 @@ export function TicketDetails({
   const [fieldError, setFieldError] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [remoteIssueId, setRemoteIssueId] = useState('');
-  const [developmentTicketId, setDevelopmentTicketId] = useState('');
-  const [developmentTitle, setDevelopmentTitle] = useState('');
+  const [relatedTicketId, setRelatedTicketId] = useState('');
+  const [relatedTitle, setRelatedTitle] = useState('');
+  const [relatedBoardId, setRelatedBoardId] = useState('');
   const [linkBusy, setLinkBusy] = useState(false);
   const [replyDraft, setReplyDraft] = useState('');
   const [replyBusy, setReplyBusy] = useState(false);
   const [showReplyComposer, setShowReplyComposer] = useState(false);
-  const linkedDevelopment = (state.ticketDevelopmentLinks ?? [])
-    .filter((link) => link.supportTicketId === ticket.id)
-    .map((link) => state.tickets.find((value) => value.id === link.developmentTicketId))
-    .filter((value): value is Ticket => Boolean(value));
+  const related = (state.ticketRelations ?? []).flatMap((relation) => {
+    const otherId =
+      relation.sourceTicketId === ticket.id
+        ? relation.targetTicketId
+        : relation.targetTicketId === ticket.id
+          ? relation.sourceTicketId
+          : null;
+    const other = state.tickets.find((value) => value.id === otherId);
+    return other ? [{ relation, other }] : [];
+  });
+  const availableRelatedTickets = state.tickets.filter(
+    (value) =>
+      value.id !== ticket.id &&
+      value.projectId === ticket.projectId &&
+      !related.some((item) => item.other.id === value.id),
+  );
+  const projectBoards = state.boards.filter(
+    (board) =>
+      board.projectIds.includes(ticket.projectId) &&
+      !board.filters.importBindingIds?.length &&
+      (!board.filters.origins?.length || board.filters.origins.includes('convoy')) &&
+      (!board.filters.workTypes?.length ||
+        board.filters.workTypes.includes(board.creationWorkType ?? 'task')),
+  );
   const thread = (state.ticketThreads ?? []).find((value) => value.ticketId === ticket.id);
   const replies = (state.ticketReplies ?? []).filter((value) => value.ticketId === ticket.id);
   const uncertainReply = replies.find((value) =>
@@ -228,39 +249,23 @@ export function TicketDetails({
   const hasActivity = Boolean(
     threadConnection || replyConnection || thread?.messages.length || replies.length,
   );
-  const linkedSupport = (state.ticketDevelopmentLinks ?? [])
-    .filter((link) => link.developmentTicketId === ticket.id)
-    .map((link) => state.tickets.find((value) => value.id === link.supportTicketId))
-    .filter((value): value is Ticket => Boolean(value));
-  const hasRelatedWork =
-    ticket.workType === 'support' || linkedDevelopment.length > 0 || linkedSupport.length > 0;
-  const availableDevelopmentTickets = state.tickets.filter(
-    (value) =>
-      (value.workType === 'development' ||
-        (value.workType === undefined && value.origin === 'convoy')) &&
-      value.projectId === ticket.projectId &&
-      !linkedDevelopment.some((linked) => linked.id === value.id),
-  );
-  const statusBoard = state.boards.find(
+  const statusBoards = state.boards.filter(
     (board) =>
-      board.projectIds.includes(ticket.projectId) &&
-      (!board.filters.origins?.length ||
-        board.filters.origins.includes(ticket.origin ?? 'convoy')) &&
+      board.tickets.some((placement) => placement.ticketId === ticket.id) &&
       board.grouping.mode === 'field' &&
       board.grouping.field === 'status',
   );
   const statusChoices = [
     ...new Set([
-      ...(statusBoard?.columns.map((column) => column.value ?? column.name) ?? [
-        'Backlog',
-        'Ready',
-        'In progress',
-        'In review',
-        'Done',
-      ]),
+      ...statusBoards.flatMap((board) =>
+        board.columns.map((column) => column.value ?? column.name),
+      ),
       ticket.status,
     ]),
   ];
+  const sourceOwnsStatus = ticket.externalLinks?.some(
+    (link) => link.fieldOwnership?.status === 'external',
+  );
   const availableConnections = (state.ticketConnections ?? []).filter(
     (connection) =>
       connection.enabled &&
@@ -511,7 +516,7 @@ export function TicketDetails({
               </>
             ) : (
               <section className="ticket-record-content" aria-label="Ticket description">
-                <h3>{ticket.workType === 'development' ? 'Scope' : 'Description'}</h3>
+                <h3>Description</h3>
                 {ticket.description ? (
                   <MarkdownDocument text={ticket.description} />
                 ) : (
@@ -558,171 +563,156 @@ export function TicketDetails({
                 </div>
               </dl>
             </section>
-            {hasRelatedWork && (
-              <section className="ticket-context-group">
-                <h3>{linkedSupport.length ? 'Reported by support' : 'Linked development'}</h3>
-                <div className="ticket-related-content">
-                  {(ticket.workType === 'support' || linkedDevelopment.length > 0) && (
-                    <section className="ticket-related-work" aria-label="Linked development work">
-                      {linkedDevelopment.map((linked) => (
-                        <div className="ticket-related-row" key={linked.id}>
-                          <button
-                            className="ticket-record-link"
-                            onClick={() => onSelectTicket(linked.id)}
-                          >
-                            <strong>CVY-{linked.id}</strong>
-                            <span>{linked.title}</span>
-                            <small>{linked.status}</small>
-                          </button>
-                          <details className="ticket-link-management">
-                            <summary>Manage link</summary>
-                            <button
-                              className="secondary"
-                              disabled={linkBusy}
-                              onClick={async () => {
-                                setLinkBusy(true);
-                                try {
-                                  await command('unlinkDevelopmentTicket', {
-                                    supportTicketId: ticket.id,
-                                    supportRevision: revision,
-                                    developmentTicketId: linked.id,
-                                  });
-                                  setMessage('Development item unlinked.');
-                                } catch (error) {
-                                  setMessage((error as Error).message);
-                                } finally {
-                                  setLinkBusy(false);
-                                }
-                              }}
-                            >
-                              Unlink
-                            </button>
-                          </details>
-                        </div>
-                      ))}
-                      {linkedDevelopment.some((linked) => linked.status === 'Done') &&
-                        !['Resolved', 'Closed'].includes(ticket.status) && (
-                          <p role="status">
-                            Development is done. Check this request before closing it.
-                          </p>
-                        )}
-                      {ticket.workType === 'support' && (
-                        <details className="ticket-related-add">
-                          <summary>
-                            {linkedDevelopment.length
-                              ? 'Link another item'
-                              : 'Add development work'}
-                          </summary>
-                          <label>
-                            Link existing item
-                            <Select
-                              value={developmentTicketId}
-                              onChange={(event) => setDevelopmentTicketId(event.target.value)}
-                            >
-                              <option value="">Choose development item…</option>
-                              {availableDevelopmentTickets.map((value) => (
-                                <option key={value.id} value={value.id}>
-                                  #{value.id} {value.title}
-                                </option>
-                              ))}
-                            </Select>
-                          </label>
-                          <button
-                            className="secondary"
-                            disabled={linkBusy || !developmentTicketId}
-                            onClick={async () => {
-                              setLinkBusy(true);
-                              try {
-                                const development = state.tickets.find(
-                                  (value) => value.id === Number(developmentTicketId),
-                                );
-                                if (!development)
-                                  throw new Error('Development item no longer exists.');
-                                await command('linkDevelopmentTicket', {
-                                  supportTicketId: ticket.id,
-                                  supportRevision: revision,
-                                  developmentTicketId: development.id,
-                                  developmentRevision: development.revision,
-                                });
-                                setDevelopmentTicketId('');
-                                setMessage('Development item linked.');
-                              } catch (error) {
-                                setMessage((error as Error).message);
-                              } finally {
-                                setLinkBusy(false);
-                              }
-                            }}
-                          >
-                            Link item
-                          </button>
-                          <label>
-                            New item title
-                            <input
-                              value={developmentTitle}
-                              onChange={(event) => setDevelopmentTitle(event.target.value)}
-                              placeholder={ticket.title}
-                            />
-                          </label>
-                          <button
-                            className="secondary"
-                            disabled={linkBusy}
-                            onClick={async () => {
-                              setLinkBusy(true);
-                              try {
-                                const result = await command('createDevelopmentTicket', {
-                                  requestId: crypto.randomUUID(),
-                                  supportTicketId: ticket.id,
-                                  supportRevision: revision,
-                                  projectId: ticket.projectId,
-                                  title: developmentTitle.trim() || ticket.title,
-                                  description: `Reported in support ticket #${ticket.id}.\n\n${ticket.description}`,
-                                });
-                                setDevelopmentTitle('');
-                                setMessage(
-                                  `Development item #${result.result.id} created and linked.`,
-                                );
-                              } catch (error) {
-                                setMessage((error as Error).message);
-                              } finally {
-                                setLinkBusy(false);
-                              }
-                            }}
-                          >
-                            Create development item
-                          </button>
-                        </details>
-                      )}
-                    </section>
-                  )}
-                  {linkedSupport.length > 0 && (
-                    <section className="ticket-related-work" aria-label="Linked support reports">
-                      {linkedSupport.map((support) => (
-                        <button
-                          key={support.id}
-                          className="ticket-record-link"
-                          onClick={() => onSelectTicket(support.id)}
+            <section className="ticket-context-group">
+              <h3>Related tickets</h3>
+              <div className="ticket-related-content">
+                {related.map(({ relation, other }) => (
+                  <div className="ticket-related-row" key={relation.id}>
+                    <button className="ticket-record-link" onClick={() => onSelectTicket(other.id)}>
+                      <strong>CVY-{other.id}</strong>
+                      <span>{other.title}</span>
+                      <small>{other.status}</small>
+                    </button>
+                    <details className="ticket-link-management">
+                      <summary>Manage link</summary>
+                      <button
+                        className="secondary"
+                        disabled={linkBusy}
+                        onClick={async () => {
+                          setLinkBusy(true);
+                          try {
+                            const source = state.tickets.find(
+                              (value) => value.id === relation.sourceTicketId,
+                            );
+                            if (!source) throw new Error('Source ticket no longer exists.');
+                            await command('unlinkTickets', {
+                              relationId: relation.id,
+                              sourceRevision: source.revision,
+                            });
+                            setMessage('Ticket unlinked.');
+                          } catch (error) {
+                            setMessage((error as Error).message);
+                          } finally {
+                            setLinkBusy(false);
+                          }
+                        }}
+                      >
+                        Unlink
+                      </button>
+                    </details>
+                  </div>
+                ))}
+                <details className="ticket-related-add">
+                  <summary>{related.length ? 'Add another' : 'Add related ticket'}</summary>
+                  {availableRelatedTickets.length > 0 && (
+                    <>
+                      <label>
+                        Existing ticket
+                        <Select
+                          value={relatedTicketId}
+                          onChange={(event) => setRelatedTicketId(event.target.value)}
                         >
-                          <strong>CVY-{support.id}</strong>
-                          <span>{support.title}</span>
-                          <small>{support.status}</small>
-                        </button>
-                      ))}
-                    </section>
+                          <option value="">Choose ticket…</option>
+                          {availableRelatedTickets.map((value) => (
+                            <option key={value.id} value={value.id}>
+                              #{value.id} {value.title}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                      <button
+                        className="secondary"
+                        disabled={linkBusy || !relatedTicketId}
+                        onClick={async () => {
+                          setLinkBusy(true);
+                          try {
+                            const target = state.tickets.find(
+                              (value) => value.id === Number(relatedTicketId),
+                            );
+                            if (!target) throw new Error('Ticket no longer exists.');
+                            await command('linkTickets', {
+                              sourceTicketId: ticket.id,
+                              sourceRevision: revision,
+                              targetTicketId: target.id,
+                              targetRevision: target.revision,
+                            });
+                            setRelatedTicketId('');
+                            setMessage('Ticket linked.');
+                          } catch (error) {
+                            setMessage((error as Error).message);
+                          } finally {
+                            setLinkBusy(false);
+                          }
+                        }}
+                      >
+                        Link ticket
+                      </button>
+                    </>
                   )}
-                </div>
-              </section>
-            )}
+                  <label>
+                    New ticket title
+                    <input
+                      value={relatedTitle}
+                      onChange={(event) => setRelatedTitle(event.target.value)}
+                      placeholder={ticket.title}
+                    />
+                  </label>
+                  {projectBoards.length > 0 && (
+                    <label>
+                      Board
+                      <Select
+                        value={relatedBoardId}
+                        onChange={(event) => setRelatedBoardId(event.target.value)}
+                      >
+                        <option value="">Project default</option>
+                        {projectBoards.map((board) => (
+                          <option key={board.id} value={board.id}>
+                            {board.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </label>
+                  )}
+                  <button
+                    className="secondary"
+                    disabled={linkBusy}
+                    onClick={async () => {
+                      setLinkBusy(true);
+                      try {
+                        const result = await command('createRelatedTicket', {
+                          requestId: crypto.randomUUID(),
+                          sourceTicketId: ticket.id,
+                          sourceRevision: revision,
+                          title: relatedTitle.trim() || ticket.title,
+                          ...(relatedBoardId ? { boardId: relatedBoardId } : {}),
+                        });
+                        setRelatedTitle('');
+                        setMessage(`Ticket #${result.result.id} created and linked.`);
+                      } catch (error) {
+                        setMessage((error as Error).message);
+                      } finally {
+                        setLinkBusy(false);
+                      }
+                    }}
+                  >
+                    Create ticket
+                  </button>
+                </details>
+              </div>
+            </section>
             <section className="ticket-context-group">
               <h3>Agent work</h3>
-              {session?.flow && <p className="ticket-workflow-state">
-                {session?.flow?.status === 'waiting_gate'
-                  ? 'Submission ready for review'
-                  : session?.flow?.status === 'completed'
-                    ? 'Workflow completed'
-                    : session?.flow?.status === 'failed'
-                      ? 'Workflow failed'
-                      : `Workflow ${session.flow.status.replaceAll('_', ' ')}`}
-              </p>}
+              {session?.flow && (
+                <p className="ticket-workflow-state">
+                  {session?.flow?.status === 'waiting_gate'
+                    ? 'Submission ready for review'
+                    : session?.flow?.status === 'completed'
+                      ? 'Workflow completed'
+                      : session?.flow?.status === 'failed'
+                        ? 'Workflow failed'
+                        : `Workflow ${session.flow.status.replaceAll('_', ' ')}`}
+                </p>
+              )}
               {(ticket.workflow?.name || session?.workflow?.name) && (
                 <p className="ticket-workflow-name">
                   {ticket.workflow?.name ?? session?.workflow?.name}
@@ -1043,12 +1033,24 @@ export function TicketDetails({
         <div className="ticket-property-grid">
           <label>
             Status
-            {ticket.externalLinks?.some((link) => link.fieldOwnership?.status === 'external') && <input type="hidden" name="status" value={ticket.status} />}
-            <Select name={ticket.externalLinks?.some((link) => link.fieldOwnership?.status === 'external') ? undefined : 'status'} disabled={ticket.externalLinks?.some((link) => link.fieldOwnership?.status === 'external')} defaultValue={ticket.status}>
-              {statusChoices.map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </Select>
+            {sourceOwnsStatus && <input type="hidden" name="status" value={ticket.status} />}
+            {statusBoards.length ? (
+              <Select
+                name={sourceOwnsStatus ? undefined : 'status'}
+                disabled={sourceOwnsStatus}
+                defaultValue={ticket.status}
+              >
+                {statusChoices.map((value) => (
+                  <option key={value}>{value}</option>
+                ))}
+              </Select>
+            ) : (
+              <input
+                name={sourceOwnsStatus ? undefined : 'status'}
+                disabled={sourceOwnsStatus}
+                defaultValue={ticket.status}
+              />
+            )}
           </label>
           <label>
             Assigned agent
@@ -1066,8 +1068,20 @@ export function TicketDetails({
           </label>
           <label>
             Priority
-            {ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external') && <input type="hidden" name="priority" value={ticket.priority} />}
-            <Select name={ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external') ? undefined : 'priority'} disabled={ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external')} defaultValue={ticket.priority}>
+            {ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external') && (
+              <input type="hidden" name="priority" value={ticket.priority} />
+            )}
+            <Select
+              name={
+                ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external')
+                  ? undefined
+                  : 'priority'
+              }
+              disabled={ticket.externalLinks?.some(
+                (link) => link.fieldOwnership?.priority === 'external',
+              )}
+              defaultValue={ticket.priority}
+            >
               <option>Low</option>
               <option>Medium</option>
               <option>High</option>

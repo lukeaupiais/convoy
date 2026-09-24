@@ -193,7 +193,7 @@ export function WorkflowStartRules({ state }: { state: RuntimeState }) {
           )}
           <label>
             Work type (optional){' '}
-            <input value={editing.workType ?? ''} onChange={(event) => update({ workType: event.target.value || undefined })} placeholder="development" />
+            <input value={editing.workType ?? ''} onChange={(event) => update({ workType: event.target.value || undefined })} placeholder="Board work type" />
           </label>
           {['ticket_moved', 'board_placement_changed'].includes(editing.event) && (
             <label>

@@ -19,11 +19,10 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
 
   async function observeBoardCommand(command, result) {
     const placementChanged = result?.fromColumnId !== result?.toColumnId;
-    const eventNames = ['createTicket', 'createDevelopmentTicket'].includes(command.action) ? ['ticket_created'] : command.action === 'updateTicket' ? ['ticket_updated'] : ['setBoardPlacement', 'clearBoardPlacement'].includes(command.action) ? ['board_placement_changed', ...(placementChanged ? ['ticket_moved'] : [])] : [];
-    // Creating linked development work targets a different ticket and may
-    // legitimately start that ticket's own workflow.
-    if (!eventNames.length || command.workflowRunId && command.action !== 'createDevelopmentTicket') return result;
-    const ticketId = ['createTicket', 'createDevelopmentTicket'].includes(command.action)
+    const eventNames = ['createTicket', 'createRelatedTicket', 'createDevelopmentTicket'].includes(command.action) ? ['ticket_created'] : command.action === 'updateTicket' ? ['ticket_updated'] : ['setBoardPlacement', 'clearBoardPlacement'].includes(command.action) ? ['board_placement_changed', ...(placementChanged ? ['ticket_moved'] : [])] : [];
+    // A related ticket is a new ticket and may start its own workflow.
+    if (!eventNames.length || command.workflowRunId && !['createRelatedTicket', 'createDevelopmentTicket'].includes(command.action)) return result;
+    const ticketId = ['createTicket', 'createRelatedTicket', 'createDevelopmentTicket'].includes(command.action)
       ? result?.id : command.ticketId ?? command.taskId ?? result?.ticketId ?? result?.id;
     const ticket = ticketId === undefined ? null : catalog.ticket(ticketId);
     if (!ticket) return result;
@@ -42,7 +41,9 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       const node = getEngine().current(session);
       const waitFor = node?.waitFor;
       if (node?.kind !== 'wait' || waitFor.event !== fact.event || waitFor.status && ticket.status !== waitFor.status) continue;
-      const matches = waitFor.ticketSource === 'linked_development'
+      const matches = waitFor.ticketSource === 'related_ticket'
+        ? state.ticketRelations?.some((link) => link.sourceTicketId === session.activeTicketId && link.targetTicketId === ticket.id && (!waitFor.relationKind || link.kind === waitFor.relationKind))
+        : waitFor.ticketSource === 'linked_development'
         ? state.ticketDevelopmentLinks?.some((link) => link.supportTicketId === session.activeTicketId && link.developmentTicketId === ticket.id)
         : session.activeTicketId === ticket.id;
       if (matches) await getEngine().signal(session, session.flow.instance, fact);
@@ -105,7 +106,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
 
   async function executeAction(session, node, instance) {
     if (node.operation === 'inspect_changes') return null;
-    if (!['create_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(node.operation)) throw new Error('Unsupported workflow action.');
+    if (!['create_ticket', 'create_related_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(node.operation)) throw new Error('Unsupported workflow action.');
     const payload = node.input ?? node.args ?? node.payload ?? {};
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Workflow action arguments must be an object.');
     const command = { ...payload, workflowRunId: session.flow.id, workflowInstance: instance, idempotencyKey: `${session.flow.id}:${instance}` };
@@ -117,6 +118,13 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     delete command.ticketSource;
     if (command.taskId === undefined && session.activeTicketId != null) command.taskId = session.activeTicketId;
     if (node.operation === 'create_ticket') command.action = 'createTicket';
+    else if (node.operation === 'create_related_ticket') {
+      const source = catalog.ticket(command.sourceTicketId ?? session.activeTicketId);
+      if (!source || source.projectId !== session.projectId) throw new Error('Active ticket is unavailable.');
+      command.action = 'createRelatedTicket';
+      command.sourceTicketId = source.id;
+      command.sourceRevision = source.revision;
+    }
     else if (node.operation === 'create_development_ticket') {
       const support = catalog.ticket(command.supportTicketId ?? session.activeTicketId);
       if (!support || support.projectId !== session.projectId) throw new Error('Active support ticket is unavailable.');
@@ -131,7 +139,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     else { command.action = 'setBoardPlacement'; command.ticketId ??= command.taskId ?? session.activeTicketId; if (!command.placement && command.columnId) command.placement = { columnId: command.columnId, swimlaneKey: command.swimlaneKey }; }
     const target = command.ticketId ?? command.taskId;
     if (target !== undefined && command.revision === undefined) command.revision = catalog.ticket(target)?.revision;
-    if (['create_ticket', 'create_development_ticket'].includes(node.operation)) command.requestId ??= command.requestKey ?? `${session.flow.id}-${instance}`;
+    if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation)) command.requestId ??= command.requestKey ?? `${session.flow.id}-${instance}`;
     const effectKey = `${session.flow.id}:${instance}:${node.id}`;
     const previous = state.workflowEffectLedger[effectKey];
     if (previous) {
@@ -150,7 +158,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     await save();
     try {
       const result = await boardCommand(command);
-      if (['create_ticket', 'create_development_ticket'].includes(node.operation) && result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = result.id; }
+      if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation) && result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = result.id; }
       state.workflowEffectLedger[effectKey] = {
         ...state.workflowEffectLedger[effectKey],
         status: 'succeeded',
@@ -178,13 +186,13 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       const recorded = effect.command ?? {}; const targetId = recorded.ticketId ?? recorded.taskId;
       const reportedId = command.result?.id ?? command.result?.ticketId ?? command.result?.taskId;
       if (!command.result || typeof command.result !== 'object' || Array.isArray(command.result)) throw new Error('Applied effect confirmation must include the real command result.');
-      if (['create_ticket', 'create_development_ticket'].includes(node.operation)) { if (reportedId === undefined || !catalog.ticket(reportedId)) throw new Error('Applied create result must reference an existing ticket.'); }
+      if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation)) { if (reportedId === undefined || !catalog.ticket(reportedId)) throw new Error('Applied create result must reference an existing ticket.'); }
       else if (targetId !== undefined) {
         if (!catalog.ticket(targetId)) throw new Error('Applied effect target ticket no longer exists.');
         if (reportedId === undefined || String(reportedId) !== String(targetId)) throw new Error('Applied effect result must reference its recorded target ticket.');
       }
       effect.status = 'succeeded'; effect.result = command.result; effect.reconciledAt = now();
-      if (['create_ticket', 'create_development_ticket'].includes(node.operation) && effect.result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = effect.result.id; }
+      if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation) && effect.result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = effect.result.id; }
       session.flow.status = 'running'; session.status = 'running'; event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'applied' });
       try { await engine.finishAutomated(session, command.instance, 'success', effect.result); }
       catch (error) { session.flow.status = 'failed'; session.status = 'failed'; effect.status = 'uncertain'; effect.message = error.message; throw error; }

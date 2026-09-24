@@ -134,6 +134,25 @@ export function createCommandAuthorization({
       await organization(command.organizationId, 'organization.manage', command, actor);
       return;
     }
+    if (command.action === 'createRelatedTicket' || command.action === 'linkTickets') {
+      const source = await ticketId(command.sourceTicketId, 'project.write', command, actor);
+      if (command.action === 'linkTickets') {
+        const target = await ticketId(command.targetTicketId, 'project.write', command, actor);
+        if (source.projectId !== target.projectId) denied();
+      }
+      if (command.boardId) {
+        const targetBoard = board(command.boardId);
+        if (!targetBoard?.projectIds.includes(source.projectId)) denied();
+      }
+      return;
+    }
+    if (command.action === 'unlinkTickets') {
+      const relation = state.ticketRelations?.find((value) => value.id === command.relationId);
+      if (!relation) denied();
+      await ticketId(relation.sourceTicketId, 'project.write', command, actor);
+      await ticketId(relation.targetTicketId, 'project.write', command, actor);
+      return;
+    }
     if (command.action === 'createDevelopmentTicket' || command.action === 'linkDevelopmentTicket' || command.action === 'unlinkDevelopmentTicket') {
       const support = await ticketId(command.supportTicketId, 'project.write', command, actor);
       const developmentProjectId = command.action === 'createDevelopmentTicket'
