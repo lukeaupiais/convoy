@@ -151,7 +151,7 @@ export function validateCustomTicketSourceManifest(input) {
     } else if (writeAuth.header !== undefined) throw new Error('Bearer write authentication cannot define a header.');
   }
   const operations = object(manifest.operations, 'Manifest operations are required.');
-  keys(operations, ['list', 'get', 'thread', 'reply'], 'Unknown operation');
+  keys(operations, ['list', 'get', 'thread', 'reply', 'status'], 'Unknown operation');
   for (const [name, required] of [['list', true], ['get', false], ['thread', false]]) {
     if (!operations[name]) { if (required) throw new Error('List operation is required.'); else continue; }
     const operation = object(operations[name], `${name} operation must be an object.`);
@@ -191,6 +191,28 @@ export function validateCustomTicketSourceManifest(input) {
     keys(response, ['commentId', 'deliveryStatus'], 'Unknown reply response field');
     selector(response.commentId, 'Reply comment ID selector');
     if (response.deliveryStatus) selector(response.deliveryStatus, 'Reply delivery status selector');
+  }
+  if (operations.status) {
+    if (!connection.writeAuthentication) throw new Error('Status operation needs separate write authentication.');
+    const status = object(operations.status, 'Status operation must be an object.');
+    keys(status, ['method', 'path', 'request', 'response'], 'Unknown status operation field');
+    if (status.method !== 'PATCH') throw new Error('Status operation must use PATCH.');
+    endpointUrl(connection.baseUrl, status.path, { remoteId: 'id' });
+    const request = object(status.request, 'Status request mapping is required.');
+    keys(request, ['status', 'remoteVersion', 'evidenceMessageId', 'remoteVersionType', 'evidenceMessageIdType'], 'Unknown status request field');
+    for (const [name, field] of Object.entries(request).filter(([name]) => !name.endsWith('Type'))) {
+      if (!/^[A-Za-z_][\w-]{0,79}$/.test(field)) throw new Error(`Invalid ${name} request field.`);
+    }
+    if (!request.status || !request.remoteVersion ||
+        new Set([request.status, request.remoteVersion, request.evidenceMessageId].filter(Boolean)).size !==
+        [request.status, request.remoteVersion, request.evidenceMessageId].filter(Boolean).length)
+      throw new Error('Status and remoteVersion need distinct request fields.');
+    for (const name of ['remoteVersionType', 'evidenceMessageIdType']) {
+      if (request[name] !== undefined && request[name] !== 'integer') throw new Error(`Unsupported ${name}.`);
+    }
+    const response = object(status.response, 'Status response mapping is required.');
+    keys(response, ['item'], 'Unknown status response field');
+    selector(response.item, 'Status response selector');
   }
   const mapping = object(manifest.mapping, 'Manifest mapping is required.');
   keys(mapping, ['remoteId', 'remoteKey', 'title', 'description', 'status', 'priority', 'remoteVersion', 'updatedAt', 'url', 'urlTemplate'], 'Unknown mapping field');
@@ -373,6 +395,48 @@ export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, a
           remoteId: mappedString(result, operation.response.commentId, 'Reply comment ID', 200),
           ...(operation.response.deliveryStatus ? { deliveryStatus: mappedString(result, operation.response.deliveryStatus, 'Reply delivery status', 80, true) } : {}),
         };
+      } finally { await dispatcher?.close(); }
+    },
+    async setStatus(connection, remoteId, { status, remoteVersion, evidenceMessageId, requestId }) {
+      const manifest = validateCustomTicketSourceManifest(connection.manifest);
+      const operation = manifest.operations.status;
+      if (!operation) throw new Error('Ticket source does not provide status writes.');
+      if (typeof status !== 'string' || !status.trim() || status.length > 80 ||
+          typeof remoteVersion !== 'string' || !remoteVersion.trim() ||
+          typeof requestId !== 'string' || !/^[\w-]{1,100}$/.test(requestId))
+        throw new Error('Status write fields are invalid.');
+      const url = endpointUrl(manifest.connection.baseUrl, operation.path, { remoteId });
+      const addresses = await assertDestination(url, resolver, privateOrigins);
+      const secret = credential(connection, manifest, true);
+      const auth = manifest.connection.writeAuthentication;
+      const headers = { Accept: 'application/json', 'Content-Type': 'application/json', 'Idempotency-Key': requestId };
+      headers[auth.type === 'bearer' ? 'Authorization' : auth.header] = auth.type === 'bearer' ? `Bearer ${secret}` : secret;
+      const value = (input, kind) => {
+        if (kind !== 'integer') return input;
+        if (!/^(0|[1-9][0-9]*)$/.test(input) || !Number.isSafeInteger(Number(input)))
+          throw new Error('Status source requires a safe integer value.');
+        return Number(input);
+      };
+      const payload = { [operation.request.status]: status,
+        [operation.request.remoteVersion]: value(remoteVersion, operation.request.remoteVersionType) };
+      if (evidenceMessageId !== undefined) {
+        if (!operation.request.evidenceMessageId) throw new Error('Status source cannot send message evidence.');
+        payload[operation.request.evidenceMessageId] = value(String(evidenceMessageId), operation.request.evidenceMessageIdType);
+      }
+      const dispatcher = dispatcherFactory(url.hostname, addresses);
+      try {
+        const response = await fetcher(url, { method: 'PATCH', headers, body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(15000), ...(dispatcher ? { dispatcher } : {}) });
+        if (!response.ok) {
+          const error = new Error(`Ticket source status write failed (${response.status}).`);
+          error.status = response.status;
+          throw error;
+        }
+        const type = response.headers?.get?.('content-type') ?? 'application/json';
+        if (!type.toLowerCase().startsWith('application/json')) throw new Error('Ticket source returned a non-JSON status response.');
+        const result = await readJson(response);
+        const item = normalize(manifest, readSelector(result, operation.response.item));
+        if (item.remoteId !== remoteId || item.rawStatus !== status) throw new Error('Ticket source status response did not confirm the requested change.');
+        return item;
       } finally { await dispatcher?.close(); }
     },
   };

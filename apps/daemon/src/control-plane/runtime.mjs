@@ -1110,6 +1110,7 @@ export async function createRuntime({
   }
   async function dispatch() {
     await workflowEffects.drainImportFacts();
+    await workflowEffects.drainDeferredTriggers();
     for (const s of Object.values(state.sessions)) {
       for (const m of s.pendingMessages ?? [])
         if (m.binding !== messageBinding(s)) {

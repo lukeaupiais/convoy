@@ -11,6 +11,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
   state.ticketImportFacts ??= [];
   state.ticketThreads ??= [];
   state.ticketReplies ??= [];
+  state.ticketStatusChanges ??= [];
   state.ticketConnections ??= [];
   state.ticketImportBindings ??= []; state.ticketImportMemberships ??= [];
   for (const value of state.ticketConnections) {
@@ -307,10 +308,11 @@ export function createCatalog({ state, save, execution, externalTickets, context
         }
         if (old && c.provider === 'custom-http' && state.tickets.some(t => t.externalLinks?.some(value => value.connectionId === old.id))) {
           const identity = value => ({ ...value, values: undefined, threadMapping: undefined,
-            connection: { ...value.connection, writeAuthentication: undefined }, mapping: { ...value.mapping, urlTemplate: undefined }, operations: {
+            connection: { ...value.connection, writeAuthentication: undefined }, mapping: { ...value.mapping, remoteVersion: undefined, urlTemplate: undefined }, operations: {
             ...value.operations,
             thread: undefined,
             reply: undefined,
+            status: undefined,
             list: { ...value.operations.list, query: Object.fromEntries(Object.entries(value.operations.list.query ?? {}).filter(([, template]) => template !== '${cursor}')), response: { ...value.operations.list.response, nextCursor: undefined, total: undefined } },
           } });
           if (JSON.stringify(identity(old.manifest)) !== JSON.stringify(identity(manifest))) throw new Error('A connection with linked tickets can change value mappings only. Create another connection for a different source.');
@@ -320,6 +322,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const capabilities = { import: true, create: c.provider === 'linear', update: c.provider === 'linear',
           threadRead: Boolean(c.provider === 'custom-http' && manifest?.operations?.thread),
           reply: Boolean(c.provider === 'custom-http' && manifest?.operations?.reply) };
+        capabilities.statusWrite = Boolean(c.provider === 'custom-http' && manifest?.operations?.status);
         const value = { id: old?.id ?? randomUUID(), organizationId: c.organizationId, provider: c.provider, name: text(c.name, 'Connection name', 100), ...providerFields, capabilities, enabled: c.enabled ?? old?.enabled ?? true, revision: (old?.revision ?? 0) + 1 };
         if (old) Object.assign(old, value); else state.ticketConnections.push(value);
         await save(); return value;
@@ -561,6 +564,52 @@ export function createCatalog({ state, save, execution, externalTickets, context
           await save(); throw error;
         }
       }
+      if (c.action === 'setExternalTicketStatus') {
+        const requestId = text(c.requestId, 'Request ID', 100);
+        if (!/^[\w-]+$/.test(requestId)) throw new Error('Invalid request ID.');
+        const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
+        const source = activeConnection(c.connectionId);
+        if (source.organizationId !== project(t.projectId).organizationId || !source.capabilities?.statusWrite)
+          throw new Error('Ticket source cannot change status.');
+        const link = t.externalLinks?.find(value => value.connectionId === source.id);
+        if (!link || (link.fieldOwnership?.status ?? 'external') !== 'external') throw new Error('External source does not own this ticket status.');
+        const rawStatus = text(c.status, 'Source status', 80);
+        const remoteVersion = text(link.remoteVersion, 'Remote version', 500);
+        const previous = state.ticketStatusChanges.find(value => value.id === requestId);
+        if (previous && (previous.ticketId !== t.id || previous.connectionId !== source.id || previous.status !== rawStatus || previous.evidenceReplyRequestId !== c.evidenceReplyRequestId))
+          throw new Error('Request ID belongs to a different status change.');
+        if (previous?.state === 'applied') return previous;
+        if (previous?.state === 'rejected') throw new Error('Status change was rejected by the source. Refresh the ticket.');
+        let evidenceMessageId;
+        if (c.evidenceReplyRequestId) {
+          const reply = state.ticketReplies.find(value => value.id === c.evidenceReplyRequestId && value.ticketId === t.id && value.connectionId === source.id && value.status === 'queued');
+          if (!reply?.remoteId) throw new Error('Reply evidence is missing.');
+          const thread = await syncThread(t, source);
+          const message = thread.messages.find(value => value.remoteId === reply.remoteId && value.body === reply.body &&
+            !['user', 'customer'].includes(value.authorRole.toLowerCase()) && value.deliveryStatus === 'delivered');
+          if (!message) throw new Error('Reply is not confirmed delivered by the source.');
+          evidenceMessageId = message.remoteId;
+        }
+        const change = previous ?? { id: requestId, ticketId: t.id, connectionId: source.id, status: rawStatus,
+          evidenceReplyRequestId: c.evidenceReplyRequestId, remoteVersion, state: 'pending', createdAt: new Date().toISOString() };
+        if (!previous) { state.ticketStatusChanges.push(change); await save(); }
+        try {
+          const result = await externalTickets.setStatus(source, link.remoteId, {
+            status: rawStatus, remoteVersion: change.remoteVersion, evidenceMessageId, requestId,
+          });
+          if (result.status === undefined) throw new Error('Ticket source did not map the resulting status.');
+          boards.validateTicketUpdate(t, { status: result.status });
+          t.status = result.status; t.revision++;
+          link.remoteStatus = result.rawStatus; link.mappedStatus = result.status;
+          link.remoteVersion = result.remoteVersion; link.syncState = 'linked'; delete link.message;
+          change.state = 'applied'; change.resultRemoteVersion = result.remoteVersion;
+          execution.syncTicket(t); await save(); return change;
+        } catch (error) {
+          change.state = [409, 422].includes(error.status) ? 'rejected' : 'outcome-unknown';
+          change.message = error.message;
+          await save(); throw error;
+        }
+      }
       if (c.action === 'reconcileExternalTicketReply') {
         const reply = state.ticketReplies.find(value => value.id === c.requestId);
         if (!reply || !['pending', 'outcome-unknown'].includes(reply.status)) throw new Error('Reply is not awaiting reconciliation.');
@@ -679,6 +728,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate', 'setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) return boards.command(c);
       throw new Error('Unknown catalog command.');
     },
-    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ticketRelations: state.ticketRelations, ...boards.snapshot() }; },
+    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketStatusChanges: state.ticketStatusChanges, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ticketRelations: state.ticketRelations, ...boards.snapshot() }; },
   };
 }

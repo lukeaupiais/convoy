@@ -18,6 +18,7 @@ const commands = [
   'syncExternalTicket',
   'syncExternalTicketThread',
   'postExternalTicketReply',
+  'setExternalTicketStatus',
   'reconcileExternalTicketReply',
   'importExternalTickets',
   'saveTicketImportBinding',
@@ -73,6 +74,7 @@ export function createWork({ afterCommand = async (_command, result) => result, 
           value.ticketImportBindings.some((binding) => binding.id === membership.bindingId && projectIds.has(binding.projectId))),
         ticketThreads: value.ticketThreads.filter((thread) => projectIds.has(value.tickets.find((ticket) => ticket.id === thread.ticketId)?.projectId)),
         ticketReplies: value.ticketReplies.filter((reply) => projectIds.has(value.tickets.find((ticket) => ticket.id === reply.ticketId)?.projectId)),
+        ticketStatusChanges: value.ticketStatusChanges.filter((change) => projectIds.has(value.tickets.find((ticket) => ticket.id === change.ticketId)?.projectId)),
         boards: value.boards
           .filter(
             (board) =>

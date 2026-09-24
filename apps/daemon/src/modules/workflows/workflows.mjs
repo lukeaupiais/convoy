@@ -41,7 +41,7 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (node.kind === 'check' || node.requiresCheck) node.checkCommand = required(node.checkCommand, `${node.name}: exact check command`, 4000);
   if (node.kind === 'action') {
     const operation = node.operation ?? node.action ?? node.boardAction?.type ?? 'inspect_changes';
-    if (!['inspect_changes', 'create_ticket', 'create_related_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
+    if (!['inspect_changes', 'create_ticket', 'create_related_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket', 'set_external_status'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
     node.operation = operation; if (!node.input && node.boardAction && typeof node.boardAction === 'object') node.input = { boardId: node.boardAction.boardId, columnId: node.boardAction.columnId };
     const input = node.input ?? node.args ?? node.payload;
     if (operation !== 'inspect_changes' && (!input || typeof input !== 'object' || Array.isArray(input))) throw new Error(`${node.name}: board action input is required.`);
@@ -50,6 +50,8 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (operation === 'create_related_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.kind !== undefined && !safeId(input.kind))) throw new Error(`${node.name}: create_related_ticket needs a title and an optional safe relation kind.`);
     if (operation === 'update_ticket' && input.ticketSource !== 'active_ticket' && input.ticketSource !== 'last_created' && input.ticketId === undefined && input.taskId === undefined) throw new Error(`${node.name}: update_ticket needs a ticket target.`);
     if (operation === 'move_ticket' && (typeof input.boardId !== 'string' || (!input.columnId && !input.placement?.columnId))) throw new Error(`${node.name}: move_ticket needs boardId and columnId.`);
+    if (operation === 'set_external_status' && (typeof input.connectionId !== 'string' || !input.connectionId || typeof input.status !== 'string' || !input.status || input.evidenceReply !== undefined && input.evidenceReply !== 'latest_delivered'))
+      throw new Error(`${node.name}: set_external_status needs a connection, source status, and optional latest_delivered reply evidence.`);
     delete node.action;
   }
   if (node.kind === 'branch') {

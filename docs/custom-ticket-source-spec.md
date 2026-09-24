@@ -302,8 +302,15 @@ Webhook support is an optimization after polling works correctly.
 
 ## Outbound operations
 
-Outbound operations are not part of the first release. When added, each must
-define:
+Custom HTTP sources can declare separate reply and status operations. A status
+operation maps the source's request fields for status, expected remote version,
+and optional message evidence. The manifest may mark version and message ID
+fields as integers when the source requires JSON numbers. The response uses the
+same ticket projection as reads. A source-owned status changes only through
+that operation;
+board placement does not write to the source.
+
+Outbound operations must define:
 
 - explicit field direction and permission;
 - an idempotency key derived from a durable Convoy effect;
@@ -313,8 +320,12 @@ define:
 - `pending`, `confirmed`, `failed`, and `outcome_unknown` states;
 - an explicit reconciliation action after an uncertain result.
 
-A timeout after sending a mutation is not a failure that permits automatic
-retry. Convoy must not claim success until the remote result is confirmed.
+Replies with an uncertain outcome require reconciliation. Status writes use a
+stable request ID and remote revision; the source must honor both so a retry
+cannot overwrite a newer customer event. Convoy records the intent before the
+write and accepts the returned ticket only when it confirms the requested
+status. A delivered reply supplied as evidence is checked against the source
+thread before a status write.
 
 ## Credentials and network safety
 

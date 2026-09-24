@@ -73,6 +73,43 @@ test('an external reply has durable identity and uncertain outcomes require reco
   assert.equal(reconciled.remoteId, 'reply-2');
 });
 
+test('source status follows a delivered reply and is idempotent on the ticket projection', async () => {
+  let writes = 0;
+  let delivered = false;
+  const { catalog, state } = fixture({
+    listIssues: async () => [{ remoteId: '41', remoteKey: 'SUP-41', title: 'Question', status: 'Open', rawStatus: 'open', remoteVersion: '4' }],
+    postReply: async () => ({ remoteId: '12', deliveryStatus: 'pending' }),
+    listComments: async () => [{ remoteId: '12', body: 'Please clarify', authorRole: 'team', createdAt: '2026-09-24T12:00:00Z', deliveryStatus: delivered ? 'delivered' : 'pending' }],
+    setStatus: async (_source, _remoteId, input) => {
+      writes++;
+      assert.deepEqual(input, { status: 'waiting', remoteVersion: '4', evidenceMessageId: '12', requestId: 'status-41' });
+      return { remoteId: '41', rawStatus: 'waiting', status: 'Waiting', remoteVersion: '5' };
+    },
+  });
+  const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+    connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_READ_TEST' },
+      writeAuthentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_WRITE_TEST' } },
+    operations: { list: { method: 'GET', path: 'tickets', response: { items: '$.items' } },
+      thread: { method: 'GET', path: 'tickets/${remoteId}/comments', response: { items: '$.items' } },
+      reply: { method: 'POST', path: 'tickets/${remoteId}/comments', response: { commentId: '$.commentId' } },
+      status: { method: 'PATCH', path: 'tickets/${remoteId}/status', request: { status: 'status', remoteVersion: 'expectedRevision', evidenceMessageId: 'replyId' }, response: { item: '$.ticket' } } },
+    mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', status: '$.status', remoteVersion: '$.revision' },
+    threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' } };
+  const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Support', manifest });
+  await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  const ticketId = state.tickets[0].id;
+  await catalog.command({ action: 'postExternalTicketReply', requestId: 'reply-41', ticketId, connectionId: source.id, body: 'Please clarify' });
+  const status = () => catalog.command({ action: 'setExternalTicketStatus', requestId: 'status-41', ticketId, connectionId: source.id, status: 'waiting', evidenceReplyRequestId: 'reply-41' });
+  await assert.rejects(status(), /not confirmed delivered/);
+  assert.equal(writes, 0);
+  delivered = true;
+  assert.equal((await status()).state, 'applied');
+  assert.equal(state.tickets[0].status, 'Waiting');
+  assert.equal(state.tickets[0].externalLinks[0].remoteVersion, '5');
+  assert.equal((await status()).state, 'applied');
+  assert.equal(writes, 1);
+});
+
 test('a board must enable a connection before making it a creation destination', async () => {
   const { catalog } = fixture({ createIssue: async () => { throw new Error('should not publish'); } });
   const { source } = await setup(catalog);
@@ -245,7 +282,7 @@ test('custom HTTP connections remain provider-neutral and preview without mutati
   const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource', connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_TOKEN_TEST' } }, operations: { list: { method: 'GET', path: 'tickets', response: { items: '$.items' } } }, mapping: { remoteId: '$.id', remoteKey: '$.key', title: '$.title', description: '$.description', remoteVersion: '$.updatedAt', url: '$.url' } };
   const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Customer support', manifest });
   assert.equal(source.provider, 'custom-http');
-  assert.deepEqual(source.capabilities, { import: true, create: false, update: false, threadRead: false, reply: false });
+  assert.deepEqual(source.capabilities, { import: true, create: false, update: false, threadRead: false, reply: false, statusWrite: false });
   assert.equal(source.manifest.connection.baseUrl, 'https://support.example.com/api');
   assert.equal((await catalog.command({ action: 'probeTicketConnection', id: source.id })).sample.remoteKey, 'SUP-1');
   const preview = await catalog.command({ action: 'previewExternalTickets', connectionId: source.id, projectId: 'alpha' });
