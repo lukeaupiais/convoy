@@ -17,17 +17,17 @@
 .execution-fields label {
   display: grid;
   gap: 6px;
-  color: #e4ded3;
+  color: var(--ink);
   font-size: 12px;
   min-width: 0;
 }
 .execution-fields .select-trigger {
-  background: #474039;
+  background: var(--surface);
 }
 .execution-note {
   font-size: 12px;
   line-height: 1.65;
-  color: #d2cabe;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 .execution-heading {
@@ -41,7 +41,7 @@
   gap: 6px;
 }
 .execution-heading span {
-  color: #d6b685;
+  color: #2d665f;
   font-size: 12px;
 }
 .execution-steps {
@@ -58,20 +58,20 @@
   padding: 8px 10px;
   border-radius: 6px;
   font-size: 13px;
-  color: #d2cabe;
+  color: var(--ink);
 }
 .execution-steps li.current {
-  background: #51483d;
-  color: #f5f2ec;
+  background: #e6eadd;
+  color: #17393d;
 }
 .execution-steps small {
   margin-left: auto;
-  color: #d6b685;
+  color: var(--muted);
 }
 .execution-dot {
   width: 7px;
   height: 7px;
-  border: 1px solid #c5a574;
+  border: 1px solid #829d92;
   border-radius: 50%;
   margin: 3px;
 }
@@ -93,12 +93,12 @@
 .execution-decision {
   display: grid;
   gap: 12px;
-  background: #443c32;
+  background: #f3f1e6;
 }
 .execution-decision textarea {
   min-height: 90px;
   padding: 10px;
-  background: #302c28;
+  background: #fffdf4;
   color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -131,8 +131,8 @@
 }
 .execution-error {
   padding: 12px;
-  background: #513c31;
-  color: #f0cbb3;
+  background: #f7dfd6;
+  color: #79351f;
   border-radius: 7px;
   font-size: 13px;
 }
@@ -459,4 +459,64 @@
   .artifact-review-actions > div {
     grid-column: 1 / -1;
   }
+}
+
+/* The workflow inspector stays secondary to the ticket record. */
+.execution-setup {
+  order: 2;
+}
+.ticket-execution:has(.execution-heading) .execution-setup {
+  padding-top: 16px;
+  border-top: 1px solid #c9d0c4;
+}
+.execution-setup > summary {
+  font-size: 13px;
+  font-weight: 600;
+}
+.execution-progress {
+  border: 1px solid #c9d0c4;
+  background: #f8f7ed;
+}
+.execution-progress > summary {
+  cursor: pointer;
+  padding: 11px 13px;
+  color: #315651;
+  font-size: 12px;
+  font-weight: 700;
+}
+.execution-progress[open] > summary {
+  border-bottom: 1px solid #d4d9cc;
+}
+.execution-progress .execution-steps {
+  padding: 8px;
+}
+.execution-outcome {
+  display: grid;
+  gap: 10px;
+  padding: 17px;
+  border: 1px solid #bccbbd;
+  background: #f7f9f0;
+  color: #294542;
+}
+.ticket-detail .execution-outcome h2 {
+  margin: 0;
+  color: #244a3a;
+  font-size: 17px;
+  font-weight: 700;
+}
+.execution-outcome p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.execution-evidence {
+  border-radius: 3px;
+}
+.execution-evidence > summary {
+  margin: 0;
+  padding: 10px 13px;
+}
+.execution-evidence[open] > :not(summary) {
+  margin: 0 13px 13px;
 }

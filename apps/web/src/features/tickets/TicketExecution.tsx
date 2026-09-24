@@ -79,6 +79,8 @@ export function TicketExecution({
   const nodes = session?.workflow?.nodes ?? session?.workflow?.steps ?? [];
   const node = nodes.find((n) => n.id === flow?.nodeId);
   const visited = new Set(flow?.history?.map((h) => h.nodeId));
+  const shownNodes =
+    flow?.status === 'completed' ? nodes.filter((item) => visited.has(item.id ?? '')) : nodes;
   const canRevise = session?.workflow?.edges?.some(
     (e) => e.from === flow?.nodeId && e.outcome === 'changes_requested',
   );
@@ -308,29 +310,38 @@ export function TicketExecution({
               {session.assignment && ` · ${session.assignment.state}`}
             </p>
           )}
-          {!focusedArtifactReview && !!nodes.length && (
-            <ol className="execution-steps" aria-label="Workflow progress">
-              {nodes.map((n) => (
-                <li
-                  key={n.id}
-                  className={
-                    active && n.id === flow?.nodeId
-                      ? 'current'
-                      : visited.has(n.id ?? '')
-                        ? 'visited'
-                        : ''
-                  }
-                >
-                  {visited.has(n.id ?? '') ? (
-                    <Check size={13} />
-                  ) : (
-                    <span className="execution-dot" />
-                  )}
-                  <span>{n.name}</span>
-                  {active && n.id === flow?.nodeId && <small>Current</small>}
-                </li>
-              ))}
-            </ol>
+          {flow?.status === 'completed' && (
+            <section className="execution-outcome" aria-label="Completed workflow">
+              <h2>Workflow completed</h2>
+              {flow.lastSubmission?.summary && <p>{flow.lastSubmission.summary}</p>}
+            </section>
+          )}
+          {!focusedArtifactReview && !!shownNodes.length && (
+            <details className="execution-progress">
+              <summary>{flow?.status === 'completed' ? 'Steps taken' : 'Workflow steps'}</summary>
+              <ol className="execution-steps" aria-label="Workflow progress">
+                {shownNodes.map((n) => (
+                  <li
+                    key={n.id}
+                    className={
+                      active && n.id === flow?.nodeId
+                        ? 'current'
+                        : visited.has(n.id ?? '')
+                          ? 'visited'
+                          : ''
+                    }
+                  >
+                    {visited.has(n.id ?? '') ? (
+                      <Check size={13} />
+                    ) : (
+                      <span className="execution-dot" />
+                    )}
+                    <span>{n.name}</span>
+                    {active && n.id === flow?.nodeId && <small>Current</small>}
+                  </li>
+                ))}
+              </ol>
+            </details>
           )}
           {!focusedArtifactReview && node && active && (
             <div className="execution-objective">
@@ -411,7 +422,7 @@ export function TicketExecution({
               }
             />
           )}
-          {flow?.lastSubmission && !capturedSubmission && (
+          {flow?.lastSubmission && !capturedSubmission && flow.status !== 'completed' && (
             <div className="execution-evidence">
               <strong>Latest submission · {flow.lastSubmission.step}</strong>
               <p>{flow.lastSubmission.summary}</p>
@@ -526,34 +537,7 @@ export function TicketExecution({
                   )}
                 </>
               )}
-              {flow?.status === 'completed' && ticket.status !== 'Done' && (
-                <button
-                  className="primary"
-                  disabled={working}
-                  onClick={async () => {
-                    setWorking(true);
-                    try {
-                      await command('updateTicket', {
-                        taskId: ticket.id,
-                        revision: ticket.revision,
-                        patch: { status: 'Done' },
-                      });
-                    } catch (e) {
-                      setError((e as Error).message);
-                    } finally {
-                      setWorking(false);
-                    }
-                  }}
-                >
-                  Mark ticket done
-                </button>
-              )}
             </div>
-          )}
-          {!focusedArtifactReview && flow?.status === 'completed' && (
-            <p className="execution-note">
-              Workflow complete. Ticket status and board-local columns remain separate.
-            </p>
           )}
           {!focusedArtifactReview && (
             <details className="execution-evidence">

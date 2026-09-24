@@ -214,18 +214,18 @@ function App() {
   );
   const currentFlowStatus = currentExecution?.flow?.status;
   const runLabel = !currentExecution
-    ? 'Run'
+    ? 'Start workflow'
     : currentFlowStatus === 'waiting_gate'
-      ? 'Review'
+      ? 'Review submission'
       : currentFlowStatus === 'completed'
-        ? 'View result'
+        ? 'Inspect workflow'
         : currentFlowStatus === 'failed' ||
             currentExecution.status === 'failed' ||
             currentExecution.status === 'interrupted'
-          ? 'Inspect'
+          ? 'Inspect workflow'
           : currentFlowStatus && currentFlowStatus !== 'cancelled'
-            ? 'View run'
-            : 'Run again';
+            ? 'View workflow'
+            : 'Start workflow';
   const linkedConversations =
     liveRuntime?.conversations?.filter((conversation) =>
       conversation.linkedTicketIds.includes(current?.id ?? -1),
@@ -526,7 +526,7 @@ function App() {
           }}
         >
           <section
-            className="detail task-detail ticket-detail dialog"
+            className={`detail task-detail ticket-detail dialog${ticketView === 'details' ? ' ticket-workspace-dialog' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-label={`Ticket CVY-${current.id}`}
