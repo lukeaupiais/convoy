@@ -132,11 +132,13 @@ export function encodeTools(tools = []) {
 
 function requestBody({ model, prompt, messages, systemPrompt, tools, sessionId }) {
   const instructions = prompt?.stableInstructions ?? systemPrompt;
-  const input = encodeMessages(prompt?.messages ?? messages ?? []);
-  if (prompt?.turnInstructions) input.push({
-    role: 'developer',
-    content: [{ type: 'input_text', text: prompt.turnInstructions }],
-  });
+  const input = [
+    ...(prompt?.turnInstructions ? [{
+      role: 'developer',
+      content: [{ type: 'input_text', text: prompt.turnInstructions }],
+    }] : []),
+    ...encodeMessages(prompt?.messages ?? messages ?? []),
+  ];
   const body = {
     model,
     store: false,

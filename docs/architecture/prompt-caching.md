@@ -102,9 +102,10 @@ and provider support differ.
 `promptContext.compile` returns both instruction strings and derives the
 combined `systemPrompt` for persisted provenance. Agent execution sends one
 structured `prompt` through the existing gateway. The ChatGPT subscription
-adapter renders stable instructions separately and places changing turn
-instructions after durable history so earlier messages remain a reusable
-prefix. The OpenAI-compatible adapter combines them into a system message to
+adapter renders stable instructions separately and places turn instructions
+before durable history. When turn instructions are unchanged, tool rounds append
+to a reusable request prefix; changing them starts a new prefix after the stable
+instructions. The OpenAI-compatible adapter combines them into a system message to
 preserve compatibility with varied local endpoints. Both accept the legacy
 `systemPrompt` and `messages` shape for probe and compaction calls.
 
@@ -112,6 +113,10 @@ Provider adapters normalize cache usage when reported. The existing Providers
 outcome evidence stores these optional counts. Provider-reported usage is the
 source of truth for cache hits; matching request content alone does not prove
 that a provider reused a prefix.
+The ChatGPT subscription endpoint has reported zero cache-write tokens on
+requests whose appended follow-ups subsequently reported cache reads. Treat
+that write field as provider-reported usage, not proof that no prefix was
+stored. An unchanged prefix and session key still do not guarantee a hit.
 The conversation also keeps cumulative reported token counts for the chat
 footer. Historic outcomes without a reliable session identity are not
 attributed retroactively.
