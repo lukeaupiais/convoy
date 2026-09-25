@@ -83,9 +83,30 @@ test('turn-specific instructions follow the stable cacheable instruction prefix'
   }
   assert.equal(requests[0].instructions, 'Published instructions');
   assert.equal(requests[1].instructions, requests[0].instructions);
-  assert.deepEqual(requests.map(request => request.input.at(-1).content[0].text), ['Tool policy A', 'Tool policy B']);
-  assert.deepEqual(requests[0].input[0], requests[1].input[0]);
-  assert.equal(requests[0].input.at(-1).role, 'developer');
+  assert.deepEqual(requests.map(request => request.input[0].content[0].text), ['Tool policy A', 'Tool policy B']);
+  assert.equal(requests[0].input[0].role, 'developer');
+  assert.deepEqual(requests[0].input[1], requests[1].input[1]);
+});
+
+test('an unchanged turn policy keeps the prior request as a prefix after tool results append', async () => {
+  const requests = [];
+  const generate = createCodexSubscriptionGenerate({ fetch: async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return sse([{ type: 'response.completed', response: { status: 'completed', output: [] } }]);
+  } });
+  const base = { model: 'gpt-5.6-sol', token, sessionId: 'cache-prefix-session', tools: [] };
+  const first = { role: 'user', content: 'Inspect the file.' };
+  const answer = { role: 'assistant', content: [{ type: 'toolCall', id: 'call_1|fc_1', name: 'read_file', arguments: { path: 'README.md' } }] };
+  const result = { role: 'toolResult', toolCallId: 'call_1|fc_1', content: [{ type: 'text', text: 'Project overview' }] };
+  for (const messages of [[first], [first, answer, result]]) {
+    for await (const _ of generate({ ...base, prompt: {
+      stableInstructions: 'Published instructions',
+      turnInstructions: 'Read-only tool policy',
+      messages,
+    } })) void _;
+  }
+  assert.deepEqual(requests[1].input.slice(0, requests[0].input.length), requests[0].input);
+  assert.equal(requests[1].input.at(-1).type, 'function_call_output');
 });
 
 test('native adapter replays assistant, reasoning and tool results without a harness model', () => {
