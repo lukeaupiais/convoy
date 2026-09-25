@@ -10,6 +10,7 @@ shared contracts when changing code or UI copy.
 - [Provider boundary](architecture/provider-boundary.md)
 - [Tool and approval contract](architecture/tool-harness.md)
 - [Workflow selection and start automations](architecture/workflow-selection-and-automation-spec.md)
+- [Board workflow visibility](architecture/board-workflow-visibility-spec.md)
 - [Board integrations product and behavior spec](board-integrations-spec.md)
 - [Custom ticket source product and architecture spec](custom-ticket-source-spec.md)
 - [Ticket sync bindings, project routing, and board projection](ticket-sync-bindings-spec.md)

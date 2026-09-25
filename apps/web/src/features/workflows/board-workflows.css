@@ -1,0 +1,190 @@
+.board-workflow-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 5px;
+  color: var(--ink);
+}
+.board-workflow-trigger:hover,
+.board-workflow-trigger[aria-expanded='true'] {
+  background: var(--surface-2);
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px var(--line);
+}
+.board-workflow-menu {
+  position: relative;
+}
+.board-workflow-menu > summary {
+  display: flex;
+  cursor: pointer;
+  padding: 4px;
+}
+.board-workflow-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.board-workflow-menu > button {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: 100%;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    1px 1px #fff inset,
+    2px 2px #102f3233;
+}
+.board-workflow-popover {
+  position: fixed;
+  z-index: 1200;
+  width: min(360px, calc(100vw - 24px));
+  overflow: auto;
+  padding: 3px;
+  border: 2px solid;
+  border-color: #fff var(--line-strong) var(--line-strong) #fff;
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--ink);
+  box-shadow: 2px 2px #101616;
+  font:
+    12px 'MS Sans Serif',
+    Tahoma,
+    Verdana,
+    sans-serif;
+}
+.board-workflow-popover > header {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 1;
+}
+.board-workflow-popover > section {
+  padding: 10px 9px 3px;
+}
+.board-workflow-popover > p {
+  padding: 4px 9px;
+}
+.board-workflow-popover h3 {
+  font-size: 12px;
+  margin: 0 0 7px;
+}
+.board-workflow-popover button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--ink);
+  padding: 3px;
+  box-shadow:
+    inset 1px 1px #fff,
+    inset -1px -1px var(--line);
+}
+.board-workflow-popover button:active {
+  box-shadow:
+    inset 1px 1px var(--line),
+    inset -1px -1px #fff;
+}
+.board-workflow-popover .board-workflow-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: none;
+  text-align: left;
+  font-weight: normal;
+}
+.board-workflow-popover .board-workflow-row:hover {
+  background: var(--paper);
+}
+.board-workflow-copy {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+}
+.board-workflow-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.board-workflow-row svg {
+  flex-shrink: 0;
+}
+.board-workflow-popover > section:first-of-type {
+  padding-right: 30px;
+}
+.board-workflow-row:disabled {
+  cursor: default;
+}
+.board-workflow-popover :focus-visible,
+.workflow-reference :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.workflow-reference {
+  max-width: 900px;
+  padding: 20px;
+  color: var(--ink);
+}
+.workflow-reference header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.workflow-reference article {
+  padding: 12px;
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: inset 1px 1px #fff;
+}
+.workflow-reference article[data-selected='true'] {
+  border-left: 3px solid var(--sea);
+}
+.workflow-reference pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.board-workflow-popover .board-workflow-disclosure {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 7px 0;
+  border: 0;
+  box-shadow: none;
+  text-align: left;
+}
+.board-workflow-disclosure strong {
+  overflow-wrap: anywhere;
+}
+.board-workflow-projects > summary {
+  padding: 7px 0;
+  cursor: pointer;
+}
+.board-workflow-projects .board-workflow-group {
+  margin-left: 12px;
+}
+.board-workflow-group > div > .board-workflow-row {
+  padding-left: 18px;
+}
+
+.board-workflow-group h4 {
+  margin: 8px 0 4px 18px;
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--muted);
+}

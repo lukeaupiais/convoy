@@ -27,3 +27,11 @@ and requires an empty target database.
 `migrate-persistence.mjs` moves a stopped SQLite deployment to a dedicated
 PostgreSQL database. It backs up first and switches the storage marker only after
 exact read-back from PostgreSQL succeeds.
+
+`migrate-automations.mjs DATA_DIRECTORY --config CONFIG [--apply]` validates or
+converts an offline SQLite deployment to canonical automations. Configuration
+contains explicit `relatedDestinations` keyed by workflow ID and an optional
+`supportWorkflowId` to publish/retarget the local support revision. It refuses
+all daemon locks. Back up the complete deployment first; rollback restores that
+backup with its original application version. It reports pre-existing invalid
+unpinned historical definitions, preserving their audit records.

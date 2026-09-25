@@ -89,21 +89,8 @@ export function liveModel(state: RuntimeState, projectFilter = '') {
   const history = sessions
     .filter((s) => sessionBucket(s) === 'history' && !attention.includes(s))
     .sort(sort);
-  const triggerFailures = [
-    ...new Map(
-      (state.workflowTriggerFailures ?? [])
-        .filter((failure) => {
-          const current = state.workflowTriggers?.find(
-            (trigger) => trigger.triggerKey === failure.triggerKey,
-          );
-          return !current || current.status === 'failed';
-        })
-        .filter((failure) =>
-          inProject(state.tickets.find((ticket) => ticket.id === failure.ticketId)?.projectId),
-        )
-        .map((failure) => [failure.triggerKey, failure]),
-    ).values(),
-  ];
+  const triggerFailures = (state.automationDecisions ?? []).filter(decision =>
+    ['failed', 'blocked_active'].includes(decision.status) && inProject(state.tickets.find(ticket => ticket.id === decision.ticketId)?.projectId));
   const orphanEffects = uncertainEffects.filter(
     (effect) => !effectSession(effect.effectKey) && !projectFilter,
   );

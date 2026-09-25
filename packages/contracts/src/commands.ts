@@ -39,7 +39,7 @@ import type {
   Ticket,
   TicketConnection,
 } from './model/work';
-import type { WorkflowDefinition, WorkflowStartRule } from './model/workflows';
+import type { WorkflowDefinition, AutomationRule } from './model/workflows';
 
 type SessionTarget = { sessionId?: string; taskId?: string | number };
 type RequestIdentity = { requestId: string };
@@ -282,13 +282,6 @@ export type RuntimeCommandInputMap = {
     priority?: 'Low' | 'Medium' | 'High';
     customFields?: Record<string, string | number | boolean | null>;
   };
-  createDevelopmentTicket: RequestIdentity & {
-    supportTicketId: number;
-    supportRevision: number;
-    projectId: string;
-    title: string;
-    description?: string;
-  };
   createRelatedTicket: RequestIdentity & {
     sourceTicketId: number;
     sourceRevision: number;
@@ -306,17 +299,6 @@ export type RuntimeCommandInputMap = {
     kind?: string;
   };
   unlinkTickets: { relationId: string; sourceRevision: number };
-  linkDevelopmentTicket: {
-    supportTicketId: number;
-    supportRevision: number;
-    developmentTicketId: number;
-    developmentRevision: number;
-  };
-  unlinkDevelopmentTicket: {
-    supportTicketId: number;
-    supportRevision: number;
-    developmentTicketId: number;
-  };
   saveTicketConnection: Partial<Pick<TicketConnection, 'id' | 'revision' | 'enabled'>> &
     Pick<TicketConnection, 'organizationId' | 'name'> &
     (
@@ -452,7 +434,7 @@ export type RuntimeCommandInputMap = {
     requestId?: string;
   };
   resumeSession: SessionTarget & RequestIdentity & { acknowledge?: boolean };
-  retryWorkflowTrigger: SessionTarget & { triggerKey: string };
+  retryAutomationDecision: SessionTarget & { triggerKey: string };
   reviseSubmission: SessionTarget & { instance: string; feedback: string };
   runTicket: RequestIdentity & {
     ticketId: number;
@@ -492,10 +474,10 @@ export type RuntimeCommandInputMap = {
     projectId?: string;
     revision: number;
   };
-  saveWorkflowStartRule: {
+  saveAutomation: {
     organizationId: string;
     rule: Omit<
-      WorkflowStartRule,
+      AutomationRule,
       'id' | 'organizationId' | 'principal' | 'revision' | 'migratedFrom'
     > & { id?: string };
     revision: number;
@@ -583,12 +565,9 @@ type RuntimeCommandKnownResults = {
   };
   revokeServicePrincipal: ServicePrincipal;
   createTicket: Ticket;
-  createDevelopmentTicket: Ticket;
   createRelatedTicket: Ticket;
   linkTickets: import('./model/work').TicketRelation;
   unlinkTickets: { relationId: string };
-  linkDevelopmentTicket: import('./model/work').TicketDevelopmentLink;
-  unlinkDevelopmentTicket: { supportTicketId: number; developmentTicketId: number };
   saveTicketConnection: TicketConnection;
   deleteTicketConnection: { id: string; deleted: true };
   probeTicketConnection: {
@@ -624,7 +603,7 @@ type RuntimeCommandKnownResults = {
   saveRunnerPool: RunnerPool;
   saveWorkflow: WorkflowDefinition;
   saveWorkflowDraft: { workflow: WorkflowDefinition; revision: number };
-  saveWorkflowStartRule: WorkflowStartRule;
+  saveAutomation: AutomationRule;
   setPlacement: Project | Ticket;
   setExecutionProfile: Project | Ticket;
   updateRunner: Runner;

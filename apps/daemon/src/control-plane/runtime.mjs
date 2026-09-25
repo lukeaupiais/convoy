@@ -1,3 +1,4 @@
+import { workAutomationCapabilities } from '../modules/work/index.mjs';
 import { digest } from '../../../../packages/runner/src/index.mjs';
 import { randomUUID } from 'node:crypto';
 import {
@@ -6,8 +7,8 @@ import {
   createWorkflowEngine,
   createWorkflows,
   migrateWorkflowState,
-  createWorkflowStartRules,
-  migrateWorkflowStartRules,
+  createAutomations,
+  initializeAutomations,
   workflowForProject,
   defaultWorkflowDefinition,
 } from '../modules/workflows/index.mjs';
@@ -228,11 +229,16 @@ export async function createRuntime({
     referencedBoard: (boardId) =>
       workflowReferences.board(boardId) ||
       Object.values(state.sessions).some((session) => session.boardId === boardId),
+    replyContext: ticket => {
+      const session = workExecution.sessionFor(ticket);
+      return session?.flow?.status === 'waiting_gate' ? { workflowRunId: session.flow.id, workflowInstance: session.flow.instance } : {};
+    },
     afterCommand: (command, result, context) => workflowEffects.observeBoardCommand(command, result, context),
   });
   const catalog = work.catalog;
-  migrateWorkflowStartRules(state);
-  const startRules = createWorkflowStartRules({
+  initializeAutomations(state);
+  const automations = createAutomations({
+    capabilities: workAutomationCapabilities,
     state,
     save: () => store.save(),
     authorizeRule: (projectId, principal) =>
@@ -928,9 +934,9 @@ export async function createRuntime({
     now,
     getEngine: () => engine,
     requireText: text,
-    startRules,
+    automations,
     authorizeStart: async (rule, session) => {
-      startRules.validate(rule);
+      automations.validate(rule);
       await requireProjectPermission(rule.projectId, 'project.execute', rule.principal);
       await authorizeProjectModel(session.model, rule.projectId, rule.principal);
       capabilities.pinDefault(session);
@@ -1110,7 +1116,6 @@ export async function createRuntime({
   }
   async function dispatch() {
     await workflowEffects.drainImportFacts();
-    await workflowEffects.drainDeferredTriggers();
     for (const s of Object.values(state.sessions)) {
       for (const m of s.pendingMessages ?? [])
         if (m.binding !== messageBinding(s)) {
@@ -1365,21 +1370,13 @@ export async function createRuntime({
   }
   function validateWorkflowBindings(workflow) {
     for (const node of workflow.nodes ?? []) {
-      const input = node.input ?? node.args ?? node.payload ?? {};
+      const input = node.input ?? {};
       if (node.operation === 'create_ticket') catalog.project(input.projectId);
       if (node.operation === 'move_ticket' && catalog.boards) {
         const board = catalog.boards.board(input.boardId);
-        const columnId = input.columnId ?? input.placement?.columnId;
+        const columnId = input.placement?.columnId;
         if (!board.columns.some((column) => column.id === columnId))
           throw new Error(`${node.name}: board column was not found.`);
-      }
-    }
-    for (const trigger of workflow.triggers ?? []) {
-      if (trigger.projectId) catalog.project(trigger.projectId);
-      if (trigger.boardId && catalog.boards) {
-        const board = catalog.boards.board(trigger.boardId);
-        if (trigger.columnId && !board.columns.some((column) => column.id === trigger.columnId))
-          throw new Error('Workflow trigger column was not found.');
       }
     }
   }
@@ -1408,7 +1405,7 @@ export async function createRuntime({
     engine,
     effects: workflowEffects,
     requestStop,
-    startRules,
+    automations,
   });
   configuration = createSessionConfiguration({
     engine,

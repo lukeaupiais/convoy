@@ -11,7 +11,12 @@ import { NewChatDialog } from '../features/chat/ChatWorkspaceContext';
 import { RuntimeSessions } from '../features/sessions/RuntimeViews';
 import { liveModel } from '../features/sessions/sessionMonitor';
 import { SettingsPage } from './SettingsPage';
-import { command, useRuntime, type ContextRef } from '../shared/api/runtime';
+import {
+  command,
+  useRuntime,
+  type ContextRef,
+  type WorkflowReference,
+} from '../shared/api/runtime';
 import { copyText, newId } from '../shared/lib/browser';
 import { ProjectSettings } from '../features/projects/ProjectSettings';
 import '../shared/styles/mobile.css';
@@ -99,6 +104,14 @@ function App() {
   const [saving, setSaving] = useState(false);
   const createRequest = useRef('');
   const [page, setPage] = useState('Project board');
+  const [workflowReference, setWorkflowReference] = useState<WorkflowReference>();
+  const workflowContextKey = JSON.stringify([
+    liveRuntime?.deployment?.id,
+    liveRuntime?.currentUser?.id,
+    liveRuntime?.activeContext?.organizationId,
+    liveRuntime?.activeContext?.projectId,
+  ]);
+  useEffect(() => setWorkflowReference(undefined), [workflowContextKey]);
   const [selected, setSelected] = useState<number | null>(null);
   const [newTask, setNewTask] = useState<Status | null>(null);
   const [newTaskDestination, setNewTaskDestination] = useState('');
@@ -469,7 +482,7 @@ function App() {
 
         {page === 'Project board' && liveRuntime && project && (
           <BoardStudio
-            key={project.id}
+            key={`${workflowContextKey}:${project.id}`}
             state={liveRuntime}
             projectId={project.id}
             tickets={tasks as never}
@@ -481,6 +494,11 @@ function App() {
               setNewTask('Backlog');
             }}
             onManageIntegrations={() => navigate('Integrations')}
+            runtimeError={runtimeError}
+            onOpenWorkflow={(reference) => {
+              setWorkflowReference(reference);
+              navigate('Workflows');
+            }}
           />
         )}
         {page === 'Sessions' && (
@@ -499,7 +517,14 @@ function App() {
             openTicket={setSelected}
           />
         )}
-        {page === 'Workflows' && <SettingsPage key="workflow-settings" view="Workflows" />}
+        {page === 'Workflows' && (
+          <SettingsPage
+            key={`workflow-settings:${workflowContextKey}`}
+            view="Workflows"
+            workflowReference={workflowReference}
+            onCloseReference={() => setWorkflowReference(undefined)}
+          />
+        )}
         {page === 'Runners' && <SettingsPage key="runner-settings" view="Runners" />}
         {page === 'Providers' && <SettingsPage key="provider-settings" view="Providers" />}
         {page === 'Integrations' && <SettingsPage key="integration-settings" view="Integrations" />}

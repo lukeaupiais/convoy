@@ -179,11 +179,11 @@ test('one project uses source membership and work type to feed separate boards',
   assert.equal(catalog.boards.visibleTickets(support).length, 1);
   assert.equal(catalog.boards.visibleTickets(triage)[0].id, imported.id);
   assert.equal(catalog.boards.visibleTickets(development).length, 0);
-  const dev = await catalog.command({ action: 'createDevelopmentTicket', requestId: 'dev-10', supportTicketId: imported.id, supportRevision: imported.revision, projectId: 'alpha', title: 'Fix report' });
+  const dev = await catalog.command({ action: 'createRelatedTicket', requestId: 'dev-10', sourceTicketId: imported.id, sourceRevision: imported.revision, boardId: development.id, title: 'Fix report' });
   assert.equal(dev.workType, 'development');
   assert.equal(catalog.boards.visibleTickets(development).length, 1);
   assert.equal(catalog.boards.visibleTickets(support).length, 1);
-  assert.equal(state.ticketDevelopmentLinks[0].supportTicketId, imported.id);
+  assert.equal(state.ticketRelations[0].sourceTicketId, imported.id);
   assert.deepEqual(await catalog.command({ action: 'syncTicketImportBinding', id: binding.id }), { imported: 0, updated: 0, complete: true, pages: 1 });
   assert.equal(state.tickets.length, 2);
 });

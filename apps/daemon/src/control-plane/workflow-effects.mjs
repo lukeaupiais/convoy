@@ -1,8 +1,10 @@
+import { workflowActionInput } from '../modules/workflows/index.mjs';
+
 export function migrateWorkflowEffectState(state) {
-  state.workflowTriggerLedger ??= {};
+  state.automationDecisionLedger ??= {};
   state.workflowEffectLedger ??= {};
-  state.workflowTriggerFailures ??= [];
-  state.workflowTriggerFailures = state.workflowTriggerFailures.slice(-100);
+  state.automationFailures ??= [];
+  state.automationFailures = state.automationFailures.slice(-100);
 }
 
 /**
@@ -10,7 +12,7 @@ export function migrateWorkflowEffectState(state) {
  * written before mutation so restarts fail closed instead of replaying an
  * uncertain create/update/move.
  */
-export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, makeSession, pinInstructions, normalizeWorkflow, event, save, now, getEngine, requireText, startRules, authorizeStart }) {
+export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, makeSession, pinInstructions, normalizeWorkflow, event, save, now, getEngine, requireText, automations, authorizeStart }) {
   migrateWorkflowEffectState(state);
   async function boardCommand(command) {
     const result = await (boards?.command ?? catalog.command)(command);
@@ -19,10 +21,11 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
 
   async function observeBoardCommand(command, result) {
     const placementChanged = result?.fromColumnId !== result?.toColumnId;
-    const eventNames = ['createTicket', 'createRelatedTicket', 'createDevelopmentTicket'].includes(command.action) ? ['ticket_created'] : command.action === 'updateTicket' ? ['ticket_updated'] : ['setBoardPlacement', 'clearBoardPlacement'].includes(command.action) ? ['board_placement_changed', ...(placementChanged ? ['ticket_moved'] : [])] : [];
+    const eventNames = ['createTicket', 'createRelatedTicket'].includes(command.action) ? ['ticket_created'] : command.action === 'updateTicket' ? ['ticket_updated'] : ['setBoardPlacement', 'clearBoardPlacement'].includes(command.action) ? ['board_placement_changed', ...(placementChanged ? ['ticket_moved'] : [])] : [];
     // A related ticket is a new ticket and may start its own workflow.
-    if (!eventNames.length || command.workflowRunId && !['createRelatedTicket', 'createDevelopmentTicket'].includes(command.action)) return result;
-    const ticketId = ['createTicket', 'createRelatedTicket', 'createDevelopmentTicket'].includes(command.action)
+    await drainWorkFacts();
+    if (!eventNames.length || command.workflowRunId && !['createRelatedTicket'].includes(command.action)) return result;
+    const ticketId = ['createTicket', 'createRelatedTicket'].includes(command.action)
       ? result?.id : command.ticketId ?? command.taskId ?? result?.ticketId ?? result?.id;
     const ticket = ticketId === undefined ? null : catalog.ticket(ticketId);
     if (!ticket) return result;
@@ -44,25 +47,23 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       if (node?.kind !== 'wait' || waitFor.event !== fact.event || waitFor.status && ticket.status !== waitFor.status) continue;
       const matches = waitFor.ticketSource === 'related_ticket'
         ? state.ticketRelations?.some((link) => link.sourceTicketId === session.activeTicketId && link.targetTicketId === ticket.id && (!waitFor.relationKind || link.kind === waitFor.relationKind))
-        : waitFor.ticketSource === 'linked_development'
-        ? state.ticketDevelopmentLinks?.some((link) => link.supportTicketId === session.activeTicketId && link.developmentTicketId === ticket.id)
         : session.activeTicketId === ticket.id;
       if (matches) consumedByWait = await getEngine().signal(session, session.flow.instance, fact) || consumedByWait;
     }
     if (consumedByWait) return;
-    const candidates = (state.workflowStartRules ?? []).filter((rule) =>
-      startRules.matches(rule, { ...fact, projectId: ticket.projectId, workType: ticket.workType }));
+    const candidates = (state.automations ?? []).filter((rule) =>
+      automations.matches(rule, { ...fact, projectId: ticket.projectId, workType: ticket.workType, status: ticket.status }));
     if (!candidates.length) return;
     const active = sessionFor(ticket);
     const blocked = candidates.length > 1 ? 'conflict' : active?.flow && !['completed', 'cancelled'].includes(active.flow.status) ? 'blocked_active' : null;
     for (const rule of candidates) {
       const key = `${rule.id}:${rule.revision}:${fact.sourceKey}`;
-      if (state.workflowTriggerLedger[key]) continue;
+      if (state.automationDecisionLedger[key]) continue;
       const record = { at: now(), status: blocked ?? 'pending', ruleId: rule.id, ruleRevision: rule.revision,
-        workflowId: rule.workflowId, workflowVersion: rule.workflowVersion, ticketId: ticket.id,
-        trigger: rule.event, attempts: blocked ? 0 : 1,
+        workflowId: rule.then.workflowId, workflowVersion: rule.then.workflowVersion, ticketId: ticket.id,
+        trigger: rule.when.event, sourceEvent: structuredClone(fact), attempts: blocked ? 0 : 1,
         ...(blocked === 'blocked_active' ? { activeSessionId: active.id, activeRunId: active.flow.id } : {}) };
-      state.workflowTriggerLedger[key] = record;
+      state.automationDecisionLedger[key] = record;
       await save();
       if (blocked) continue;
       let session = active;
@@ -74,27 +75,38 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         pinInstructions(session);
       }
       try {
-        const workflow = state.workflows.find((value) => value.id === rule.workflowId && value.version === rule.workflowVersion);
+        const workflow = state.workflows.find((value) => value.id === rule.then.workflowId && value.version === rule.then.workflowVersion);
         if (!workflow) throw new Error('Pinned workflow version is unavailable.');
         session.workflow = { ...normalizeWorkflow(workflow), version: workflow.version };
         session.executionPrincipal = structuredClone(rule.principal);
         await authorizeStart(rule, session);
-        event(session, 'workflow_triggered', { workflowId: workflow.id, ticketId: ticket.id, trigger: rule.event, sourceKey: key });
+        event(session, 'workflow_triggered', { workflowId: workflow.id, ticketId: ticket.id, trigger: rule.when.event, sourceKey: key });
         await save();
         await getEngine().start(session);
         record.status = 'started';
       } catch (error) {
         record.status = 'failed'; record.message = error.message;
-        state.workflowTriggerFailures.push({ at: now(), triggerKey: key, workflowId: rule.workflowId,
-          workflowVersion: rule.workflowVersion, ticketId: ticket.id, trigger: rule.event, message: error.message });
-        state.workflowTriggerFailures = state.workflowTriggerFailures.slice(-100);
-        event(session, 'workflow_trigger_failed', { workflowId: rule.workflowId, ticketId: ticket.id, message: error.message });
+        state.automationFailures.push({ at: now(), triggerKey: key, workflowId: rule.then.workflowId,
+          workflowVersion: rule.then.workflowVersion, ticketId: ticket.id, trigger: rule.when.event, message: error.message });
+        state.automationFailures = state.automationFailures.slice(-100);
+        event(session, 'workflow_trigger_failed', { workflowId: rule.then.workflowId, ticketId: ticket.id, message: error.message });
       }
     }
     await save();
   }
 
+  async function drainWorkFacts() {
+    for (const fact of state.workFacts ?? []) {
+      if (fact.status !== 'pending') continue;
+      const ticket = catalog.ticket(fact.ticketId);
+      if (ticket) await observeTicketFact(ticket, { ...fact, sourceKey:fact.key });
+      fact.status = 'observed'; await save();
+    }
+    state.workFacts = (state.workFacts ?? []).filter(fact => fact.status !== 'observed');
+  }
+
   async function drainImportFacts() {
+    await drainWorkFacts();
     for (const fact of state.ticketImportFacts ?? []) {
       if (fact.status !== 'pending') continue;
       const ticket = catalog.ticket(fact.ticketId);
@@ -106,56 +118,10 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     await save();
   }
 
-  async function drainDeferredTriggers() {
-    const deferred = Object.entries(state.workflowTriggerLedger)
-      .filter(([, record]) => record.status === 'blocked_active');
-    const byTicket = new Map();
-    for (const entry of deferred) {
-      const ticketId = entry[1].ticketId;
-      const group = byTicket.get(ticketId) ?? [];
-      group.push(entry);
-      byTicket.set(ticketId, group);
-    }
-    for (const [ticketId, group] of byTicket) {
-      const ticket = catalog.ticket(ticketId);
-      if (!ticket) continue;
-      const session = sessionFor(ticket);
-      if (!session || session.flow && !['completed', 'cancelled'].includes(session.flow.status)) continue;
-      const [triggerKey, record] = group.at(-1);
-      for (const [key, earlier] of group.slice(0, -1)) {
-        earlier.status = 'coalesced';
-        earlier.coalescedInto = triggerKey;
-      }
-      const rule = state.workflowStartRules?.find(value => value.id === record.ruleId && value.revision === record.ruleRevision && value.enabled);
-      const workflow = state.workflows.find(value => value.id === record.workflowId && value.version === record.workflowVersion);
-      record.status = 'pending';
-      record.attempts++;
-      await save();
-      try {
-        if (!rule || !workflow) throw new Error('Deferred automation changed. Review it before retrying.');
-        session.workflow = { ...normalizeWorkflow(workflow), version: workflow.version };
-        session.executionPrincipal = structuredClone(rule.principal);
-        await authorizeStart(rule, session);
-        event(session, 'workflow_triggered', { workflowId: workflow.id, ticketId, trigger: record.trigger, sourceKey: triggerKey });
-        await save();
-        await getEngine().start(session);
-        record.status = 'started';
-      } catch (error) {
-        record.status = 'failed';
-        record.message = error.message;
-        state.workflowTriggerFailures.push({ at: now(), triggerKey, workflowId: record.workflowId,
-          workflowVersion: record.workflowVersion, ticketId, trigger: record.trigger, message: error.message });
-        state.workflowTriggerFailures = state.workflowTriggerFailures.slice(-100);
-        event(session, 'workflow_trigger_failed', { workflowId: record.workflowId, ticketId, message: error.message });
-      }
-      await save();
-    }
-  }
-
   async function executeAction(session, node, instance) {
     if (node.operation === 'inspect_changes') return null;
-    if (!['create_ticket', 'create_related_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket', 'set_external_status'].includes(node.operation)) throw new Error('Unsupported workflow action.');
-    const payload = node.input ?? node.args ?? node.payload ?? {};
+    if (!['create_ticket', 'create_related_ticket', 'update_ticket', 'move_ticket', 'set_external_status'].includes(node.operation)) throw new Error('Unsupported workflow action.');
+    const payload = workflowActionInput(node);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Workflow action arguments must be an object.');
     const command = { ...payload, workflowRunId: session.flow.id, workflowInstance: instance, idempotencyKey: `${session.flow.id}:${instance}` };
     if (command.ticketSource === 'last_created') {
@@ -173,16 +139,6 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       command.sourceTicketId = source.id;
       command.sourceRevision = source.revision;
     }
-    else if (node.operation === 'create_development_ticket') {
-      const support = catalog.ticket(command.supportTicketId ?? session.activeTicketId);
-      if (!support || support.projectId !== session.projectId) throw new Error('Active support ticket is unavailable.');
-      command.action = 'createDevelopmentTicket';
-      command.supportTicketId = support.id;
-      command.supportRevision = support.revision;
-      command.projectId = support.projectId;
-      if (!command.title) command.title = support.title;
-      if (!command.description) command.description = `Reported in support ticket #${support.id}.\n\n${support.description}`;
-    }
     else if (node.operation === 'update_ticket') { command.action = 'updateTicket'; command.taskId ??= command.ticketId; command.requestId ??= command.requestKey ?? `${session.flow.id}-${instance}`; }
     else if (node.operation === 'set_external_status') {
       command.action = 'setExternalTicketStatus';
@@ -193,17 +149,17 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         const candidates = (state.ticketReplies ?? []).filter(reply =>
           reply.ticketId === command.ticketId && reply.connectionId === command.connectionId &&
           reply.status === 'queued' && reply.deliveryStatus === 'delivered' &&
-          reply.createdAt >= session.flow.startedAt);
+          reply.workflowRunId === session.flow.id);
         const latest = candidates.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
         if (!latest) throw new Error('No delivered reply from this workflow run was found.');
         command.evidenceReplyRequestId = latest.id;
       }
       delete command.evidenceReply;
     }
-    else { command.action = 'setBoardPlacement'; command.ticketId ??= command.taskId ?? session.activeTicketId; if (!command.placement && command.columnId) command.placement = { columnId: command.columnId, swimlaneKey: command.swimlaneKey }; }
+    else { command.action = 'setBoardPlacement'; command.ticketId ??= command.taskId ?? session.activeTicketId; }
     const target = command.ticketId ?? command.taskId;
     if (target !== undefined && command.revision === undefined) command.revision = catalog.ticket(target)?.revision;
-    if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation)) command.requestId ??= command.requestKey ?? `${session.flow.id}-${instance}`;
+    if (['create_ticket', 'create_related_ticket'].includes(node.operation)) command.requestId ??= command.requestKey ?? `${session.flow.id}-${instance}`;
     const effectKey = `${session.flow.id}:${instance}:${node.id}`;
     const previous = state.workflowEffectLedger[effectKey];
     if (previous) {
@@ -222,7 +178,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     await save();
     try {
       const result = await boardCommand(command);
-      if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation) && result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = result.id; }
+      if (['create_ticket', 'create_related_ticket'].includes(node.operation) && result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = result.id; }
       state.workflowEffectLedger[effectKey] = {
         ...state.workflowEffectLedger[effectKey],
         status: 'succeeded',
@@ -250,13 +206,13 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       const recorded = effect.command ?? {}; const targetId = recorded.ticketId ?? recorded.taskId;
       const reportedId = command.result?.id ?? command.result?.ticketId ?? command.result?.taskId;
       if (!command.result || typeof command.result !== 'object' || Array.isArray(command.result)) throw new Error('Applied effect confirmation must include the real command result.');
-      if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation)) { if (reportedId === undefined || !catalog.ticket(reportedId)) throw new Error('Applied create result must reference an existing ticket.'); }
+      if (['create_ticket', 'create_related_ticket'].includes(node.operation)) { if (reportedId === undefined || !catalog.ticket(reportedId)) throw new Error('Applied create result must reference an existing ticket.'); }
       else if (targetId !== undefined) {
         if (!catalog.ticket(targetId)) throw new Error('Applied effect target ticket no longer exists.');
         if (reportedId === undefined || String(reportedId) !== String(targetId)) throw new Error('Applied effect result must reference its recorded target ticket.');
       }
       effect.status = 'succeeded'; effect.result = command.result; effect.reconciledAt = now();
-      if (['create_ticket', 'create_related_ticket', 'create_development_ticket'].includes(node.operation) && effect.result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = effect.result.id; }
+      if (['create_ticket', 'create_related_ticket'].includes(node.operation) && effect.result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = effect.result.id; }
       session.flow.status = 'running'; session.status = 'running'; event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'applied' });
       try { await engine.finishAutomated(session, command.instance, 'success', effect.result); }
       catch (error) { session.flow.status = 'failed'; session.status = 'failed'; effect.status = 'uncertain'; effect.message = error.message; throw error; }
@@ -268,15 +224,17 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
   }
 
   async function retryTrigger(session, command) {
-    const triggerKey = requireText(command.triggerKey, 500); const record = state.workflowTriggerLedger[triggerKey];
-    if (!record || record.status !== 'failed') throw new Error('Workflow trigger is not failed or has already started.');
+    const triggerKey = requireText(command.triggerKey, 500); const record = state.automationDecisionLedger[triggerKey];
+    if (!record || !['failed','blocked_active'].includes(record.status)) throw new Error('Workflow trigger is not failed or has already started.');
     if (session.flow && !['completed', 'cancelled'].includes(session.flow.status)) throw new Error('The triggered workflow is already active.');
-    const rule = state.workflowStartRules?.find(value => value.id === record.ruleId && value.revision === record.ruleRevision);
+    const rule = state.automations?.find(value => value.id === record.ruleId && value.revision === record.ruleRevision);
     if (record.ruleId && (!rule || !rule.enabled)) throw new Error('Start automation changed. Review it before retrying.');
     const workflow = state.workflows.find(value => value.id === record.workflowId && value.version === record.workflowVersion);
     if (!workflow) throw new Error('The pinned workflow version for this trigger is unavailable.');
     const ticket = catalog.ticket(record.ticketId); if (!ticket) throw new Error('Triggered ticket no longer exists.');
+    if (String(session.activeTicketId) !== String(ticket.id)) throw new Error('Decision belongs to another ticket.');
     if (rule) {
+      automations.validate(rule);
       if (ticket.projectId !== rule.projectId) throw new Error('Ticket project changed.');
       session.executionPrincipal = structuredClone(rule.principal);
       await authorizeStart(rule, session);
@@ -287,12 +245,12 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     try { await getEngine().start(session); record.status = 'started'; }
     catch (error) {
       record.status = 'failed'; record.message = error.message;
-      state.workflowTriggerFailures.push({ at: now(), triggerKey, workflowId: workflow.id, workflowVersion: workflow.version, ticketId: ticket.id, trigger: record.trigger, message: error.message });
-      state.workflowTriggerFailures = state.workflowTriggerFailures.slice(-100);
+      state.automationFailures.push({ at: now(), triggerKey, workflowId: workflow.id, workflowVersion: workflow.version, ticketId: ticket.id, trigger: record.trigger, message: error.message });
+      state.automationFailures = state.automationFailures.slice(-100);
       event(session, 'workflow_trigger_failed', { triggerKey, workflowId: workflow.id, ticketId: ticket.id, message: error.message });
     }
     await save();
   }
 
-  return { boardCommand, observeBoardCommand, drainImportFacts, drainDeferredTriggers, executeAction, reconcile, retryTrigger };
+  return { boardCommand, observeBoardCommand, drainImportFacts, executeAction, reconcile, retryTrigger };
 }

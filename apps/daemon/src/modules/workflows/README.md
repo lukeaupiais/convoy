@@ -5,12 +5,12 @@ run transitions. Graph edges, not canvas position or board columns, select the
 next node. Agent output advances only through explicit submission or operator
 action.
 
-Start automations are separate project-owned rules. Each pins one published
+Automations are separate project-owned When / If / Then rules. Each pins one published
 workflow version, optionally matches a board and entered column, and records
 the principal whose current grants are checked at dispatch. The completed Work
 fact is observed through the control plane; multiple matches conflict and an
-active run blocks another start. Historical embedded triggers migrate once to
-rules, then only rules are evaluated.
+active run blocks another start. Legacy rules require the offline automation migration; runtime accepts only the
+canonical schema. Active-run holds remain visible until explicit retry.
 
 Import and customer-message start rules are scoped to one import binding and
 may also select a work type. A wait node can resume an active run from a ticket

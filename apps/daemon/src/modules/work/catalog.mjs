@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { createBoards } from './boards.mjs';
-import { createLegacyDevelopmentCommands, migrateLegacyDevelopmentLinks } from './legacy-development-compat.mjs';
 import { requiredText as text } from '../../shared/validation.mjs';
 export const phases = ['Backlog', 'Ready', 'In progress', 'In review', 'Done'];
-export function createCatalog({ state, save, execution, externalTickets, contextFiles, referencedColumn, referencedBoard }) {
+export function createCatalog({ state, save, execution, externalTickets, contextFiles, referencedColumn, referencedBoard, replyContext = () => ({}) }) {
   state.projects ??= [{ id: 'agent-platform', organizationId: 'personal', name: 'Agent platform', description: '', revision: 1, placement: { mode: 'none' }, executionProfile: 'ask' }];
   for (const value of state.projects) value.organizationId ??= 'personal';
+  state.ticketRelations ??= [];
   state.tickets ??= []; state.ticketRequests ??= {};
-  migrateLegacyDevelopmentLinks(state);
   state.ticketImportFacts ??= [];
+  state.workFacts ??= [];
   state.ticketThreads ??= [];
   state.ticketReplies ??= [];
   state.ticketStatusChanges ??= [];
@@ -104,8 +104,14 @@ export function createCatalog({ state, save, execution, externalTickets, context
     state.ticketStatusMigrationVersion = 1;
   }
   const boards = createBoards({ state, save, projects: state.projects, ticket, referencedColumn, referencedBoard });
-  const legacyDevelopment = createLegacyDevelopmentCommands({ state, ticket, project, fields, boards, execution, save, linkTickets });
   const syncingBindings = new Set();
+  function recordColumnFacts(before, after, command = {}) {
+    if (command.workflowRunId) return;
+    for (const transition of boards.columnTransitions(before, after)) {
+      const key = `column:${after.id}:${after.revision}:${transition.boardId}`;
+      if (!state.workFacts.some(f => f.key === key)) state.workFacts.push({ id:key, key, event:'ticket_moved', projectId:after.projectId, ticketId:after.id, ...transition, status:'pending' });
+    }
+  }
   async function importPage(c, source, remote, binding, runId, nextCursor) {
     const planned = []; let imported = 0; let updated = 0;
     for (const normalized of remote) {
@@ -159,6 +165,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
       throw error;
     }
     for (const change of planned) {
+      if (change.old) recordColumnFacts(change.old, change.next);
       if (change.old) Object.assign(change.old, change.next);
       else { state.tickets.push(change.next); boards.ensureTicket(change.next); }
     }
@@ -371,7 +378,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
         state.tickets.push(value); state.ticketRequests[request] = id; boards.ensureTicket(value); await save();
         return source ? publish(value, source, request) : value;
       }
-      if (['createDevelopmentTicket', 'linkDevelopmentTicket', 'unlinkDevelopmentTicket'].includes(c.action)) return legacyDevelopment(c);
       if (c.action === 'createRelatedTicket') {
         const request = text(c.requestId, 'Request ID', 100);
         if (!/^[\w-]+$/.test(request)) throw new Error('Invalid request ID.');
@@ -412,7 +418,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (!relation) throw new Error('Ticket relation not found.');
         const source = sourceTicket(relation.sourceTicketId, c.sourceRevision);
         state.ticketRelations = state.ticketRelations.filter(value => value.id !== relation.id);
-        if (relation.kind === 'legacy-development') state.ticketDevelopmentLinks = state.ticketDevelopmentLinks.filter(value => value.supportTicketId !== relation.sourceTicketId || value.developmentTicketId !== relation.targetTicketId);
         source.revision++;
         await save();
         return { relationId: relation.id };
@@ -551,7 +556,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
           throw new Error('Previous reply outcome needs reconciliation before another send.');
         }
         const reply = { id: requestId, ticketId: t.id, connectionId: source.id, body,
-          status: 'pending', createdAt: new Date().toISOString() };
+          status: 'pending', createdAt: new Date().toISOString(), ...replyContext(t) };
         state.ticketReplies.push(reply);
         await save();
         try {
@@ -599,6 +604,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
           });
           if (result.status === undefined) throw new Error('Ticket source did not map the resulting status.');
           boards.validateTicketUpdate(t, { status: result.status });
+          recordColumnFacts(t, { ...t, status: result.status, revision: t.revision + 1 }, c);
           t.status = result.status; t.revision++;
           link.remoteStatus = result.rawStatus; link.mappedStatus = result.status;
           link.remoteVersion = result.remoteVersion; link.syncState = 'linked'; delete link.message;
@@ -673,7 +679,9 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (contentChanged && t.externalLinks?.some(value => value.fieldOwnership?.title === 'external' && patch.title !== undefined && patch.title !== t.title || value.fieldOwnership?.description === 'external' && patch.description !== undefined && patch.description !== t.description)) throw new Error('This content is owned by the external source. Edit it there, then import again.');
         if (contentChanged && t.externalLinks?.some(value => value.syncState === 'error')) throw new Error('Resolve the external sync issue before editing linked content.');
         boards.validateTicketUpdate(t, patch);
-        const value = fields({ ...t, ...patch }); Object.assign(t, value, { revision: t.revision + 1 });
+        const value = fields({ ...t, ...patch });
+        recordColumnFacts(t, { ...t, ...value, revision: t.revision + 1 }, c);
+        Object.assign(t, value, { revision: t.revision + 1 });
         boards.ensureTicket(t);
         execution.syncTicket(t); await save();
         const outgoing = contentChanged ? t.externalLinks?.find(item => item.fieldOwnership?.title === 'convoy' && item.fieldOwnership?.description === 'convoy') : null;
@@ -728,6 +736,6 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate', 'setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) return boards.command(c);
       throw new Error('Unknown catalog command.');
     },
-    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketStatusChanges: state.ticketStatusChanges, ticketDevelopmentLinks: state.ticketDevelopmentLinks, ticketRelations: state.ticketRelations, ...boards.snapshot() }; },
+    snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketStatusChanges: state.ticketStatusChanges, ticketRelations: state.ticketRelations, ...boards.snapshot() }; },
   };
 }
