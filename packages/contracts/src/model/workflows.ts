@@ -1,4 +1,62 @@
 export type WorkflowNodeKind = 'agent' | 'human' | 'check' | 'action' | 'branch' | 'wait';
+
+export type WorkflowReference = {
+  workflowId: string;
+  workflowVersion: number;
+  ruleId?: string;
+  ruleRevision?: number;
+  nodeId?: string;
+};
+type BoardAutomationReference = WorkflowReference & {
+  scope: 'column' | 'board' | 'project';
+  workflowName?: string;
+  available: boolean;
+  olderVersion: boolean;
+  projectId?: string;
+  boardId?: string;
+  columnId?: string;
+  name: string;
+  label: string;
+  unresolved?: boolean;
+  indirect?: boolean;
+  detail?: string;
+};
+export type BoardAutomationRelationship = BoardAutomationReference &
+  (
+    | {
+        kind: 'start_rule';
+        ruleId: string;
+        ruleRevision: number;
+        event: import('./automations').AutomationEvent;
+        enabled: boolean;
+        decision?: {
+          triggerKey: string;
+          status: AutomationDecision['status'];
+          ruleRevision?: number;
+          workflowId: string;
+          workflowVersion?: number;
+          ticketId: number;
+          at?: string;
+        };
+      }
+    | {
+        kind: 'effect';
+        nodeId: string;
+        operation: WorkflowActionOperation;
+        referencedBy?: {
+          ruleId: string;
+          name: string;
+          projectId: string;
+          boardId?: string;
+          columnId?: string;
+        }[];
+      }
+  );
+export type BoardAutomationView = {
+  boardId: string;
+  boardRevision: number;
+  relationships: BoardAutomationRelationship[];
+};
 export type WorkflowAdvance = 'automatic' | 'manual';
 export type WorkflowPermission = 'none' | 'read' | 'read-write' | 'full';
 export type WorkflowSessionRule = {
@@ -10,7 +68,6 @@ export type WorkflowArtifact = { path: string; headings: string[] };
 export type WorkflowActionOperation =
   | 'inspect_changes'
   | 'create_ticket'
-  | 'create_development_ticket'
   | 'create_related_ticket'
   | 'update_ticket'
   | 'move_ticket';
@@ -41,19 +98,11 @@ export type WorkflowStep = {
   skills?: string[];
   model?: string;
   condition?: WorkflowCondition;
-  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource?: 'active_ticket' | 'related_ticket' | 'linked_development'; relationKind?: string; status?: string };
+  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource?: 'active_ticket' | 'related_ticket'; relationKind?: string; status?: string };
   x?: number;
   y?: number;
 };
 export type WorkflowEdge = { id: string; from: string; to: string; outcome: string };
-export type WorkflowBoardTrigger = {
-  event: 'ticket_created' | 'ticket_updated' | 'ticket_moved' | 'board_placement_changed' | 'ticket_imported' | 'ticket_source_updated' | 'ticket_message_received';
-  boardId?: string;
-  columnId?: string;
-  bindingId?: string;
-  workType?: string;
-  projectId?: string;
-};
 export type WorkflowDefinition = {
   id: string;
   organizationId?: string;
@@ -66,30 +115,10 @@ export type WorkflowDefinition = {
   edges: WorkflowEdge[];
   entryNode: string;
   maxRevisions: number;
-  triggers: WorkflowBoardTrigger[];
   /** Compatibility projection for older clients. New code must use nodes. */
   steps: WorkflowStep[];
 };
-export type WorkflowStartRule = {
-  id: string;
-  name: string;
-  organizationId: string;
-  projectId: string;
-  event: WorkflowBoardTrigger['event'];
-  boardId?: string;
-  columnId?: string;
-  bindingId?: string;
-  workType?: string;
-  workflowId: string;
-  workflowVersion: number;
-  enabled: boolean;
-  principal:
-    | { kind: 'user'; userId: string }
-    | { kind: 'workload'; workloadIdentityId: string }
-    | null;
-  revision: number;
-  migratedFrom?: { workflowId: string; triggerIndex: number };
-};
+export type { AutomationRule } from './automations';
 export type WorkflowEffect = {
   effectKey: string;
   status: 'pending' | 'uncertain' | 'succeeded';
@@ -98,7 +127,7 @@ export type WorkflowEffect = {
   reconciledAt?: string;
   message?: string;
 };
-export type WorkflowTriggerFailure = {
+export type AutomationDecisionFailure = {
   triggerKey: string;
   workflowId: string;
   workflowVersion: number;
@@ -107,7 +136,7 @@ export type WorkflowTriggerFailure = {
   message?: string;
   at?: string;
 };
-export type WorkflowTrigger = WorkflowTriggerFailure & {
+export type AutomationDecision = AutomationDecisionFailure & {
   status: 'pending' | 'started' | 'failed' | 'conflict' | 'blocked_active' | 'coalesced';
   ruleId?: string;
   ruleRevision?: number;

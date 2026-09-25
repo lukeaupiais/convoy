@@ -29,8 +29,8 @@ test('Live counts actionable sessions and sessionless failures without counting 
     ],
     tickets: [{id:42,projectId:'p'}],
     workflowEffects: [{effectKey:'flow:one:node',status:'uncertain',operation:'move_ticket'}, {effectKey:'missing:one:node',status:'uncertain',operation:'create_ticket'}],
-    workflowTriggerFailures: [{triggerKey:'trigger',ticketId:42,workflowId:'flow',workflowVersion:1}],
-    workflowTriggers: [{triggerKey:'trigger',status:'failed'}],
+    automationFailures: [{triggerKey:'trigger',ticketId:42,workflowId:'flow',workflowVersion:1}],
+    automationDecisions: [{triggerKey:'trigger',status:'failed'}],
   };
   const model = liveModel(state);
   assert.deepEqual(model.attention.map(s => s.id), ['effect']);
@@ -39,6 +39,6 @@ test('Live counts actionable sessions and sessionless failures without counting 
   assert.equal(model.attentionCount, 3);
   assert.equal(sessionStatus(state.sessions[2], model.uncertainEffectFor(state.sessions[2])), 'Effect uncertain');
   assert.equal(liveModel(state, 'other').attentionCount, 0);
-  state.workflowTriggers[0].status = 'started';
+  state.automationDecisions[0].status = 'started';
   assert.equal(liveModel(state).triggerFailures.length, 0);
 });

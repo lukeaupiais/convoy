@@ -7,15 +7,18 @@
 const identity = (bucket, key) => JSON.stringify([bucket, key]);
 
 function itemKey(name, item) {
-  if (name === 'workflows' && item?.version !== undefined)
-    return `${item.id}@${item.version}`;
-  if (name === 'skills' && item?.version !== undefined)
-    return `${item.organizationId ?? 'personal'}:${item.name}@${item.version}`;
-  if (name === 'capabilityProfiles' && item?.version !== undefined)
-    return `${item.organizationId ?? 'personal'}:${item.id}@${item.version}`;
-  if (name === 'extensions' && item?.revision !== undefined)
-    return `${item.organizationId ?? 'personal'}:${item.id}@${item.revision}`;
-  return item?.id;
+  if (name === 'disabledTools') return item;
+  if (['skills', 'capabilityProfiles', 'extensions'].includes(name)) {
+    const id = name === 'skills' ? item?.name : item?.id;
+    const revision = name === 'extensions' ? item?.revision : item?.version;
+    if (typeof id !== 'string' || !id ||
+        (name === 'extensions' ? typeof revision !== 'string' || !revision : !Number.isInteger(revision) || revision < 1))
+      throw new Error(`Persisted collection ${name} needs valid revision identities.`);
+    return JSON.stringify([item.organizationId ?? 'personal', id, revision]);
+  }
+  return name === 'workflows' && item?.version !== undefined
+    ? `${item.id}@${item.version}`
+    : item?.id;
 }
 
 function flatten(data) {

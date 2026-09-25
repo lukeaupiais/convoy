@@ -8,10 +8,13 @@ import {
 import { CapabilityLibrary } from '../features/library/CapabilityLibrary';
 import { EnvironmentSettings } from '../features/runners/EnvironmentSettings';
 import { WorkflowEditor } from '../features/workflows/WorkflowEditor';
+import { WorkflowReferenceView } from '../features/workflows/index';
+import type { WorkflowReference } from '../shared/api/runtime';
 import { ProviderSettings } from '../features/providers';
 import { IntegrationSettings } from '../features/integrations';
 
-type SettingsView = 'Providers' | 'Integrations' | 'Runners' | 'Workflows' | 'Skills & instructions';
+type SettingsView =
+  'Providers' | 'Integrations' | 'Runners' | 'Workflows' | 'Skills & instructions';
 
 function InstructionPublisher({
   state,
@@ -129,9 +132,7 @@ function InstructionPublisher({
           disabled={working}
           onClick={() => {
             try {
-              const previous = JSON.parse(
-                localStorage.getItem('convoy.instructions.v1') ?? 'null',
-              );
+              const previous = JSON.parse(localStorage.getItem('convoy.instructions.v1') ?? 'null');
               if (!previous) throw new Error();
               setName('AGENTS.md');
               setScope('project');
@@ -148,7 +149,17 @@ function InstructionPublisher({
   );
 }
 
-export function SettingsPage({ view, projectId }: { view: SettingsView; projectId?: string }) {
+export function SettingsPage({
+  view,
+  projectId,
+  workflowReference,
+  onCloseReference,
+}: {
+  view: SettingsView;
+  projectId?: string;
+  workflowReference?: WorkflowReference;
+  onCloseReference?: () => void;
+}) {
   const { state, error } = useRuntime();
   const [message, setMessage] = useState('');
   const [working, setWorking] = useState(false);
@@ -172,7 +183,18 @@ export function SettingsPage({ view, projectId }: { view: SettingsView; projectI
       {view === 'Runners' && state && <EnvironmentSettings state={state} />}{' '}
       {view === 'Providers' && state && <ProviderSettings state={state} />}{' '}
       {view === 'Integrations' && state && <IntegrationSettings state={state} />}{' '}
-      {view === 'Workflows' && state && <WorkflowEditor state={state} />}
+      {view === 'Workflows' &&
+        state &&
+        !error &&
+        (workflowReference ? (
+          <WorkflowReferenceView
+            state={state}
+            reference={workflowReference}
+            onBack={() => onCloseReference?.()}
+          />
+        ) : (
+          <WorkflowEditor state={state} />
+        ))}
       {view === 'Skills & instructions' && state && (
         <CapabilityLibrary state={state} projectId={projectId}>
           <p className="muted">

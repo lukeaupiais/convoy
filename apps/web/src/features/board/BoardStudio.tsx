@@ -1,4 +1,5 @@
 import { Select } from '../../shared/ui/Select';
+import { BoardAutomationInspector } from '../workflows/index';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -13,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { command } from '../../shared/api/runtime';
-import type { Board, BoardColumn as Column, RuntimeState, Ticket } from '../../shared/api/runtime';
+import type { Board, BoardColumn as Column, RuntimeState, Ticket, WorkflowReference } from '../../shared/api/runtime';
 import './studio.css';
 import './board-overrides.css';
 import './board-theme.css';
@@ -27,6 +28,8 @@ type Props = {
   onSelectTicket: (id: number) => void;
   onNewTicket: (boardId: string, columnId: string) => void;
   onManageIntegrations: () => void;
+  onOpenWorkflow: (reference: WorkflowReference) => void;
+  runtimeError?: string;
 };
 const starter: Board = {
   id: 'new-board',
@@ -80,6 +83,8 @@ export function BoardStudio({
   onSelectTicket,
   onNewTicket,
   onManageIntegrations,
+  onOpenWorkflow,
+  runtimeError,
 }: Props) {
   const boards = boardData(state).filter((value) => value.projectIds.includes(projectId));
   const templates = templateData(state);
@@ -313,6 +318,14 @@ export function BoardStudio({
         )}
       <div className="board-studio-header">
         <div className="board-studio-actions">
+          <BoardAutomationInspector
+            key={board.id}
+            board={board}
+            view={state.boardAutomations?.[board.id]}
+            projects={state.projects}
+            error={runtimeError}
+            onOpen={onOpenWorkflow}
+          />
           <div className="view-toggle">
             <button
               aria-label="Board view"
@@ -853,6 +866,15 @@ export function BoardStudio({
                       <header>
                         <span className="column-swatch" style={{ background: column.color }} />
                         <h2>{column.name}</h2>
+                        <BoardAutomationInspector
+                          key={`${board.id}:${column.id}`}
+                          board={board}
+                          columnId={column.id}
+                          view={state.boardAutomations?.[board.id]}
+                          projects={state.projects}
+                          error={runtimeError}
+                          onOpen={onOpenWorkflow}
+                        />
                         <span>
                           {cards.length}
                           {column.wipLimit ? ` / ${column.wipLimit}` : ''}

@@ -3,12 +3,9 @@ import { createCatalog } from './catalog.mjs';
 const commands = [
   'saveProject',
   'createTicket',
-  'createDevelopmentTicket',
   'createRelatedTicket',
   'linkTickets',
   'unlinkTickets',
-  'linkDevelopmentTicket',
-  'unlinkDevelopmentTicket',
   'saveTicketConnection',
   'deleteTicketConnection',
   'probeTicketConnection',
@@ -59,10 +56,6 @@ export function createWork({ afterCommand = async (_command, result) => result, 
       return {
         projects: value.projects.filter((project) => projectIds.has(project.id)),
         tickets: value.tickets.filter((ticket) => projectIds.has(ticket.projectId)),
-        ticketDevelopmentLinks: value.ticketDevelopmentLinks.filter((link) =>
-          value.tickets.some((ticket) => ticket.id === link.supportTicketId && projectIds.has(ticket.projectId)) &&
-          value.tickets.some((ticket) => ticket.id === link.developmentTicketId && projectIds.has(ticket.projectId)),
-        ),
         ticketRelations: value.ticketRelations.filter((link) =>
           value.tickets.some((ticket) => ticket.id === link.sourceTicketId && projectIds.has(ticket.projectId)) &&
           value.tickets.some((ticket) => ticket.id === link.targetTicketId && projectIds.has(ticket.projectId))),

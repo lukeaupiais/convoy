@@ -312,6 +312,13 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
     validateProjectedWip(state.tickets, [...projected.values()]);
   }
   return {
+    columnTransitions(before, after) {
+      return state.boards.filter(b => b.grouping?.mode === 'field' && isVisible(b, after)).flatMap(b => {
+        const fromColumnId = before && isVisible(b, before) ? computedPlacement(b,before).columnId : undefined;
+        const toColumnId = computedPlacement(b,after).columnId;
+        return fromColumnId !== toColumnId ? [{ boardId:b.id, fromColumnId, toColumnId }] : [];
+      });
+    },
     board, template, visibleTickets, computedPlacement, validateTicketUpdate, validateNewTicket, validateTicketBatch,
     assertTicketVisible(boardId, value) {
       if (!isVisible(board(boardId), value)) throw new Error('Ticket is excluded by this board’s membership filters.');

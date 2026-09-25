@@ -11,7 +11,7 @@ export function createWorkflowReferences(state) {
     ...(state.workflows ?? []),
     ...Object.values(state.workflowDrafts ?? {}).map(value => value.workflow),
     ...Object.values(state.sessions ?? {}).map(value => value.workflow),
-    ...(state.workflowStartRules ?? []),
+    ...(state.automations ?? []),
   ];
   return {
     board: boardId => definitions().some(value => containsReference(value, boardId)),

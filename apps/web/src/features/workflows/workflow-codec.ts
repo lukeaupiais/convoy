@@ -3,7 +3,7 @@ import { newId } from '../../shared/lib/browser';
 
 export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait';
 export type SessionMode = 'continue' | 'new' | 'reuse';
-export type ActionOperation = 'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'create_development_ticket' | 'update_ticket' | 'move_ticket';
+export type ActionOperation = 'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'set_external_status' | 'update_ticket' | 'move_ticket';
 export type ConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type ConditionOperator = 'equals' | 'notEquals' | 'exists';
 export type ConditionValueType = 'text' | 'number' | 'boolean' | 'null';
@@ -32,7 +32,7 @@ export type GraphNode = {
   operation?: ActionOperation;
   input?: ActionInput;
   condition?: Condition;
-  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource: 'active_ticket' | 'related_ticket' | 'linked_development'; relationKind?: string; status?: string };
+  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource: 'active_ticket' | 'related_ticket'; relationKind?: string; status?: string };
   session?: { mode: SessionMode; name?: string; target?: string };
   permissions?: string;
   maxRounds?: number;
@@ -41,12 +41,6 @@ export type GraphNode = {
   outcomes?: string[];
 };
 export type GraphEdge = { id: string; from: string; to: string; outcome: string };
-export type Trigger = {
-  event: 'ticket_created' | 'ticket_updated' | 'ticket_moved' | 'board_placement_changed';
-  boardId?: string;
-  columnId?: string;
-  projectId?: string;
-};
 export type BoardSummary = { id: string; name: string; columns?: { id: string; name: string }[] };
 export type GraphWorkflow = {
   id: string;
@@ -58,7 +52,6 @@ export type GraphWorkflow = {
   edges: GraphEdge[];
   entryNode?: string;
   maxRevisions: number;
-  triggers?: Trigger[];
 };
 
 export const kindLabels: Record<NodeKind, string> = {
@@ -282,12 +275,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     value.artifact && typeof value.artifact === 'object'
       ? (value.artifact as Record<string, unknown>)
       : undefined;
-  const rawOperation = String(value.operation ?? value.action ?? 'inspect_changes');
-  const operation = ['inspect_changes', 'create_ticket', 'create_related_ticket', 'create_development_ticket', 'update_ticket', 'move_ticket'].includes(
-    rawOperation,
-  )
-    ? (rawOperation as ActionOperation)
-    : 'inspect_changes';
+  const operation = String(value.operation ?? 'inspect_changes') as ActionOperation;
   const outcomes = Array.isArray(value.outcomes) ? value.outcomes.map(String) : undefined;
   const conditionOutcomes =
     rawCondition?.outcomes && typeof rawCondition.outcomes === 'object'
@@ -400,7 +388,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
       event: ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(String(rawWait?.event))
         ? rawWait?.event as 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'
         : 'ticket_message_received',
-      ticketSource: rawWait?.ticketSource === 'linked_development' ? 'linked_development' : rawWait?.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket',
+      ticketSource: rawWait?.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket',
       ...(rawWait?.relationKind ? { relationKind: String(rawWait.relationKind) } : {}),
       ...(rawWait?.status ? { status: String(rawWait.status) } : {}),
     } : undefined,
@@ -493,7 +481,6 @@ export function fromWorkflow(
     edges,
     entryNode: String(workflow.entryNode ?? nodes[0]?.id ?? ''),
     maxRevisions: Number.isInteger(workflow.maxRevisions) ? Number(workflow.maxRevisions) : 3,
-    triggers: Array.isArray(workflow.triggers) ? structuredClone(workflow.triggers) : [],
   };
   graph.steps = nodes.map(backendNode);
   return graph;
@@ -511,7 +498,6 @@ export function toWorkflow(graph: GraphWorkflow): WorkflowDefinition {
     nodes,
     edges: graph.edges,
     steps: nodes,
-    triggers: graph.triggers ?? [],
   };
 }
 
@@ -635,7 +621,7 @@ export function actionInputDefaults(operation: ActionOperation): ActionInput {
   if (operation === 'create_related_ticket') return { title: '', description: '', kind: 'related' };
   if (operation === 'update_ticket') return { ticketSource: 'active_ticket', patch: {} };
   if (operation === 'move_ticket')
-    return { ticketSource: 'active_ticket', boardId: '', columnId: '' };
+    return { ticketSource: 'active_ticket', boardId: '', placement: { columnId: '' } };
   return {};
 }
 export function displayValue(value: unknown): string {

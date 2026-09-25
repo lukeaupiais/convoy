@@ -51,19 +51,8 @@ export function SessionControls({
   const pendingEffect = state.workflowEffects?.find(
     (effect) => effect.effectKey === effectKey && ['pending', 'uncertain'].includes(effect.status),
   );
-  const triggerFailures = [
-    ...new Map(
-      (state.workflowTriggerFailures ?? [])
-        .filter((failure) => String(failure.ticketId) === String(s.activeTicketId ?? s.id))
-        .filter((failure) => {
-          const current = state.workflowTriggers?.find(
-            (trigger) => trigger.triggerKey === failure.triggerKey,
-          );
-          return !current || current.status === 'failed';
-        })
-        .map((failure) => [failure.triggerKey, failure]),
-    ).values(),
-  ];
+  const triggerFailures = (state.automationDecisions ?? []).filter(decision =>
+    String(decision.ticketId) === String(s.activeTicketId ?? s.id) && ['failed', 'blocked_active'].includes(decision.status));
   const [recoveryTicketId, setRecoveryTicketId] = useState('');
   async function reconcileEffect(resolution: 'applied' | 'not_applied') {
     if (
@@ -210,23 +199,23 @@ export function SessionControls({
           )}
           {triggerFailures.map((failure) => (
             <div className="approval-card" key={failure.triggerKey}>
-              <strong>Failed workflow trigger · pinned v{failure.workflowVersion}</strong>
-              <p>{failure.message ?? 'The configured trigger could not start.'}</p>
+              <strong>{failure.status === 'blocked_active' ? 'Held automation' : 'Failed automation'} · v{failure.workflowVersion}</strong>
+              <p>{failure.message ?? (failure.status === 'blocked_active' ? 'Another run was active.' : 'Could not start.')}</p>
               <small>{failure.triggerKey}</small>
               <button
                 className="secondary"
                 disabled={!owned || working || busy}
                 onClick={() => {
                   if (
-                    window.confirm('Retry this failed trigger using its pinned workflow version?')
+                    window.confirm('Retry this automation using its pinned workflow version?')
                   )
-                    void act('retryWorkflowTrigger', {
+                    void act('retryAutomationDecision', {
                       taskId: failure.ticketId,
                       triggerKey: failure.triggerKey,
                     });
                 }}
               >
-                Retry pinned trigger
+                Retry
               </button>
             </div>
           ))}

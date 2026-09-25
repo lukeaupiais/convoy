@@ -41,7 +41,7 @@ import {
 } from './workflow-codec';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { WorkflowStages } from './WorkflowStages';
-import { WorkflowStartRules } from './WorkflowStartRules';
+import { Automations } from './Automations';
 import './workflow.css';
 import './workflow-theme.css';
 
@@ -718,7 +718,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
           {message}
         </p>
       )}
-      <WorkflowStartRules state={state} />
+      <Automations state={state} />
     </section>
   );
 }
@@ -1015,7 +1015,6 @@ function NodeInspector({
             <select value={node.waitFor?.ticketSource ?? 'active_ticket'} onChange={(event) => onPatch(node.id, { waitFor: { event: node.waitFor?.event ?? 'ticket_message_received', ticketSource: event.target.value as NonNullable<GraphNode['waitFor']>['ticketSource'], status: node.waitFor?.status } })}>
               <option value="active_ticket">Active ticket</option>
               <option value="related_ticket">Related ticket</option>
-              {node.waitFor?.ticketSource === 'linked_development' && <option value="linked_development">Linked development ticket (legacy)</option>}
             </select>
           </label>
           {node.waitFor?.ticketSource === 'related_ticket' && <label>Relation kind (optional)
@@ -1127,12 +1126,13 @@ function ActionFields({
           value={operation}
           onChange={(event) => setOperation(event.target.value as ActionOperation)}
         >
+          {!['inspect_changes','create_ticket','create_related_ticket','update_ticket','move_ticket','set_external_status'].includes(operation) && <option value={operation}>Unsupported: {operation}</option>}
           <option value="inspect_changes">Inspect changes</option>
           <option value="create_ticket">Create ticket</option>
           <option value="create_related_ticket">Create related ticket</option>
-          {operation === 'create_development_ticket' && <option value="create_development_ticket">Create linked development ticket (legacy)</option>}
           <option value="update_ticket">Update ticket</option>
           <option value="move_ticket">Move ticket</option>
+          <option value="set_external_status">Set external status</option>
         </select>
       </label>
       {operation === 'create_ticket' && (
@@ -1144,12 +1144,6 @@ function ActionFields({
           {field('label', 'Label')}
           {field('agent', 'Agent', 'Unassigned')}
           {field('priority', 'Priority', 'Medium')}
-        </>
-      )}
-      {operation === 'create_development_ticket' && (
-        <>
-          {field('title', 'Title (defaults to support ticket)')}
-          {field('description', 'Description (defaults to support report)')}
         </>
       )}
       {operation === 'create_related_ticket' && (
@@ -1166,6 +1160,7 @@ function ActionFields({
           {field('status', 'Status (optional)')}
         </>
       )}
+      {operation === 'set_external_status' && <>{field('connectionId', 'Connection')}{field('status', 'Source status')}{field('evidenceReply', 'Reply evidence')}</>}
       {operation === 'update_ticket' && (
         <>
           <label>
@@ -1214,8 +1209,8 @@ function ActionFields({
           <label>
             Column
             <select
-              value={displayValue(input.columnId)}
-              onChange={(event) => onPatchInput(node.id, 'columnId', event.target.value)}
+              value={displayValue((input.placement as { columnId?: string } | undefined)?.columnId)}
+              onChange={(event) => onPatch(node.id, { input: { ...input, placement: { columnId: event.target.value } } })}
             >
               <option value="">Choose column</option>
               {(board?.columns ?? []).map((column) => (

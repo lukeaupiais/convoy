@@ -1,3 +1,4 @@
+import type { AutomationCapabilities } from './model/automations';
 import type { CapabilityState } from './model/capabilities';
 import type {
   Environment,
@@ -34,7 +35,6 @@ import type {
   Project,
   Ticket,
   TicketConnection,
-  TicketDevelopmentLink,
   TicketRelation,
   TicketImportBinding,
   TicketImportMembership,
@@ -44,10 +44,11 @@ import type {
 } from './model/work';
 import type {
   WorkflowDefinition,
-  WorkflowStartRule,
+  BoardAutomationView,
+  AutomationRule,
   WorkflowEffect,
-  WorkflowTrigger,
-  WorkflowTriggerFailure,
+  AutomationDecision,
+  AutomationDecisionFailure,
 } from './model/workflows';
 export type ModelCheck = { available: boolean; checkedAt: string; message?: string };
 export type RuntimeSnapshot = {
@@ -70,7 +71,6 @@ export type RuntimeSnapshot = {
   conversations: Conversation[];
   projects: Project[];
   tickets: Ticket[];
-  ticketDevelopmentLinks?: TicketDevelopmentLink[];
   ticketRelations?: TicketRelation[];
   ticketConnections?: TicketConnection[];
   ticketImportBindings?: TicketImportBinding[];
@@ -90,7 +90,9 @@ export type RuntimeSnapshot = {
   runnerPools: RunnerPool[];
   scheduler: { maxConcurrent: number };
   workflowDrafts?: Record<string, { workflow: WorkflowDefinition; revision: number }>;
-  workflowStartRules?: WorkflowStartRule[];
+  automationCapabilities?: AutomationCapabilities;
+  automations?: AutomationRule[];
+  boardAutomations?: Record<string, BoardAutomationView>;
   defaultWorkflowIds?: { organizations: Record<string, string>; projects: Record<string, string> };
   defaultWorkflowId?: string;
   modelChecks: Record<string, ModelCheck>;
@@ -99,8 +101,8 @@ export type RuntimeSnapshot = {
   runners: Runner[];
   workflows: WorkflowDefinition[];
   workflowEffects?: WorkflowEffect[];
-  workflowTriggerFailures?: WorkflowTriggerFailure[];
-  workflowTriggers?: WorkflowTrigger[];
+  automationFailures?: AutomationDecisionFailure[];
+  automationDecisions?: AutomationDecision[];
   instructions: Instruction[];
   auth: {
     source: string;

@@ -214,12 +214,6 @@ export type Ticket = {
   workflow?: { id: string; name: string; version: number } | null;
   executionStatus?: string;
 };
-export type TicketDevelopmentLink = {
-  id: string;
-  supportTicketId: number;
-  developmentTicketId: number;
-  createdAt: string;
-};
 /** Direction records provenance; kind is an opaque project/workflow-defined value. */
 export type TicketRelation = {
   id: string;

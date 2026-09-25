@@ -1,3 +1,6 @@
+import { workAutomationCapabilities, resolveBoardEffect } from '../modules/work/index.mjs';
+import { boardAutomationRelationships } from '../modules/workflows/index.mjs';
+
 const adapterInventory = (provider) => [
   {
     id: 'convoy',
@@ -86,8 +89,19 @@ export function createSnapshotQuery({
       },
     );
 
+    const automationDecisions = Object.entries(state.automationDecisionLedger)
+      .filter(([, trigger]) => moduleState.tickets?.some(ticket => ticket.id === trigger.ticketId))
+      .map(([triggerKey, trigger]) => ({ triggerKey, ...trigger }));
+    const boardAutomations = boardAutomationRelationships({
+      boards: moduleState.boards ?? [], projects: moduleState.projects ?? [],
+      workflows: moduleState.workflows ?? [], rules: moduleState.automations ?? [],
+      decisions: automationDecisions,
+      eventLabels: Object.fromEntries(workAutomationCapabilities.events.map(event => [event.id, event.label])),
+      resolveEffect: input => resolveBoardEffect({ ...input, connections: moduleState.ticketConnections ?? [], bindings: moduleState.ticketImportBindings ?? [], tickets: moduleState.tickets ?? [] }),
+    });
     return structuredClone({
       ...moduleState,
+      boardAutomations,
       approvalRules: state.approvalRules.filter(
         (rule) => !scope || scope.projectIds.includes(rule.projectId),
       ),
@@ -101,18 +115,14 @@ export function createSnapshotQuery({
           reconciledAt: effect.reconciledAt,
           message: effect.message,
         })),
-      workflowTriggerFailures: state.workflowTriggerFailures
+      automationFailures: state.automationFailures
         .filter((failure) => {
           const ticket = state.tickets.find((candidate) => candidate.id === failure.ticketId);
           return !scope || scope.projectIds.includes(ticket?.projectId);
         })
         .slice(-100),
-      workflowTriggers: Object.entries(state.workflowTriggerLedger)
-        .filter(([, trigger]) => {
-          const ticket = state.tickets.find((candidate) => candidate.id === trigger.ticketId);
-          return !scope || scope.projectIds.includes(ticket?.projectId);
-        })
-        .map(([triggerKey, trigger]) => ({ triggerKey, ...trigger })),
+      automationCapabilities: { ...workAutomationCapabilities, ruleActions: [{ id: 'start_workflow', label: 'Start workflow' }] },
+      automationDecisions,
       sessions: publicSessions,
       auth: legacyProviderVisible
         ? await auth.status()

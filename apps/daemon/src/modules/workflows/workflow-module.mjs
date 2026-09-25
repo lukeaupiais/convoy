@@ -1,8 +1,8 @@
 import { createWorkflowRegistry } from './workflow-registry.mjs';
 
-const commands = ['saveWorkflow', 'saveWorkflowDraft', 'saveWorkflowStartRule'];
+const commands = ['saveWorkflow', 'saveWorkflowDraft', 'saveAutomation'];
 const sessionCommands = [
-  'retryWorkflowTrigger',
+  'retryAutomationDecision',
   'reconcileWorkflowEffect',
   'startWorkflow',
   'pauseWorkflow',
@@ -66,7 +66,7 @@ export function createWorkflows({
   engine,
   effects,
   requestStop,
-  startRules,
+  automations,
 }) {
   migrateWorkflowState(state, { defaultWorkflow, normalize });
   const registry = createWorkflowRegistry({ state, save, normalize, validateBindings });
@@ -89,7 +89,7 @@ export function createWorkflows({
             ([, draft]) => visible(draft.workflow),
           ),
         ),
-        workflowStartRules: startRules.snapshot(scope),
+        automations: automations.snapshot(scope),
         defaultWorkflowIds: {
           organizations: organizationId && state.defaultWorkflowIds.organizations[organizationId]
             ? { [organizationId]: state.defaultWorkflowIds.organizations[organizationId] } : {},
@@ -133,14 +133,14 @@ export function createWorkflows({
     },
     command(command, { validateClient, principal }) {
       validateClient(command.client);
-      if (command.action === 'saveWorkflowStartRule')
-        return startRules.save(command, principal);
+      if (command.action === 'saveAutomation')
+        return automations.save(command, principal);
       return command.action === 'saveWorkflow'
         ? registry.publish(command)
         : registry.saveDraft(command);
     },
     async sessionCommand(session, command) {
-      if (command.action === 'retryWorkflowTrigger') return effects.retryTrigger(session, command);
+      if (command.action === 'retryAutomationDecision') return effects.retryTrigger(session, command);
       if (command.action === 'reconcileWorkflowEffect') return effects.reconcile(session, command);
       if (command.action === 'startWorkflow') return engine.start(session);
       if (command.action === 'pauseWorkflow' || command.action === 'cancelWorkflow') {

@@ -12,6 +12,7 @@ import { newId } from '../lib/browser';
 export type * from '../../../../../packages/contracts/src';
 
 export const client = newId();
+let contextGeneration = 0;
 
 export async function api<T = unknown>(path: string, input?: object): Promise<T> {
   const response = await fetch(
@@ -29,15 +30,20 @@ export async function api<T = unknown>(path: string, input?: object): Promise<T>
   return value as T;
 }
 
-export function command<Action extends RuntimeAction>(
+export async function command<Action extends RuntimeAction>(
   action: Action,
   input: RuntimeCommandInputMap[Action],
 ) {
-  return api<CommandEnvelope<RuntimeCommandResultMap[Action]>>('/api/runtime', {
+  const result = await api<CommandEnvelope<RuntimeCommandResultMap[Action]>>('/api/runtime', {
     action,
     client,
     ...input,
   });
+  if (action === 'selectActiveContext') {
+    contextGeneration++;
+    window.dispatchEvent(new Event('convoy-context-changed'));
+  }
+  return result;
 }
 
 export function useRuntime(taskId?: number) {
@@ -48,24 +54,31 @@ export function useRuntime(taskId?: number) {
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      const generation = contextGeneration;
       try {
         const value = await api<RuntimeState>(`/api/runtime${taskId ? `/${taskId}` : ''}`);
-        if (live) {
+        if (live && generation === contextGeneration) {
           setState(value);
           setError('');
         }
       } catch {
-        if (live)
+        if (live && generation === contextGeneration)
           setError(
             'Daemon unavailable. Run npm run server. Existing work may still be running; reconnect before retrying.',
           );
       }
       if (live) timer = setTimeout(poll, 1000);
     };
+    const contextChanged = () => {
+      setState(null);
+      setError('');
+    };
+    window.addEventListener('convoy-context-changed', contextChanged);
     void poll();
     return () => {
       live = false;
       clearTimeout(timer);
+      window.removeEventListener('convoy-context-changed', contextChanged);
     };
   }, [taskId]);
 

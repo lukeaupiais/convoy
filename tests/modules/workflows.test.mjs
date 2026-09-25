@@ -2,26 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorkflowEngine, normalizeWorkflow } from '../../apps/daemon/src/modules/workflows/workflows.mjs';
 import { defaultWorkflowDefinition } from '../../apps/daemon/src/modules/workflows/default-workflow.mjs';
-import { createWorkflowStartRules, migrateWorkflowStartRules } from '../../apps/daemon/src/modules/workflows/index.mjs';
+import { createAutomations, initializeAutomations } from '../../apps/daemon/src/modules/workflows/index.mjs';
 
-test('legacy triggers migrate once to project rules pinned to the latest version', () => {
-  const state = {
-    projects: [{ id: 'one', organizationId: 'personal' }, { id: 'two', organizationId: 'other' }],
-    boards: [{ id: 'board', projectIds: ['one'], columns: [{ id: 'review' }] }],
-    workflows: [
-      { id: 'flow', organizationId: 'personal', version: 1, name: 'Old', triggers: [{ event: 'ticket_moved', boardId: 'board', columnId: 'review' }] },
-      { id: 'flow', organizationId: 'personal', version: 2, name: 'New', triggers: [{ event: 'ticket_moved', boardId: 'board', columnId: 'review' }] },
-    ],
-  };
-  migrateWorkflowStartRules(state);
-  migrateWorkflowStartRules(state);
-  assert.equal(state.workflowStartRules.length, 1);
-  assert.equal(state.workflowStartRules[0].workflowVersion, 2);
-  assert.equal(state.workflowStartRules[0].projectId, 'one');
-  const rules = createWorkflowStartRules({ state, save: async () => {} });
-  const rule = state.workflowStartRules[0];
-  assert.equal(rules.matches(rule, { projectId: 'one', event: 'ticket_moved', boardId: 'board', fromColumnId: 'todo', toColumnId: 'review' }), true);
-  assert.equal(rules.matches(rule, { projectId: 'one', event: 'ticket_moved', boardId: 'board', fromColumnId: 'review', toColumnId: 'review' }), false);
+test('legacy automation state requires explicit offline migration', () => {
+  assert.throws(() => initializeAutomations({ workflowStartRules: [] }), /offline migration/);
+  const state = {};
+  initializeAutomations(state);
+  assert.equal(state.automationSchemaVersion, 1);
+  assert.deepEqual(state.automations, []);
 });
 
 test('the delivery template models plan, implementation, verification, review, and bounded repair', () => {

@@ -112,16 +112,9 @@ export const runtimeCommandContracts = {
     ['requestId', 'projectId', 'title'],
     ['description', 'status', 'label', 'agent', 'priority', 'customFields', 'boardId', 'destination'],
   ),
-  createDevelopmentTicket: contract(
-    ['requestId', 'supportTicketId', 'supportRevision', 'projectId', 'title'], ['description'],
-  ),
   createRelatedTicket: contract(['requestId', 'sourceTicketId', 'sourceRevision', 'title'], ['description', 'boardId', 'status', 'kind']),
   linkTickets: contract(['sourceTicketId', 'sourceRevision', 'targetTicketId', 'targetRevision'], ['kind']),
   unlinkTickets: contract(['relationId', 'sourceRevision']),
-  linkDevelopmentTicket: contract(
-    ['supportTicketId', 'supportRevision', 'developmentTicketId', 'developmentRevision'],
-  ),
-  unlinkDevelopmentTicket: contract(['supportTicketId', 'supportRevision', 'developmentTicketId']),
   saveTicketConnection: contract(
     ['organizationId', 'name', 'provider'],
     ['id', 'revision', 'enabled', 'teamId', 'credentialEnv', 'manifest', 'capabilities'],
@@ -186,7 +179,7 @@ export const runtimeCommandContracts = {
   requestChanges: session(['instance', 'feedback']),
   requestExecution: session(['ticketId', 'mode'], ['brief', 'requestId']),
   resumeSession: session(['requestId'], ['acknowledge']),
-  retryWorkflowTrigger: session(['triggerKey']),
+  retryAutomationDecision: session(['triggerKey']),
   reviseSubmission: session(['instance', 'feedback']),
   runTicket: contract(
     ['requestId', 'ticketId', 'revision', 'workflowId', 'workflowVersion', 'model', 'mode'],
@@ -224,7 +217,7 @@ export const runtimeCommandContracts = {
     ['organizationId', 'teamId', 'projectId', 'baseVersion', 'makeDefault'],
   ),
   saveWorkflowDraft: contract(['workflow', 'revision'], ['organizationId', 'teamId', 'projectId']),
-  saveWorkflowStartRule: contract(['organizationId', 'rule', 'revision']),
+  saveAutomation: contract(['organizationId', 'rule', 'revision']),
   sendMessage: session(['requestId', 'text', 'model'], ['mode', 'attachmentIds']),
   setBoardPlacement: contract(['boardId', 'ticketId', 'revision', 'placement']),
   setCapabilityProfile: session(['profile']),
@@ -434,8 +427,8 @@ export function validateRuntimeCommand(input) {
     !matches(input.workflow, 'object')
   )
     throw new Error(`Invalid field for ${input.action}: workflow.`);
-  if (input.action === 'saveWorkflowStartRule' && !matches(input.rule, 'object'))
-    throw new Error('Invalid field for saveWorkflowStartRule: rule.');
+  if (input.action === 'saveAutomation' && !matches(input.rule, 'object'))
+    throw new Error('Invalid field for saveAutomation: rule.');
   if (
     input.action === 'setPlacement' &&
     input.taskId === undefined &&
