@@ -104,6 +104,7 @@ export type WorkflowStep = {
 };
 export type WorkflowEdge = { id: string; from: string; to: string; outcome: string };
 export type WorkflowDefinition = {
+  capabilityProfile?: import('./capabilities').ProfileRef;
   id: string;
   organizationId?: string;
   teamId?: string;

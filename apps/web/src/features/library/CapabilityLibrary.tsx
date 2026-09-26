@@ -45,12 +45,14 @@ export function ProfilePicker({
   onChange,
   disabled = false,
   label = 'Capability profile',
+  emptyLabel = 'Legacy defaults',
 }: {
   state: RuntimeState;
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   label?: string;
+  emptyLabel?: string;
 }) {
   return (
     <Select
@@ -59,7 +61,7 @@ export function ProfilePicker({
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
     >
-      <option value="">Legacy defaults</option>
+      <option value="">{emptyLabel}</option>
       {state.capabilities?.profiles.map((p) => (
         <option key={key(p)} value={key(p)}>
           {p.name} · v{p.version}

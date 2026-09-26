@@ -154,3 +154,22 @@ test('graph definitions require explicit outcomes and cap revision loops', async
     { id: 'one', kind: 'human', name: 'One', prompt: 'Approve' },
   ], edges: [{ from: 'one', to: 'one', outcome: 'success' }] }), /unbounded loop/i);
 });
+
+test('a branching agent must choose a configured outcome before its submission is accepted', async () => {
+  const s = { id: 'routing', messages: [], checks: [], events: [], workflow: normalizeWorkflow({
+    id: 'editorial-routing', name: 'Editorial routing', nodes: [
+      { id: 'classify', name: 'Classify', kind: 'agent', prompt: 'Choose a review route.' },
+      { id: 'review', name: 'Review', kind: 'human', prompt: 'Review the draft.' },
+    ], edges: [{ from: 'classify', to: 'review', outcome: 'clarify' }],
+  }) };
+  const engine = createWorkflowEngine({ state: { sessions: { routing: s } }, save: async () => {}, event: (session, type, data) => session.events.push({ type, ...data }), launch: () => true });
+  await engine.start(s); await engine.pump();
+  for (const outcome of [undefined, 'success', 'wrong']) {
+    await assert.rejects(engine.submit(s, s.flow.instance, { summary: 'Needs clarification', artifacts: [], ...(outcome ? { outcome } : {}) }), /No workflow edge/);
+    assert.equal(s.flow.status, 'running');
+    assert.equal(s.flow.lastSubmission, undefined);
+    assert.equal(s.flow.history.length, 0);
+  }
+  await engine.submit(s, s.flow.instance, { summary: 'Needs clarification', artifacts: [], outcome: 'clarify' });
+  assert.equal(s.flow.status, 'waiting_gate');
+});

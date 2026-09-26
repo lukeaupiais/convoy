@@ -291,3 +291,21 @@ test('ticket run: local runner provisions, evidence is inspectable, worktree can
     /fixed/,
   );
 });
+
+test('ticket run pins the workflow profile and rejects an incomplete override before assignment', async (t) => {
+  const f = await fixture(t);
+  await f.act('publishSkill', { trusted: true, files: { 'SKILL.md': '---\nname: editorial-review\ndescription: Review an article.\n---\nCheck source attribution.' } });
+  const profile = await f.act('publishProfile', { id: 'editorial', name: 'Editorial', tools: [], skills: [{ name: 'editorial-review', version: 1 }] });
+  const workflow = (await f.snapshot()).workflows.find(w => w.id === 'ticket-loop');
+  await f.act('saveWorkflow', { baseVersion: 1, workflow: { ...workflow, capabilityProfile: { id: profile.id, version: profile.version }, nodes: workflow.nodes.map(n => n.kind === 'agent' ? { ...n, skills: ['editorial-review'] } : n) } });
+  await assert.rejects(f.act('runTicket', { ...f.launch, workflowVersion: 2, profile: null }), /missing skill/);
+  assert.equal((await f.snapshot()).sessions.some(s => s.activeTicketId === f.ticket.id), false);
+  const run = await f.act('runTicket', { ...f.launch, workflowVersion: 2 });
+  const session = await until(async () => (await f.snapshot()).sessions.find(s => s.id === run.sessionId && s.flow?.status === 'waiting_gate'));
+  assert.equal(session.capabilityProfile.hash, profile.hash);
+  assert.equal(session.workflow.capabilityProfile.version, 1);
+  assert(f.prompts.some(p => JSON.stringify(p).includes('editorial-review')));
+  await f.act('publishProfile', { id: 'editorial', name: 'Editorial v2', baseVersion: 1, tools: [], skills: [] });
+  await f.restart();
+  assert.equal((await f.snapshot()).sessions.find(s => s.id === run.sessionId).capabilityProfile.version, 1);
+});

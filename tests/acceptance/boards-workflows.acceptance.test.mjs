@@ -740,3 +740,24 @@ test('acceptance: ticketless graph actions create work and route from structured
     await f.restart();
     assert.equal((await f.snapshot()).tickets.length, 1);
 });
+
+test('acceptance: automatic procurement review pins its workflow profile over the project default', async (t) => {
+    const f = await fixture(t);
+    const base = await f.act('publishProfile', { id: 'general', name: 'General', tools: [], skills: [] });
+    const chosen = await f.act('publishProfile', { id: 'procurement', name: 'Procurement review', tools: ['convoy.read_file'], skills: [] });
+    await f.act('setProjectProfile', { projectId: 'agent-platform', profile: { id: base.id, version: base.version } });
+    const ticket = await f.act('createTicket', { requestId: 'purchase', title: 'Evaluate supplier', projectId: 'agent-platform' });
+    const board = await f.act('saveBoard', { name: 'Purchases', projectIds: ['agent-platform'], columns: [{ id: 'pending', name: 'Pending' }, { id: 'evaluating', name: 'Evaluating' }] });
+    await f.act('saveWorkflow', { workflow: { id: 'supplier-review', name: 'Supplier review', capabilityProfile: { id: chosen.id, version: 1 }, nodes: [{ id: 'gate', kind: 'human', name: 'Approve supplier', prompt: 'Review' }] } });
+    await f.act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+        name: 'Evaluate purchase', projectId: 'agent-platform', enabled: true,
+        when: { event: 'ticket_moved', boardId: board.id, columnId: 'evaluating' }, if: [],
+        then: { action: 'start_workflow', workflowId: 'supplier-review', workflowVersion: 1 }
+    } });
+    await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision, placement: { columnId: 'evaluating' } });
+    const session = (await f.snapshot()).sessions.find(s => s.activeTicketId === ticket.id);
+    assert.equal(session.flow.status, 'waiting_gate');
+    assert.equal(session.capabilityProfile.hash, chosen.hash);
+    await f.restart();
+    assert.equal((await f.snapshot()).sessions.find(s => s.id === session.id).capabilityProfile.hash, chosen.hash);
+});
