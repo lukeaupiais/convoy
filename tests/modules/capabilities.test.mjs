@@ -139,3 +139,24 @@ test('workflow executes an explicitly selected ticket tool only after approval, 
   await until(async()=>(await f.session()).flow?.status==='completed');
   const state=await f.runtime.snapshot();assert.equal(state.tickets.length,1);assert.equal(state.tickets[0].agent,'Unassigned');assert.equal(state.sessions.length,1);assert.equal(state.sessions[0].id,f.c.sessionId);
 });
+
+test('workflow profiles resolve in project scope, validate required skills, and pin immutable revisions', () => {
+  const { c, state } = catalog();
+  const first = publish(c);
+  const workflow = { capabilityProfile: { id: first.id, version: 1 }, nodes: [{ name: 'Editorial review', skills: ['review-work'] }] };
+  const session = { projectId: 'p', capabilityProfile: null };
+  c.validateWorkflow(workflow);
+  c.pin(session, c.resolveForWorkflow(session, workflow));
+  c.command({ action: 'publishProfile', id: 'review', name: 'Changed', baseVersion: 1, tools: [], skills: [] });
+  assert.equal(session.capabilityProfile.version, 1);
+  assert.equal(c.resolveForWorkflow(session, workflow).hash, first.hash);
+  assert.throws(() => c.resolveForWorkflow(session, workflow, { profile: { id: 'review', version: 2 } }), /missing skill review-work/);
+  assert.throws(() => c.resolveForWorkflow(session, workflow, { profile: null }), /missing skill review-work/);
+  assert.throws(() => c.validateWorkflow({ ...workflow, capabilityProfile: { id: 'review', version: 2 } }), /missing skill/);
+  state.projects.push({ id: 'foreign', organizationId: 'other' });
+  assert.throws(() => c.resolveForWorkflow({ projectId: 'foreign' }, workflow), /not found/);
+  assert.throws(() => c.validateWorkflow({ ...workflow, organizationId: 'other' }), /not found/);
+  const preview = c.preview(session, { permissions: 'read', skills: ['review-work'] });
+  assert.equal(preview.skills[0].version, 1);
+  assert.equal(preview.tools.find(tool => tool.name === 'shell').available, false);
+});

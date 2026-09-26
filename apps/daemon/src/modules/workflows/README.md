@@ -40,3 +40,16 @@ merges, deploys, or changes a ticket's authoritative delivery state.
 Its default verification command is a portable runner-level whitespace check.
 Teams should replace it in a published template revision with the project's own
 test command.
+
+A definition can pin `capabilityProfile: { id, version }` from the Library.
+The control plane resolves it at the engine's start boundary for manual,
+automated, and conversation-only runs. Resume does not resolve a newer revision.
+Workflow node `skills` selects from this profile, while node `permissions`
+further limits its tools. Missing declared skills fail publication or launch
+when a profile is selected.
+
+Agent submissions must choose a configured outgoing route. An omitted outcome
+still means `success`, but cannot implicitly terminate a node with custom forward
+routes. Terminal success/approval remains valid for nodes with no outgoing routes
+or only `failed` / `changes_requested` repair routes. Invalid submissions leave
+review evidence and history untouched.

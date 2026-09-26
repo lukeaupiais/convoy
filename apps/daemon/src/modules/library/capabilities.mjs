@@ -294,6 +294,25 @@ export function createCapabilities({ state }) {
       return { ...t, available: !reason, reason };
     });
   }
+  function validateWorkflowSkills(workflow, selected) {
+    for (const node of workflow.nodes ?? []) {
+      for (const name of node.skills ?? []) {
+        if (!selected?.skills.some((value) => value.name === name))
+          throw new Error(`${node.name}: capability profile is missing skill ${name}.`);
+      }
+    }
+  }
+  function resolveForWorkflow(session, workflow, options = {}) {
+    const ref = Object.hasOwn(options, 'profile') ? options.profile
+      : workflow.capabilityProfile ?? session.capabilityProfile ?? state.projectProfiles[session.projectId];
+    const selected = ref ? structuredClone(profile(ref, organizationForSession(session))) : null;
+    // Historical workflows without a selected profile retain their legacy tool set.
+    if (selected || workflow.capabilityProfile) {
+      validateWorkflowSkills(workflow, selected);
+      for (const ref of selected?.skills ?? []) skill(ref, organizationForSession(session));
+    }
+    return selected;
+  }
   return {
     snapshot(scope) {
       const organizationId = scope?.organizationId;
@@ -362,6 +381,12 @@ export function createCapabilities({ state }) {
         (value) => value.name === name && value.executor === 'extension',
       );
       return tool ? structuredClone(tool) : null;
+    },
+    resolveForWorkflow,
+    validateWorkflow(workflow) {
+      if (!workflow.capabilityProfile) return;
+      const selected = profile(workflow.capabilityProfile, workflow.organizationId ?? 'personal');
+      validateWorkflowSkills(workflow, selected);
     },
     resolve(ref) {
       return structuredClone(profile(ref, ref?.organizationId ?? 'personal'));

@@ -100,6 +100,12 @@ export function normalizeWorkflow(input) {
   const isLegacy = !Array.isArray(input.nodes); const sourceNodes = isLegacy ? input.steps : input.nodes;
   if (!Array.isArray(sourceNodes) || !sourceNodes.length || sourceNodes.length > 100) throw new Error('Add between 1 and 100 workflow nodes.');
   const value = { id: input.id || randomUUID(), name: required(input.name, 'Workflow name', 120), schemaVersion: 3, nodes: [], edges: [], entryNode: input.entryNode ?? input.startNode, maxRevisions: input.maxRevisions ?? 3 };
+  if (input.capabilityProfile != null) {
+    const ref = input.capabilityProfile;
+    if (typeof ref.id !== 'string' || !ref.id.trim() || ref.id.length > 120 || !Number.isInteger(ref.version) || ref.version < 1)
+      throw new Error('Invalid workflow capability profile revision.');
+    value.capabilityProfile = { id: ref.id, version: ref.version };
+  }
   if (!safeId(value.id)) throw new Error('Invalid workflow ID.');
   if (!Number.isInteger(value.maxRevisions) || value.maxRevisions < 0 || value.maxRevisions > 20) throw new Error('maxRevisions must be an integer from 0 to 20.');
   const ids = new Set(); const sessions = new Set(['main']);
@@ -165,13 +171,22 @@ export function ensureAgentSessions(s) {
   return s.agentSessions[s.currentAgentSessionId];
 }
 
-export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), captureArtifacts = async (_s, paths) => paths, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null }) {
+export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), captureArtifacts = async (_s, paths) => paths, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {} }) {
   let pumping = false; let pumpAgain = false;
   const nodes = s => s.workflow.nodes ?? s.workflow.steps;
   const current = s => { const list = nodes(s); return list.find(n => n.id === s.flow?.nodeId) ?? list[s.step]; };
   function requireInstance(s, instance) { if (!s.flow || s.flow.instance !== instance) throw new Error('This workflow step has changed. Refresh before acting.'); }
   function active(s) { return s.flow && !['completed', 'cancelled'].includes(s.flow.status); }
   function edgeFor(s, outcome) { const node = current(s); const edges = s.workflow.edges.filter(e => e.from === node.id); return edges.find(e => e.outcome === outcome) ?? edges.find(e => e.outcome === '*') ?? edges.find(e => e.outcome === 'default') ?? null; }
+  function assertOutcome(s, outcome) {
+    if (edgeFor(s, outcome)) return;
+    const node = current(s);
+    const forwardEdges = s.workflow.edges.filter(edge => edge.from === node.id && !['failed', 'changes_requested'].includes(edge.outcome));
+    // A terminal success may still expose a repair/revision loop. Custom
+    // forward routes require an explicit choice; omission must not skip them.
+    if (!forwardEdges.length && ['success', 'approved'].includes(outcome)) return;
+    throw new Error(`No workflow edge handles outcome ${outcome} from ${node.name}. Choose a configured outcome.`);
+  }
   function activate(s, nodeId, outcome = 'success') {
     const list = nodes(s); const index = list.findIndex(n => n.id === nodeId); if (index < 0) throw new Error('Workflow transition references an unknown node.');
     s.step = index; s.flow.nodeId = nodeId; s.flow.instance = randomUUID(); s.flow.validation = null; s.flow.submission = null; s.flow.agentSessionId = null; s.flow.lastOutcome = outcome;
@@ -179,10 +194,11 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     event(s, 'step_activated', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance: s.flow.instance, name: node.name, outcome });
   }
   function transition(s, outcome) {
+    assertOutcome(s, outcome);
     const node = current(s); const edge = edgeFor(s, outcome); const latestEvidence = s.flow.evidenceTrail?.at(-1)?.evidence;
     if (latestEvidence) s.flow.previousEvidence = latestEvidence;
     s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: s.flow.instance, outcome, at: new Date().toISOString(), to: edge?.to ?? null });
-    if (!edge) { if (outcome !== 'success' && outcome !== 'approved') throw new Error(`No workflow edge handles outcome ${outcome} from ${node.name}.`); s.flow.status = 'completed'; s.status = 'accepted'; event(s, 'workflow_completed', { runId: s.flow.id }); return; }
+    if (!edge) { s.flow.status = 'completed'; s.status = 'accepted'; event(s, 'workflow_completed', { runId: s.flow.id }); return; }
     activate(s, edge.to, outcome);
   }
   async function validate(s, outcome = 'success') {
@@ -202,9 +218,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
   }
   async function finish(s, summary, artifacts, outcome = 'success') {
     const instance = s.flow.instance; const status = s.flow.status; const node = current(s); if (node.artifact && !artifacts.includes(node.artifact.path)) throw new Error(`Include ${node.artifact.path} in the submission.`);
-    // Success/approved may intentionally terminate a graph even when the node
-    // only exposes a non-success branch (for example changes_requested).
-    if (!edgeFor(s, outcome) && outcome !== 'success' && outcome !== 'approved') throw new Error(`No workflow edge handles outcome ${outcome} from ${node.name}.`);
+    assertOutcome(s, outcome);
     if (['changes_requested', 'failed'].includes(outcome) && s.flow.revision >= s.workflow.maxRevisions) throw new Error('Workflow revision limit reached.');
     const evidence = await validate(s, outcome); if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed during validation. Submission was not accepted.');
     const capturedArtifacts = await captureArtifacts(s, artifacts);
@@ -247,9 +261,10 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       await save();
       return true;
     },
-    async start(s) {
+    async start(s, options = {}) {
       if (active(s) || busy(s)) throw new Error('A workflow is already active.'); if (!s.workflow) throw new Error('Select and apply a workflow first.');
       s.workflow = { ...normalizeWorkflow(s.workflow), version: s.workflow.version }; if (s.workflow.nodes.some(node => node.artifact || node.kind === 'check' || node.kind === 'action' && node.operation === 'inspect_changes' || node.requiresCheck) && !s.workspace && !canProvision(s)) throw new Error('This workflow requires a worktree. Select a runner or placement pool first.');
+      prepareStart(s, options);
       const main = ensureAgentSessions(s); if (s.flow) { s.pastRuns ??= []; s.pastRuns.push(structuredClone(s.flow)); }
       delete s.boardPhase;
       s.flow = { id: randomUUID(), workflowId: s.workflow.id, workflowVersion: s.workflow.version, model: s.model, status: 'ready', nodeId: null, instance: null, aliases: { main: main.id }, bindings: {}, lastAgent: main.id, agentSessionId: null, revision: 0, history: [], startedAt: new Date().toISOString() };

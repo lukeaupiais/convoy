@@ -43,6 +43,7 @@ export type GraphNode = {
 export type GraphEdge = { id: string; from: string; to: string; outcome: string };
 export type BoardSummary = { id: string; name: string; columns?: { id: string; name: string }[] };
 export type GraphWorkflow = {
+  capabilityProfile?: WorkflowDefinition['capabilityProfile'];
   id: string;
   name: string;
   version?: number;
@@ -490,6 +491,7 @@ export function toWorkflow(graph: GraphWorkflow): WorkflowDefinition {
   const nodes = graph.nodes.map(backendNode);
   return {
     id: graph.id,
+    capabilityProfile: graph.capabilityProfile,
     name: graph.name,
     version: graph.version,
     schemaVersion: 3,

@@ -955,6 +955,7 @@ export async function createRuntime({
   });
   engine = createWorkflowEngine({
     state,
+    prepareStart: (session, options) => capabilities.pin(session, capabilities.resolveForWorkflow(session, session.workflow, options)),
     save: () => store.save(),
     event,
     canProvision: (s) => placement.effective(s).mode !== 'none',
@@ -1369,6 +1370,7 @@ export async function createRuntime({
     }
   }
   function validateWorkflowBindings(workflow) {
+    capabilities.validateWorkflow(workflow);
     for (const node of workflow.nodes ?? []) {
       const input = node.input ?? {};
       if (node.operation === 'create_ticket') catalog.project(input.projectId);

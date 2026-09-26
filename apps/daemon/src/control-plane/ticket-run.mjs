@@ -108,7 +108,7 @@ export function createTicketRun({
     // Persist assignment and idempotency evidence before dispatch, so a retried
     // response can never launch a second session accidentally.
     let session = selected;
-    const selectedProfile = command.profile ? capabilities.resolve(command.profile) : null;
+    const selectedProfile = capabilities.resolveForWorkflow({ ...selected, projectId: ticket.projectId }, workflow, command);
     if (!session) {
       const conversation = await conversations.create({
         requestId: `ticket-run-${digest(requestKey)}`,
@@ -123,8 +123,7 @@ export function createTicketRun({
 
     conversations.bindForWorkflow(session, ticket.id);
     session.executionPrincipal = structuredClone(actor);
-    if (Object.hasOwn(command, 'profile')) capabilities.pin(session, selectedProfile);
-    else capabilities.pinDefault(session);
+    capabilities.pin(session, selectedProfile);
     session.lease = {
       client: command.client,
       label: 'Ticket execution',
@@ -165,7 +164,7 @@ export function createTicketRun({
     });
     await save();
     try {
-      await workflows.start(session);
+      await workflows.start(session, { profile: selectedProfile });
     } catch (error) {
       session.status = 'failed';
       event(session, 'ticket_run_failed', { message: error.message });

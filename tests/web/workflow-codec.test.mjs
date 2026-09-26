@@ -185,3 +185,9 @@ test('inserting a stage splices it into the primary route and preserves alternat
     ],
   );
 });
+
+test('workflow editor preserves an exact capability profile through graph round trips', () => {
+  const profile = { id: 'editorial', version: 3 };
+  const graph = fromWorkflow({ id: 'article', name: 'Article', capabilityProfile: profile, nodes: [{ id: 'review', type: 'approval', name: 'Review' }] });
+  assert.deepEqual(toWorkflow(graph).capabilityProfile, profile);
+});

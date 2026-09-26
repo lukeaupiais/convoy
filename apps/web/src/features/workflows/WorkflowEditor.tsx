@@ -13,6 +13,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { command, type RuntimeState } from '../../shared/api/runtime';
+import { ProfilePicker, profileRef } from '../library';
 import { newId } from '../../shared/lib/browser';
 import {
   actionInputDefaults,
@@ -518,6 +519,15 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
       )}
       {settingsOpen && (
         <div className="workflow-definition-settings">
+          <label>
+            Capability profile
+            <ProfilePicker
+              state={state}
+              value={draft.capabilityProfile ? `${draft.capabilityProfile.id}@${draft.capabilityProfile.version}` : ''}
+              emptyLabel="Session / project default"
+              onChange={(value) => setDraft((current) => ({ ...current, capabilityProfile: profileRef(state, value) ?? undefined }))}
+            />
+          </label>
           <label>
             Name
             <input

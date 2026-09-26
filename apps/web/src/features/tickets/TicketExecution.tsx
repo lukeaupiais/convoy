@@ -53,11 +53,7 @@ export function TicketExecution({
   const [target, setTarget] = useState(session?.id ?? 'new');
   const [environment, setEnvironment] = useState('inherit');
   const [model, setModel] = useState(session?.model ?? state.models[0]?.id ?? '');
-  const defaultProfile =
-    session?.capabilityProfile ?? state.capabilities?.projectProfiles[ticket.projectId];
-  const [profile, setProfile] = useState(
-    defaultProfile ? `${defaultProfile.id}@${defaultProfile.version}` : '',
-  );
+  const [profile, setProfile] = useState('');
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -70,6 +66,25 @@ export function TicketExecution({
     ['running', 'queued', 'waiting_approval', 'waiting_question'].includes(session.status);
   const selectedSession = state.sessions.find((s) => s.id === target);
   const fixed = !!selectedSession?.workspace;
+  const chosenWorkflow = versions.find((w) => `${w.id}@${w.version}` === workflow);
+  const inheritedProfile =
+    chosenWorkflow?.capabilityProfile ??
+    selectedSession?.capabilityProfile ??
+    state.capabilities?.projectProfiles[ticket.projectId];
+  const effectiveRef = profile ? profileRef(state, profile) : inheritedProfile;
+  const effectiveProfile = state.capabilities?.profiles.find(
+    (p) => p.id === effectiveRef?.id && p.version === effectiveRef?.version,
+  );
+  const missingSkills = [
+    ...new Set((chosenWorkflow?.nodes ?? []).flatMap((node) => node.skills ?? [])),
+  ].filter((name) => !effectiveProfile?.skills.some((skill) => skill.name === name));
+  const profileError =
+    effectiveRef && !effectiveProfile
+      ? 'Profile revision is unavailable.'
+      : (effectiveProfile || chosenWorkflow?.capabilityProfile) && missingSkills.length
+        ? `Missing skills: ${missingSkills.join(', ')}`
+        : '';
+
   const eligible = state.sessions.filter(
     (s) =>
       (!s.projectId || s.projectId === ticket.projectId) &&
@@ -132,7 +147,7 @@ export function TicketExecution({
         ticketId: ticket.id,
         revision: ticket.revision,
         requestId: request.current,
-        profile: profileRef(state, profile),
+        ...(profile ? { profile: profileRef(state, profile) } : {}),
         mode: target === 'new' ? 'new' : 'continue',
         sessionId: target === 'new' ? undefined : target,
         workflowId: chosen.id,
@@ -435,6 +450,7 @@ export function TicketExecution({
               <ProfilePicker
                 state={state}
                 value={profile}
+                emptyLabel="Workflow / session / project default"
                 onChange={setProfile}
                 disabled={working || pendingRequest}
               />
@@ -518,6 +534,42 @@ export function TicketExecution({
               </Select>
             </label>
           </div>
+          <details className="execution-evidence">
+            <summary>
+              Capabilities ·{' '}
+              {effectiveProfile
+                ? `${effectiveProfile.name} v${effectiveProfile.version}`
+                : 'Legacy defaults'}
+            </summary>
+            {profileError && <p role="alert">{profileError}</p>}
+            {!!missingSkills.length && !profileError && (
+              <p>Skills unavailable with legacy defaults: {missingSkills.join(', ')}</p>
+            )}
+            {effectiveProfile && (
+              <>
+                <p>
+                  Tools:{' '}
+                  {effectiveProfile.tools
+                    .map(
+                      (ref) =>
+                        state.capabilities?.tools.find((tool) => tool.id === ref.id)?.name ??
+                        ref.id,
+                    )
+                    .join(', ') || 'None'}
+                </p>
+                <p>
+                  Skills:{' '}
+                  {effectiveProfile.skills
+                    .map((skill) => `${skill.name} v${skill.version}`)
+                    .join(', ') || 'None'}
+                </p>
+                <p>
+                  Each stage further limits tools through its permissions. Runner support and
+                  workspace policy apply at execution.
+                </p>
+              </>
+            )}
+          </details>
           <p className="execution-note">
             {target === 'new'
               ? 'Uses the ticket description as context. Prior conversation history and worktrees are not copied.'
@@ -529,7 +581,7 @@ export function TicketExecution({
           )}
           <button
             className="primary"
-            disabled={working || !workflow || !state.auth.connected}
+            disabled={working || !workflow || !!profileError || !state.auth.connected}
             onClick={() => void launch()}
           >
             <Play size={14} />
