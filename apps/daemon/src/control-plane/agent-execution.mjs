@@ -19,6 +19,8 @@ export function createAgentExecution({
   placement,
   pinInstructions,
   promptContext,
+  prepareGuidance,
+  executionPolicy,
   partial,
   digest,
   catalog,
@@ -89,6 +91,16 @@ export function createAgentExecution({
               );
             pinInstructions(s);
           }
+          const guidanceText = await prepareGuidance(s, { signal });
+          const restriction = executionPolicy.workflowRestriction(
+            s,
+            step,
+            capabilities.modelTools(s, step).some((t) => t.name === 'shell'),
+          );
+          if (restriction) {
+            event(s, 'execution_preflight_failed', { message: restriction });
+            throw new Error(restriction);
+          }
           s.modelRunSettings = {
             ...(step?.reasoningEffort ? { reasoningEffort: step.reasoningEffort } : {}),
           };
@@ -103,6 +115,7 @@ export function createAgentExecution({
           }
           const compiled = promptContext.compile({
             knowledgeText,
+            guidanceText,
             session: s,
             step,
             instance,
@@ -114,7 +127,7 @@ export function createAgentExecution({
           const previousHash = s.provenance?.hash;
           s.provenance = {
             hash: compiled.hash,
-            systemPrompt: systemPrompt,
+            systemPrompt: compiled.provenancePrompt ?? systemPrompt,
             contextEpoch: {
               id: compiled.epoch.id,
               baselineHash: compiled.epoch.baselineHash,
@@ -390,6 +403,7 @@ export function createAgentExecution({
                   runnerFor(s),
                   {
                     action: 'diff',
+                    ...(s.executionGrant?.profileId === 'verify' ? {execution: sessionExecution.descriptor(s)} : {}),
                     workspace: s.workspace.path,
                     ignoreArtifact: activeNode?.artifact?.path,
                   },

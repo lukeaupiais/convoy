@@ -1,5 +1,7 @@
 export type ExecutionProfileId =
   | 'plan'
+  | 'inspect'
+  | 'verify'
   | 'ask'
   | 'edit'
   | 'auto'
@@ -15,7 +17,7 @@ export type ExecutionEnvelope = {
     extraRoots: Array<{ path: string; access: 'read-only' | 'read-write' }>;
     protectedPaths: string[];
   };
-  network: { mode: 'none' | 'allowlist' | 'host'; allowedDomains: string[] };
+  network: { mode: 'none' | 'allowlist' | 'host' | 'private'; allowedDomains: string[] };
   credentials: { mode: 'none' | 'brokered' | 'host' };
   process: { commands: boolean; background: boolean; terminal: boolean };
 };
@@ -36,6 +38,7 @@ export type ResolvedExecutionGrant = {
   version: number;
   profileId: ExecutionProfileId;
   profileRevision: number;
+  runtime?: { definition: RuntimeDefinition; required: boolean };
   runnerId?: string;
   environmentId?: string;
   envelope: ExecutionEnvelope;
@@ -129,11 +132,15 @@ export type Runner = {
   capabilities: {
     tools: string[];
     shell: boolean;
+    inspection?: boolean;
+    verification?: boolean;
+    executionDescriptorVersion?: number;
+    cli?: Record<string, boolean>;
     terminal?: boolean;
     accessMode?: 'contained' | 'trusted';
     enforcement?: {
       isolation: Array<'workspace' | 'host'>;
-      network: Array<'none' | 'host'>;
+      network: Array<'none' | 'host' | 'private'>;
       failClosed: boolean;
       platform?: string;
       architecture?: string;
@@ -177,8 +184,7 @@ export type EnvironmentAccessBinding = {
     | { kind: 'team'; teamId: string }
     | { kind: 'project'; projectId: string };
   resource:
-    | { kind: 'environment'; environmentId: string }
-    | { kind: 'runner-pool'; runnerPoolId: string };
+    { kind: 'environment'; environmentId: string } | { kind: 'runner-pool'; runnerPoolId: string };
   role: 'use' | 'administer';
   constraints?: {
     executionProfiles?: ExecutionProfileId[];
@@ -228,4 +234,33 @@ export type ChannelGrant = {
   renewedAt?: string;
   revokedAt?: string;
   revision: number;
+};
+
+export type RuntimeSelection = { id: string; version: number; required: boolean } | null;
+export type RuntimeDefinitionInput = {
+  id: string;
+  name: string;
+  image: string;
+  sourceCommit: string;
+  fixtureDigest: string;
+  startup: string[];
+  readiness: string[];
+  guidance: string;
+  limits: {
+    memoryMb: number;
+    scratchMb: number;
+    sharedMemoryMb?: number;
+    cpus: number;
+    pids: number;
+    lifetimeSeconds: number;
+    startupSeconds: number;
+    commandSeconds: number;
+  };
+};
+export type RuntimeDefinition = RuntimeDefinitionInput & {
+  projectId: string;
+  organizationId: string;
+  version: number;
+  digest: string;
+  publishedAt: string;
 };

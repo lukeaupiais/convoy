@@ -43,7 +43,18 @@ test('execution profiles keep sandbox authority, approval and reviewer independe
   const { execution, project } = fixture();
   assert.deepEqual(
     execution.policy.profiles().map((profile) => profile.id),
-    ['plan', 'ask', 'edit', 'auto', 'dont-ask', 'full-access-ask', 'full-access', 'deny'],
+    [
+      'plan',
+      'inspect',
+      'verify',
+      'ask',
+      'edit',
+      'auto',
+      'dont-ask',
+      'full-access-ask',
+      'full-access',
+      'deny',
+    ],
   );
   await execution.command({
     action: 'setExecutionProfile',

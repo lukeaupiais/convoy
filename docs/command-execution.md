@@ -18,7 +18,9 @@ and exact-operation approval remain mandatory; there is no unsandboxed fallback.
 - Worker stdout/stderr are decoded independently and retained with stream tags.
   Coordinator logs combine their observed arrival order into plain UTF-8 text.
   No terminal escape sequences are interpreted in the web UI.
-- Model preview: last 12,000 UTF-16 code units, without a split surrogate pair.
+- Model preview: up to 12,000 UTF-16 code units, preserving the beginning and end
+  without split surrogate pairs. Truncated results identify omitted bytes and
+  provide the command ID/cursor for `read_command_output`.
   Live card: compact tail, elapsed time, Stop command, expandable retained output.
 - Per-command worker spool: 16 MiB or 100,000 chunks. Preview truncation never
   kills a command; exhausting the explicit spool quota does, with `output_quota`.

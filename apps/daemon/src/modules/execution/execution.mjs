@@ -1,3 +1,4 @@
+import { createVerificationRuntimes } from './verification-runtimes.mjs';
 import { createPlacement } from './placement.mjs';
 import { createExecutionPolicy } from './policy.mjs';
 import { createEnvironmentAccess } from './access.mjs';
@@ -7,6 +8,7 @@ import { createRunnerChannelAuthorization } from './runner-channel-authorization
 import { createCapacity } from './capacity.mjs';
 
 const commands = [
+  'publishRuntimeDefinition',
   'connectRemote',
   'registerRunner',
   'probeRunner',
@@ -25,6 +27,7 @@ const commands = [
  */
 export function createExecution(dependencies) {
   const policy = createExecutionPolicy(dependencies);
+  const verification = createVerificationRuntimes(dependencies);
   const access = createEnvironmentAccess(dependencies);
   const capacity = createCapacity({ ...dependencies, provider: dependencies.capacityProvider });
   const placement = createPlacement({ ...dependencies, policy, access, capacity });
@@ -35,6 +38,7 @@ export function createExecution(dependencies) {
     id: 'execution',
     commands,
     placement,
+    verification,
     policy,
     access,
     enrollment,
@@ -57,6 +61,7 @@ export function createExecution(dependencies) {
             : {}),
         })),
         executionProfiles: policy.profiles(),
+        runtimeDefinitions: verification.snapshot(),
         runnerEnrollments: (dependencies.state.runnerEnrollments ?? []).map(
           ({ tokenDigest: _secret, ...value }) => structuredClone(value),
         ),
@@ -75,6 +80,7 @@ export function createExecution(dependencies) {
       );
       return {
         ...value,
+        runtimeDefinitions: value.runtimeDefinitions.filter(d => d.organizationId === organizationId && (!scope.projectIds || scope.projectIds.includes(d.projectId))),
         scheduler: dependencies.state.schedulers?.[organizationId] ?? dependencies.state.scheduler,
         environments: value.environments.filter(
           (environment) => environment.organizationId === organizationId,
@@ -102,6 +108,7 @@ export function createExecution(dependencies) {
       };
     },
     command(command) {
+      if (command.action === 'publishRuntimeDefinition') return verification.publish(command);
       return placement.command(command);
     },
     runnerSelection(session, runnerId) {

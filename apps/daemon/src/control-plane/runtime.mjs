@@ -1,3 +1,5 @@
+import { createVerificationCoordinator } from './verification-runtime.mjs';
+import { createGuidancePreparation } from './workspace-guidance.mjs';
 import { workAutomationCapabilities } from '../modules/work/index.mjs';
 import { digest } from '../../../../packages/runner/src/index.mjs';
 import { randomUUID } from 'node:crypto';
@@ -38,6 +40,7 @@ import { createSecurityAudit } from '../modules/audit/index.mjs';
 import {
   createAgentModule,
   createPromptContext,
+  createWorkspaceGuidance,
   instructionScopeOrder,
   migrateAgentState,
 } from '../modules/agents/index.mjs';
@@ -225,16 +228,20 @@ export async function createRuntime({
     save: () => store.save(),
     contextFiles,
     execution: workExecution,
+    validateRuntimeSelection: (projectId, selection) => execution.verification.resolve(projectId, selection),
     externalTickets,
     referencedColumn: workflowReferences.column,
     referencedBoard: (boardId) =>
       workflowReferences.board(boardId) ||
       Object.values(state.sessions).some((session) => session.boardId === boardId),
-    replyContext: ticket => {
+    replyContext: (ticket) => {
       const session = workExecution.sessionFor(ticket);
-      return session?.flow?.status === 'waiting_gate' ? { workflowRunId: session.flow.id, workflowInstance: session.flow.instance } : {};
+      return session?.flow?.status === 'waiting_gate'
+        ? { workflowRunId: session.flow.id, workflowInstance: session.flow.instance }
+        : {};
     },
-    afterCommand: (command, result, context) => workflowEffects.observeBoardCommand(command, result, context),
+    afterCommand: (command, result, context) =>
+      workflowEffects.observeBoardCommand(command, result, context),
   });
   const catalog = work.catalog;
   initializeAutomations(state);
@@ -662,11 +669,13 @@ export async function createRuntime({
     },
   });
   const placement = execution.placement;
-  const promptContext = createPromptContext({ digest, now });
+  const workspaceGuidance = createWorkspaceGuidance({ now });
+  const promptContext = createPromptContext({ digest, now, workspaceGuidance });
   const knowledge = createKnowledge({ state, save: () => store.save(), now });
   const library = createLibrary({
     validateKnowledge: knowledge.validateSelection,
     state,
+    executionPolicy: execution.policy,
     save: () => store.save(),
     catalog,
     parseSessionId: taskId,
@@ -854,9 +863,17 @@ export async function createRuntime({
     isClosing: () => closing,
     executionPolicy: execution.policy,
   });
+  const prepareGuidance = createGuidancePreparation({
+    guidance: workspaceGuidance,
+    sessionExecution,
+    contextFiles,
+    save: () => store.save(),
+    event,
+  });
   const executionSessionModule = createExecutionSessionModule({
     sessionExecution,
     channelGrants: execution.channelGrants,
+    resetVerificationRuntime: (session,command) => { idle(session); return verification.reset(session,command); },
   });
   const { activeTerminal, concurrentWorkspaceExecution, tool } = sessionExecution;
   const agentTurns = createAgentTurns({
@@ -875,6 +892,48 @@ export async function createRuntime({
   const agentModule = createAgentModule({
     state,
     agentTurns,
+    async refreshWorkspaceGuidance(session, command) {
+      idle(session);
+      if (
+        session.queuedInput ||
+        session.pendingMessages?.length ||
+        session.assignment?.state === 'uncertain' ||
+        session.pending ||
+        session.pendingQuestion ||
+        activeTerminal(session) ||
+        session.commands?.some((c) => ['running', 'stopping'].includes(c.state))
+      )
+        throw new Error('Finish or reconcile execution before refreshing guidance.');
+      if (!session.capabilityProfile?.loadWorkspaceAgentsMd || !session.workspace)
+        throw new Error('Enable workspace guidance and assign a workspace first.');
+      if (command.captureId !== (session.workspaceGuidance?.id ?? null))
+        throw new Error('Guidance changed. Reload first.');
+      const lease = session.lease.id;
+      const validate = () => {
+        if (
+          controller.signal.aborted ||
+          session.lease?.id !== lease ||
+          session.lease.expiresAt < Date.now()
+        )
+          throw new Error('Session control lease changed during guidance refresh.');
+      };
+      // Reserve the existing job slot while reading; profile changes/model starts
+      // cannot interleave with this authorized refresh.
+      const controller = new AbortController();
+      const job = { controller };
+      jobs.set(session.id, job);
+      job.promise = (async () => {
+        try {
+          await prepareGuidance(session, { force: true, signal: controller.signal, validate });
+          promptContext.compile({ session });
+          await store.save();
+        } finally {
+          jobs.delete(session.id);
+        }
+        return workspaceGuidance.view(session);
+      })();
+      return job.promise;
+    },
     async probeModel(model) {
       if (!models.some((candidate) => candidate.id === model)) throw new Error('Unknown model.');
       const controller = new AbortController();
@@ -945,21 +1004,33 @@ export async function createRuntime({
       await authorizeProjectModel(session.model, rule.projectId, rule.principal);
       capabilities.pinDefault(session);
       const nodes = session.workflow?.nodes ?? [];
-      const required = [...new Set(nodes.flatMap((node) => [
-        ...(node.artifact ? ['read_file'] : []),
-        ...(node.kind === 'check' || node.requiresCheck ? ['shell'] : []),
-      ]))];
-      if (required.length || nodes.some((node) =>
-        node.kind === 'action' && node.operation === 'inspect_changes')) {
+      const required = [
+        ...new Set(
+          nodes.flatMap((node) => [
+            ...(node.artifact ? ['read_file'] : []),
+            ...(node.kind === 'check' || node.requiresCheck ? ['shell'] : []),
+          ]),
+        ),
+      ];
+      if (
+        required.length ||
+        nodes.some((node) => node.kind === 'action' && node.operation === 'inspect_changes')
+      ) {
         const choice = placement.choose(session, required);
-        if (choice.textOnly || choice.reason && !choice.capacityDemand)
+        if (choice.textOnly || (choice.reason && !choice.capacityDemand))
           throw new Error(choice.reason ?? 'This workflow requires an authorized runner.');
       }
     },
   });
+  const verification = createVerificationCoordinator({execution, catalog, runners, runnerFor, commandLogs,
+    save: () => store.save(), event});
   engine = createWorkflowEngine({
     state,
-    prepareStart: (session, options) => capabilities.pin(session, capabilities.resolveForWorkflow(session, session.workflow, options)),
+    prepareStart: (session, options) => {
+      capabilities.pin(session, capabilities.resolveForWorkflow(session, session.workflow, options));
+      verification.pin(session);
+    },
+    sealEvidence: (s, evidence, artifacts) => verification.seal(s, evidence, artifacts),
     save: () => store.save(),
     event,
     canProvision: (s) => placement.effective(s).mode !== 'none',
@@ -969,13 +1040,13 @@ export async function createRuntime({
       capabilities.validate(s, node, 'read_file', args);
       return tool(s, 'read_file', args);
     },
-
     captureArtifacts: async (s, paths) => {
       if (paths.length && (!s.workspace || !s.runnerId))
         throw new Error('Submitted artifacts require an assigned workspace.');
+      const sealed = paths.length ? await verification.readArtifacts(s, paths) : null;
       const captured = [];
       for (const path of paths) {
-        const file = await tool(s, 'read_file', { path, limit: 2000 });
+        const file = sealed ? sealed[path] : await tool(s, 'read_file', { path, limit: 2000 });
         if (typeof file.text !== 'string' || file.truncated)
           throw new Error(`Artifact ${path} is too large to capture for review.`);
         const attachment = await contextFiles.add(
@@ -1003,6 +1074,7 @@ export async function createRuntime({
       runners.execute(runnerFor(s), {
         action: 'diff',
         workspace: s.workspace.path,
+        ...(s.executionGrant?.profileId === 'verify' ? {execution: verification.descriptor(s)} : {}),
         ignoreArtifact,
       }),
     busy: (s) => jobs.has(s.id),
@@ -1031,6 +1103,8 @@ export async function createRuntime({
     placement,
     pinInstructions,
     promptContext,
+    prepareGuidance,
+    executionPolicy: execution.policy,
     partial,
     digest,
     catalog,
@@ -1095,6 +1169,7 @@ export async function createRuntime({
           await store.save();
           return;
         }
+        await verification.prepare(s, controller.signal);
         delete s.queueReason;
         delete s.queuedInput;
         if (s.runnerId && !s.environmentInstructionsPinned) {
@@ -1113,7 +1188,7 @@ export async function createRuntime({
     })().finally(async () => {
       // Do not expose an idle slot until the old runner's assignment is released.
       try {
-        await placement.release(s);
+        try { await verification.release(s); } finally { await placement.release(s); }
       } finally {
         jobs.delete(s.id);
       }
@@ -1233,8 +1308,12 @@ export async function createRuntime({
     const now = Date.now();
     for (const binding of state.ticketImportBindings ?? []) {
       const last = binding.lastAttemptAt ?? binding.lastSyncedAt;
-      if (!binding.enabled || !binding.pollIntervalMinutes ||
-          last && now - Date.parse(last) < binding.pollIntervalMinutes * 60_000) continue;
+      if (
+        !binding.enabled ||
+        !binding.pollIntervalMinutes ||
+        (last && now - Date.parse(last) < binding.pollIntervalMinutes * 60_000)
+      )
+        continue;
       try {
         await catalog.command({ action: 'syncTicketImportBinding', id: binding.id, limit: 100 });
       } catch {
@@ -1248,7 +1327,10 @@ export async function createRuntime({
     if (!closing)
       queue = queue
         .catch(() => {})
-        .then(async () => { await pollTicketImports(); await dispatch(); })
+        .then(async () => {
+          await pollTicketImports();
+          await dispatch();
+        })
         .catch(() => {});
   }, 3000);
   dispatchTimer.unref();
@@ -1280,7 +1362,7 @@ export async function createRuntime({
         delete s.inFlightTool;
         const review = await runners.execute(
           runnerFor(s),
-          { action: 'diff', workspace: s.workspace.path, ignoreArtifact: step.artifact?.path },
+          { action: 'diff', ...(s.executionGrant?.profileId === 'verify' ? {execution: sessionExecution.descriptor(s)} : {}), workspace: s.workspace.path, ignoreArtifact: step.artifact?.path },
           controller.signal,
         );
         const concurrent = concurrentWorkspaceExecution(
@@ -1313,7 +1395,7 @@ export async function createRuntime({
           result = {
             ...(await runners.execute(
               runnerFor(s),
-              { action: 'diff', workspace: s.workspace.path },
+              { action: 'diff', ...(s.executionGrant?.profileId === 'verify' ? {execution: sessionExecution.descriptor(s)} : {}), workspace: s.workspace.path },
               controller.signal,
             )),
             at: now(),
@@ -1358,7 +1440,7 @@ export async function createRuntime({
         s.review = {
           ...(await runners.execute(
             runnerFor(s),
-            { action: 'diff', workspace: s.workspace.path },
+            { action: 'diff', ...(s.executionGrant?.profileId === 'verify' ? {execution: sessionExecution.descriptor(s)} : {}), workspace: s.workspace.path },
             controller.signal,
           )),
           at: now(),
@@ -1448,6 +1530,7 @@ export async function createRuntime({
     },
   );
   snapshot = createSnapshotQuery({
+    guidanceView: workspaceGuidance.view,
     state,
     getSession: get,
     jobs,
@@ -2185,6 +2268,10 @@ export async function createRuntime({
     if (sessionCommands.handles(action))
       return sessionCommands.execute(s, command, {
         principal: actor,
+        profileChanged(session) {
+          workspaceGuidance.request(session);
+          promptContext.compile({ session });
+        },
         assertProfileChange(session) {
           idle(session);
           if (
@@ -2251,7 +2338,7 @@ export async function createRuntime({
       if (!['waiting_gate', 'awaiting_continue', 'completed'].includes(s.flow?.status)) idle(s);
       if (!s.workspace) throw new Error('No worktree assigned.');
       s.review = {
-        ...(await runners.execute(runnerFor(s), { action: 'diff', workspace: s.workspace.path })),
+        ...(await runners.execute(runnerFor(s), { action: 'diff', ...(s.executionGrant?.profileId === 'verify' ? {execution: sessionExecution.descriptor(s)} : {}), workspace: s.workspace.path })),
         at: now(),
       };
       await store.save();
@@ -2289,6 +2376,7 @@ export async function createRuntime({
       }
       const review = await runners.execute(runnerFor(s), {
         action: 'diff',
+        ...(s.executionGrant?.profileId === 'verify' ? {execution: sessionExecution.descriptor(s)} : {}),
         workspace: s.workspace.path,
         ignoreArtifact: step.artifact?.path,
       });

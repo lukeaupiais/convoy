@@ -24,6 +24,7 @@ profile + runner attestation + assignment
 
 | Profile           | Resource envelope                                  | Approval behavior                                                            |
 | ----------------- | -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `inspect`         | Contained read-only workspace and foreground commands; no sockets | Reads and foreground commands allowed; edits, background processes and terminals denied |
 | `plan`            | Read-only workspace tools; no commands or terminal | Mutations denied                                                             |
 | `ask`             | Contained read/write workspace, no network         | User reviews mutations                                                       |
 | `edit`            | Same containment                                   | Workspace edits automatic; commands ask                                      |
@@ -85,3 +86,20 @@ runner eligibility behind one Interface. The runner Adapter compiles the resolve
 grant to provider-neutral worker requests. `packages/runner` remains the sole
 implementation of process launch semantics, so local and SSH execution preserve
 equivalent behavior and callers do not branch on transport.
+
+## Inspection execution
+
+`inspect` requires a successful runtime probe of read-only workspace and socket
+isolation, plus execution descriptor version 1. Linux Bubblewrap mounts workspace
+and Git metadata read-only, provides private scratch storage, and uses a seccomp
+filter to deny socket creation and io_uring. Native tools are discovered inside
+that same sandbox. Unsupported environments cannot accept inspection assignments.
+
+Placement binds the grant digest and assignment token in protected worktree Git
+metadata. Every worker request must match this binding, even when it omits the
+profile or descriptor. This enforcement is identical locally and over SSH.
+
+A read workflow node can expose selected shell only on a qualifying inspect
+assignment. Required repository artifacts fail preflight under inspect. Development
+uses a separately authorized session and workspace; advancing a workflow never
+widens an existing grant.

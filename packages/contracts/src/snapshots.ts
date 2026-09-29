@@ -86,6 +86,7 @@ export type RuntimeSnapshot = {
   capacityRequests?: CapacityRequest[];
   capacityStatuses?: CapacityStatus[];
   executionProfiles: ExecutionProfile[];
+  runtimeDefinitions?: import('./model/execution').RuntimeDefinition[];
   boards: Board[];
   boardTemplates: BoardTemplate[];
   runnerPools: RunnerPool[];

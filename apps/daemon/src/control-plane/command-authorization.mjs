@@ -344,7 +344,7 @@ export function createCommandAuthorization({
       return;
     }
 
-    if (command.action === 'setProjectProfile') {
+    if (command.action === 'setProjectProfile' || command.action === 'publishRuntimeDefinition') {
       await projectId(command.projectId, 'project.manage', command, actor);
       return;
     }

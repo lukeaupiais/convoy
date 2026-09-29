@@ -125,6 +125,9 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
     ],
     [state.workflows],
   );
+  const runtimeDefinitions = (state.runtimeDefinitions ?? []).filter(
+    (d) => d.projectId === state.activeContext?.projectId,
+  );
   const draftRecords = state.workflowDrafts ?? {};
   const initialPublished = published.at(-1) as GraphWorkflow | undefined;
   const initialRecord = initialPublished ? draftRecords[initialPublished.id] : undefined;
@@ -519,6 +522,57 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
       )}
       {settingsOpen && (
         <div className="workflow-definition-settings">
+          <label>
+            Verification runtime
+            <select
+              value={
+                draft.runtime === null
+                  ? 'disabled'
+                  : draft.runtime
+                    ? `${draft.runtime.id}@${draft.runtime.version}`
+                    : ''
+              }
+              onChange={(event) => {
+                const selected = runtimeDefinitions.find(
+                  (d) => `${d.id}@${d.version}` === event.target.value,
+                );
+                setDraft((current) => ({
+                  ...current,
+                  runtime:
+                    event.target.value === 'disabled'
+                      ? null
+                      : selected
+                        ? { id: selected.id, version: selected.version, required: false }
+                        : undefined,
+                }));
+              }}
+            >
+              <option value="">Project default</option>
+              <option value="disabled">Disabled</option>
+              {runtimeDefinitions.map((d) => (
+                <option key={`${d.projectId}:${d.id}@${d.version}`} value={`${d.id}@${d.version}`}>
+                  {d.name} · v{d.version}
+                </option>
+              ))}
+            </select>
+          </label>
+          {draft.runtime && (
+            <label>
+              <input
+                type="checkbox"
+                checked={draft.runtime.required}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    runtime: current.runtime
+                      ? { ...current.runtime, required: event.target.checked }
+                      : current.runtime,
+                  }))
+                }
+              />
+              Require runtime availability
+            </label>
+          )}
           <label>
             Capability profile
             <ProfilePicker

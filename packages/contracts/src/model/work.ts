@@ -12,6 +12,7 @@ export type Placement = {
 };
 
 export type Project = {
+  runtime?: import('./execution').RuntimeSelection;
   id: string;
   organizationId: string;
   teamId?: string;
@@ -116,7 +117,13 @@ type TicketConnectionBase = {
   organizationId: string;
   name: string;
   enabled: boolean;
-  capabilities?: { import: true; create: boolean; update: boolean; threadRead?: boolean; reply?: boolean };
+  capabilities?: {
+    import: true;
+    create: boolean;
+    update: boolean;
+    threadRead?: boolean;
+    reply?: boolean;
+  };
   revision: number;
 };
 export type TicketConnection = TicketConnectionBase &

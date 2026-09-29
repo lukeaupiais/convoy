@@ -1,4 +1,5 @@
 const sessionCommands = [
+  'resetVerificationRuntime',
   'readCommandOutput',
   'stopCommand',
   'openTerminal',
@@ -11,11 +12,12 @@ const sessionCommands = [
 ];
 
 /** Lease-authorized retained-command and native-terminal operations. */
-export function createExecutionSessionModule({ sessionExecution, channelGrants }) {
+export function createExecutionSessionModule({ sessionExecution, channelGrants, resetVerificationRuntime }) {
   return {
     id: 'execution',
     sessionCommands,
     async sessionCommand(session, command, context) {
+      if(command.action==='resetVerificationRuntime') return resetVerificationRuntime(session,command);
       if (command.action === 'renewChannelGrant')
         return channelGrants.renew({
           id: command.id,

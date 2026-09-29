@@ -1,3 +1,13 @@
+import type { ResolvedExecutionGrant, ExecutionProfileId } from './model/execution';
+
+export type ExecutionDescriptor = {
+  version: 1;
+  assignmentToken: string;
+  workspace: string;
+  policyDigest: string;
+  grant: ResolvedExecutionGrant;
+};
+
 export const WORKER_PROTOCOL_VERSION = 1 as const;
 export type WorkerHello = {
   protocol: typeof WORKER_PROTOCOL_VERSION;
@@ -10,13 +20,39 @@ export type WorkerHello = {
 };
 
 type WorkspaceRequest = { operationId: string; workspace: string };
-type ExecutionAccess = { accessMode?: 'contained' | 'trusted' };
+type ExecutionAccess = {
+  accessMode?: 'contained' | 'trusted';
+  execution?: ExecutionDescriptor;
+  executionProfile?: ExecutionProfileId;
+};
 type CommandRequest = WorkspaceRequest & { commandId: string };
 type TerminalRequest = WorkspaceRequest & { terminalId: string };
 export type WorkerRequest =
   | ({ operationId: string; action: 'probe'; repository: string } & ExecutionAccess)
-  | { operationId: string; action: 'provision'; repository: string; workspaceId: string }
-  | (WorkspaceRequest & { action: 'diff'; ignoreArtifact?: string })
+  | {
+      operationId: string;
+      action: 'provision';
+      repository: string;
+      workspaceId: string;
+      loadWorkspaceAgentsMd?: boolean;
+    }
+  | (WorkspaceRequest & {
+      action: 'bind_execution';
+      binding: {
+        version: 1;
+        profileId: 'inspect' | 'verify';
+        assignmentToken: string;
+        policyDigest: string;
+      };
+    })
+  | (WorkspaceRequest &
+      ExecutionAccess & {
+        action: 'verification';
+        operation: 'prepare' | 'status' | 'seal' | 'destroy';
+        files?: { path: string }[];
+      })
+  | (WorkspaceRequest & ExecutionAccess & { action: 'workspace_guidance' })
+  | (WorkspaceRequest & ExecutionAccess & { action: 'diff'; ignoreArtifact?: string })
   | (WorkspaceRequest &
       ExecutionAccess & {
         action: 'tool';

@@ -115,9 +115,16 @@ export type RuntimeCommandInputMap = {
     anchor?: string;
   };
   searchKnowledge: { projectId: string; query: string; collectionId?: string; limit?: number };
+  publishRuntimeDefinition: {
+    projectId: string;
+    organizationId?: string;
+    definition: import('./model/execution').RuntimeDefinitionInput;
+    baseVersion: number;
+  };
   querySecurityAudit: SecurityAuditQuery;
   exportSecurityAudit: SecurityAuditQuery & { format?: 'jsonl' };
   advance: SessionTarget;
+  refreshWorkspaceGuidance: SessionTarget & { captureId: string | null };
   answerQuestion: SessionTarget & { questionId: string; answer: string };
   approveGate: SessionTarget & { instance: string };
   attachContext: SessionTarget & ({ path: string } | { name: string; mime: string; data: string });
@@ -357,8 +364,17 @@ export type RuntimeCommandInputMap = {
     resolution?: 'local' | 'remote';
   };
   syncExternalTicketThread: { ticketId: number; connectionId: string };
-  postExternalTicketReply: RequestIdentity & { ticketId: number; connectionId: string; body: string };
-  setExternalTicketStatus: RequestIdentity & { ticketId: number; connectionId: string; status: string; evidenceReplyRequestId?: string };
+  postExternalTicketReply: RequestIdentity & {
+    ticketId: number;
+    connectionId: string;
+    body: string;
+  };
+  setExternalTicketStatus: RequestIdentity & {
+    ticketId: number;
+    connectionId: string;
+    status: string;
+    evidenceReplyRequestId?: string;
+  };
   reconcileExternalTicketReply: { requestId: string; remoteId?: string; confirmNotPosted?: true };
   importExternalTickets: { connectionId: string; projectId: string; limit?: number };
   saveTicketImportBinding: {
@@ -409,6 +425,7 @@ export type RuntimeCommandInputMap = {
   };
   publishProfile: {
     knowledge?: import('./model/knowledge').KnowledgeSelection;
+    loadWorkspaceAgentsMd?: boolean;
     organizationId?: string;
     projectId?: string;
     id?: string;
@@ -434,6 +451,7 @@ export type RuntimeCommandInputMap = {
   };
   removeApprovalRule: { ruleId: string };
   removeTicketFile: { taskId: number; revision: number; attachmentId: string };
+  resetVerificationRuntime: SessionTarget & { runtimeId: string; generation: number };
   readCommandOutput: SessionTarget & { commandId: string; cursor?: number };
   readTerminalOutput: SessionTarget & { terminalId: string; cursor?: number };
   renewChannelGrant: SessionTarget & {
@@ -490,7 +508,7 @@ export type RuntimeCommandInputMap = {
   > &
     Pick<Environment, 'name' | 'kind'> & { host?: string };
   saveProject: Partial<
-    Pick<Project, 'id' | 'organizationId' | 'teamId' | 'revision' | 'description'>
+    Pick<Project, 'id' | 'organizationId' | 'teamId' | 'revision' | 'description' | 'runtime'>
   > &
     Pick<Project, 'name'>;
   saveRunnerPool: Partial<Pick<RunnerPool, 'id' | 'revision'>> &
@@ -641,6 +659,7 @@ type RuntimeCommandKnownResults = {
   openTicketConversation: Conversation;
   publishProfile: CapabilityProfile;
   publishSkill: SkillRevision;
+  resetVerificationRuntime: { id: string; generation: number; state: string };
   readCommandOutput: { text: string; cursor: number; hasMore: boolean };
   readTerminalOutput: { text: string; cursor: number; hasMore: boolean };
   registerRunner: Runner;

@@ -19,7 +19,19 @@ export class CommandSupervisor {
   start(
     command,
     args,
-    { cwd, env, signal, timeoutMs = 600000, owner, input, launchId, lifetime = 'turn' } = {},
+    {
+      cwd,
+      env,
+      signal,
+      timeoutMs = 600000,
+      owner,
+      input,
+      launchId,
+      lifetime = 'turn',
+      extraFd,
+      onTerminate,
+      onExit,
+    } = {},
   ) {
     if (this.closed || signal?.aborted) throw new Error('Command execution stopped.');
     if (!['turn', 'session'].includes(lifetime)) throw new Error('Invalid command lifetime.');
@@ -45,6 +57,8 @@ export class CommandSupervisor {
       commandId,
       owner,
       lifetime,
+      onTerminate,
+      onExit,
       fd,
       entries: [],
       bytes: 0,
@@ -62,7 +76,7 @@ export class CommandSupervisor {
       cwd,
       env,
       detached: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', ...(extraFd === undefined ? [] : [extraFd])],
     });
     record.child = child;
     const collect = (stream, text) => {
@@ -96,7 +110,7 @@ export class CommandSupervisor {
     const abort = () => this.terminate(record, 'cancelled');
     record.timer = setTimeout(() => this.terminate(record, 'deadline'), timeoutMs);
     signal?.addEventListener('abort', abort, { once: true });
-    child.on('close', (code, exitSignal) => {
+    child.on('close', async (code, exitSignal) => {
       clearTimeout(record.timer);
       clearTimeout(record.killTimer);
       signal?.removeEventListener('abort', abort);
@@ -104,6 +118,22 @@ export class CommandSupervisor {
       try {
         process.kill(-child.pid, 'SIGKILL');
       } catch {}
+      if (record.reason && record.onTerminate) {
+        try {
+          await record.onTerminate();
+        } catch (error) {
+          record.error = error.message;
+          record.reason = 'cleanup_uncertain';
+        }
+      }
+      if (record.onExit) {
+        try {
+          await record.onExit({ reason: record.reason, code });
+        } catch (error) {
+          record.error = error.message;
+          record.reason = 'cleanup_uncertain';
+        }
+      }
       record.state = 'exited';
       record.code = code;
       record.signal = exitSignal;

@@ -135,3 +135,23 @@ test('deployment storage identity refuses a missing SQLite database after first 
   await unlink(join(directory, 'state.sqlite'));
   await assert.rejects(createRuntime(options), /database is missing/);
 });
+
+test('SQLite preserves runtime revisions and project scopes, including legacy row keys', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'convoy-runtime-keys-'));
+  t.after(() => rm(directory, {recursive:true,force:true}));
+  const first = {organizationId:'personal',projectId:'documents',id:'preview',version:1};
+  let store = await createSqliteStore(directory, {runtimeDefinitions:[first]});
+  await store.close();
+  const db = new DatabaseSync(join(directory,'state.sqlite'));
+  db.prepare("UPDATE state_items SET item_key='preview' WHERE bucket='runtimeDefinitions'").run();
+  db.close();
+  store = await createSqliteStore(directory, {});
+  store.data.runtimeDefinitions.push({...first,version:2},{...first,projectId:'inventory'});
+  const expected=structuredClone(store.data);
+  await store.save();await store.close();
+  store=await createSqliteStore(directory,{});
+  assert.deepEqual(store.data,expected);
+  store.data.runtimeDefinitions.push({...first});
+  await assert.rejects(store.save(),/unique item IDs/);
+  await store.close().catch(()=>{});
+});

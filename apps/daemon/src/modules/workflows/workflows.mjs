@@ -1,4 +1,5 @@
 import { submissionContract, validateSubmissionContract } from './submission-contract.mjs';
+import { normalizeRuntimeSelection } from '../execution/index.mjs';
 import { normalizeSubmissionRequirements, validateSubmissionRequirements } from './submission-requirements.mjs';
 import { randomUUID } from 'node:crypto';
 
@@ -123,6 +124,9 @@ export function normalizeWorkflow(input) {
   value.nodes = sourceNodes.map((node, index) => normalizeNode(node, index, ids, sessions, seenNewSessions));
   if (!value.entryNode) value.entryNode = value.nodes[0].id;
   if (!ids.has(value.entryNode)) throw new Error('Workflow entryNode must reference a node.');
+  if (input.runtime !== undefined) { value.runtime = normalizeRuntimeSelection(input.runtime);
+    if (value.runtime && value.nodes.some(n => n.kind === 'agent' && n.permissions !== 'full')) throw new Error('Verification workflows require explicitly full agent-node tool permissions.');
+  }
   const supplied = Array.isArray(input.edges) ? input.edges : [];
   if (supplied.length > 300) throw new Error('A workflow may have at most 300 edges.');
   const edges = supplied.length ? supplied : isLegacy ? value.nodes.slice(0, -1).map((node, index) => ({ from: node.id, to: value.nodes[index + 1].id, outcome: 'success' })) : [];
@@ -177,7 +181,7 @@ export function ensureAgentSessions(s) {
   return s.agentSessions[s.currentAgentSessionId];
 }
 
-export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {} }) {
+export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, sealEvidence = async () => null, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {} }) {
   let pumping = false; let pumpAgain = false;
   const nodes = s => s.workflow.nodes ?? s.workflow.steps;
   const current = s => { const list = nodes(s); return list.find(n => n.id === s.flow?.nodeId) ?? list[s.step]; };
@@ -225,6 +229,9 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     assertOutcome(s, outcome);
     if (['changes_requested', 'failed'].includes(outcome) && s.flow.revision >= s.workflow.maxRevisions) throw new Error('Workflow revision limit reached.');
     const evidence = { ...await validate(s, outcome), ...(submissionEvidence ? { ...submissionEvidence, sourceNodeId: node.id } : {}) }; if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed during validation. Submission was not accepted.');
+    const verification = node.kind === 'agent' ? await sealEvidence(s, submissionEvidence, artifacts) : null;
+    if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed while sealing evidence.');
+    if (verification) { evidence.verification = verification; submissionEvidence = {...submissionEvidence, verification}; }
     const capturedArtifacts = await captureArtifacts(s, artifacts);
     if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed while capturing artifacts. Submission was not accepted.');
     const primaryArtifact = capturedArtifacts.find(artifact => artifact?.path === node.artifact?.path) ?? capturedArtifacts.find(artifact => artifact?.id);

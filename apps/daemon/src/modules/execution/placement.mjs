@@ -79,7 +79,7 @@ export function createPlacement({
     ...capabilities,
     enforcement: {
       isolation: runner.accessMode === 'trusted' ? ['workspace', 'host'] : ['workspace'],
-      network: runner.accessMode === 'trusted' ? ['none', 'host'] : ['none'],
+      network: ['none', ...(runner.accessMode === 'trusted' ? ['host'] : []), ...(capabilities.verification ? ['private'] : [])],
       failClosed: true,
       platform: capabilities.platform ?? capabilities.worker?.platform,
       architecture: capabilities.arch ?? capabilities.worker?.arch,
@@ -734,6 +734,8 @@ export function createPlacement({
           r.online = true;
           r.checkedAt = new Date().toISOString();
         }
+        if (!executionPolicy.supports(r, selectedProfile))
+          throw new Error('Runner cannot enforce the selected execution profile.');
         if (signal?.aborted) throw new Error('Stopped before provisioning.');
         if (
           ![...requiredTools, ...(effective(s).requiredTools ?? [])].every((t) =>
@@ -774,7 +776,14 @@ export function createPlacement({
         try {
           s.workspace = await execute(
             r,
-            { action: 'provision', repository: r.repository, workspaceId: s.workspaceRequest },
+            {
+              action: 'provision',
+              repository: r.repository,
+              workspaceId: s.workspaceRequest,
+              ...(s.capabilityProfile?.loadWorkspaceAgentsMd === true
+                ? { loadWorkspaceAgentsMd: true }
+                : {}),
+            },
             signal,
           );
         } catch (e) {
@@ -799,6 +808,30 @@ export function createPlacement({
             },
           });
           throw e;
+        }
+      }
+      if (['inspect', 'verify'].includes(grant.profileId)) {
+        try {
+          await execute(
+            r,
+            {
+              action: 'bind_execution',
+              workspace: s.workspace.path,
+              binding: {
+                version: 1,
+                profileId: grant.profileId,
+                assignmentToken: s.assignment.token,
+                policyDigest: grant.digest,
+              },
+            },
+            signal,
+          );
+        } catch (error) {
+          s.assignment.state = 'uncertain';
+          s.assignment.message =
+            'Inspection binding outcome is uncertain. Reconcile the original runner.';
+          await save();
+          throw error;
         }
       }
       s.assignment.state = 'running';

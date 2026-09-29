@@ -34,13 +34,25 @@ export function createSessionExecution({
     if (grant.runnerId && grant.runnerId !== runner.id)
       throw new Error('Execution grant belongs to another runner. Reconcile the assignment first.');
     if (session.assignment?.policyDigest && session.assignment.policyDigest !== grant.digest)
-      throw new Error('Execution grant no longer matches the assignment lease. Reconcile it first.');
+      throw new Error(
+        'Execution grant no longer matches the assignment lease. Reconcile it first.',
+      );
     if (grant.envelope.isolation === 'none')
       throw new Error(`Execution profile ${grant.profileId} does not permit runner execution.`);
     if (grant.envelope.isolation === 'host' && runner.accessMode !== 'trusted')
       throw new Error('This execution profile requires a runner trusted for host access.');
     return {
       grant,
+      execution:
+        session.assignment && session.workspace
+          ? {
+              version: 1,
+              assignmentToken: session.assignment.token,
+              workspace: session.workspace.path,
+              policyDigest: session.assignment.policyDigest,
+              grant,
+            }
+          : undefined,
       accessMode: grant.envelope.isolation === 'host' ? 'trusted' : 'contained',
     };
   }
@@ -256,11 +268,33 @@ export function createSessionExecution({
     try {
       const extension = extensionTool?.(session, name);
       const access = executionAccess(session);
+      const restriction = executionPolicy.toolRestriction(session, name);
+      if (restriction) throw new Error(restriction);
+      if (
+        access.grant.profileId === 'inspect' &&
+        (!access.execution || !executionPolicy.supports(runnerFor(session), 'inspect'))
+      )
+        throw new Error('Inspection requires a compatible assigned runner.');
       return await execute(
         runnerFor(session),
         extension
-          ? { action: 'extension', workspace: session.workspace.path, extension: extension.extension, adapter: extension.extension.adapter, tool: extension.id, args }
-          : { action: 'tool', workspace: session.workspace.path, name, args, accessMode: access.accessMode },
+          ? {
+              action: 'extension',
+              workspace: session.workspace.path,
+              extension: extension.extension,
+              adapter: extension.extension.adapter,
+              tool: extension.id,
+              args,
+            }
+          : {
+              action: 'tool',
+              workspace: session.workspace.path,
+              name,
+              args,
+              accessMode: access.accessMode,
+              execution: access.execution,
+              executionProfile: access.grant.profileId,
+            },
         signal,
         async (update, stop) => {
           activeId = update.commandId;
@@ -335,6 +369,8 @@ export function createSessionExecution({
           rows: input.rows ?? 36,
           timeoutMs: input.timeoutMs ?? 4 * 60 * 60 * 1000,
           accessMode: access.accessMode,
+          execution: access.execution,
+          executionProfile: access.grant.profileId,
         });
         const connection = {
           ...result.connection,
@@ -396,7 +432,27 @@ export function createSessionExecution({
     }
   }
 
+  async function readGuidance(session, signal) {
+    if (!session.workspace || !['running', 'released'].includes(session.assignment?.state))
+      throw new Error('Guidance requires a current, reconciled workspace assignment.');
+    const access = executionAccess(session);
+    if (access.grant.approval.reads !== 'allow')
+      throw new Error('Execution grant denies guidance reads.');
+    return runners.execute(
+      runnerFor(session),
+      {
+        action: 'workspace_guidance',
+        workspace: session.workspace.path,
+        execution: access.execution,
+        executionProfile: access.grant.profileId,
+        accessMode: access.accessMode,
+      },
+      signal,
+    );
+  }
   return {
+    descriptor: session => executionAccess(session).execution,
+    readGuidance,
     activeTerminal,
     concurrentWorkspaceExecution,
     commandStatus,

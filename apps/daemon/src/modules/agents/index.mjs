@@ -1,6 +1,7 @@
+export { createWorkspaceGuidance } from './workspace-guidance.mjs';
 export { createPromptContext, instructionScopeOrder } from './prompt-context.mjs';
 
-const sessionCommands = ['decide', 'answerQuestion'];
+const sessionCommands = ['decide', 'answerQuestion', 'refreshWorkspaceGuidance'];
 const commands = ['probeModel', 'removeApprovalRule'];
 
 export function migrateAgentState(state) {
@@ -9,7 +10,7 @@ export function migrateAgentState(state) {
 }
 
 /** Lease-authorized human responses to a model turn's approval or question. */
-export function createAgentModule({ state, agentTurns, probeModel }) {
+export function createAgentModule({ state, agentTurns, probeModel, refreshWorkspaceGuidance }) {
   migrateAgentState(state);
   return {
     id: 'agents',
@@ -24,6 +25,8 @@ export function createAgentModule({ state, agentTurns, probeModel }) {
       return undefined;
     },
     sessionCommand(session, command, context) {
+      if (command.action === 'refreshWorkspaceGuidance')
+        return refreshWorkspaceGuidance(session, command, context);
       return command.action === 'decide'
         ? agentTurns.decide(session, command, context?.principal)
         : agentTurns.answer(session, command);

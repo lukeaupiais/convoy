@@ -5,11 +5,16 @@ rules and module ownership. Use the terms defined by the owning modules and
 shared contracts when changing code or UI copy.
 
 - [Execution policy and runner authority](architecture/execution-access.md)
+- [Disposable verification runtimes — specification](architecture/disposable-verification-runtime-spec.md)
+- [Browser verification through the shell](architecture/browser-shell-verification.md)
+- [Wiki reading and authoring interface](architecture/wiki-interface.md)
+- [Wiki foundation](architecture/wiki-foundation.md)
 - [Model providers, organizations, and client access](architecture/model-providers-organizations-and-client-access.md)
 - [Module command ownership](architecture/module-command-registry.md)
 - [Provider boundary](architecture/provider-boundary.md)
 - [Tool and approval contract](architecture/tool-harness.md)
-- [Repository guidance and read-only shell — proposed spec](architecture/repository-guidance-and-read-only-shell-spec.md)
+- [Structured workflow submissions](architecture/structured-submissions.md)
+- [Repository guidance and read-only shell — implementation spec](architecture/repository-guidance-and-read-only-shell-spec.md)
 - [Workflow selection and start automations](architecture/workflow-selection-and-automation-spec.md)
 - [Board workflow visibility](architecture/board-workflow-visibility-spec.md)
 - [Board integrations product and behavior spec](board-integrations-spec.md)
@@ -23,7 +28,3 @@ shared contracts when changing code or UI copy.
 Architecture documents describe current boundaries and note unfinished work
 where relevant. The nearest source README describes ownership within a directory;
 tests verify behavior at the corresponding boundary.
-
-Project knowledge: [Wiki foundation](architecture/wiki-foundation.md) and [Wiki interface](architecture/wiki-interface.md).
-
-Workflow investigation: [Structured submissions](architecture/structured-submissions.md) and [configuration example](investigation-workflow-example.json).

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createBoards } from './boards.mjs';
 import { requiredText as text } from '../../shared/validation.mjs';
 export const phases = ['Backlog', 'Ready', 'In progress', 'In review', 'Done'];
-export function createCatalog({ state, save, execution, externalTickets, contextFiles, referencedColumn, referencedBoard, replyContext = () => ({}) }) {
+export function createCatalog({ state, save, execution, externalTickets, contextFiles, referencedColumn, referencedBoard, validateRuntimeSelection = () => { throw new Error('Runtime selection unavailable.'); }, replyContext = () => ({}) }) {
   state.projects ??= [{ id: 'agent-platform', organizationId: 'personal', name: 'Agent platform', description: '', revision: 1, placement: { mode: 'none' }, executionProfile: 'ask' }];
   for (const value of state.projects) value.organizationId ??= 'personal';
   state.ticketRelations ??= [];
@@ -353,6 +353,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (old && c.revision !== old.revision) throw new Error('Project changed in another client. Reload before saving.');
         if (old && c.organizationId && c.organizationId !== old.organizationId) throw new Error('A project cannot move between organizations.');
         const value = { ...(old ?? { id: randomUUID(), organizationId: c.organizationId ?? 'personal', ...(c.teamId ? { teamId: c.teamId } : {}), placement: { mode: 'none' }, executionProfile: 'ask' }), name: text(c.name, 'Project name', 100), description: text(c.description ?? '', 'Description', 4000, true), revision: (old?.revision ?? 0) + 1 };
+        if (c.runtime !== undefined) { validateRuntimeSelection(value.id, c.runtime); value.runtime = structuredClone(c.runtime); }
         if (old) Object.assign(old, value); else state.projects.push(value); await save(); return value;
       }
       if (c.action === 'createTicket') {

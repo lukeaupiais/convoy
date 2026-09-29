@@ -12,3 +12,4 @@ export {
   createStaticCapacityAdapter,
   staticCapacityProvider,
 } from './capacity.mjs';
+export { createVerificationRuntimes, normalizeRuntimeSelection, normalizeRuntimeDefinition } from './verification-runtimes.mjs';
