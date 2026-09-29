@@ -143,6 +143,23 @@ provider cache-hit guarantee. Changing tool policies, instruction revisions or
 other request fields may independently affect caching.
 
 
+### Investigation budget placement
+
+Per-request counters (`request`, `explorationRemaining`) and the `finalizing`
+flag belong in appended runtime snapshots, not in `turnInstructions`. The latter
+contains a constant budget/completion policy explaining how to interpret those
+values. Budget exhaustion remains enforced by the runner/control plane, including
+removal of exploration tools. The completion policy itself no longer switches
+wording when finalization begins.
+
+Regression coverage compiles different real investigation budgets, renders them
+through the subscription adapter, and checks the entire earlier input is an exact
+prefix of the next input with unchanged instructions and request settings. Tests
+also verify that current budget values appear in the newest appended state and
+that finalization still denies unavailable tools. Actual tool-schema changes at
+finalization, activated skills, workflow changes and compaction may independently
+change the reusable prefix; this fix does not suppress those authority changes.
+
 ## Measured context occupancy
 
 Automatic compaction uses the latest generation response's provider-reported
@@ -169,4 +186,4 @@ Compaction projects readable message data into its summary request and omits
 opaque reasoning/text signatures. Native provider reasoning remains in ordinary
 requests and durable history. The latest user boundary and its complete tool
 interactions remain intact. Successful compaction records the measured input,
-capacity and threshold in its event.
+capacity and threshold in its event. The summary request inherits reasoning effort.

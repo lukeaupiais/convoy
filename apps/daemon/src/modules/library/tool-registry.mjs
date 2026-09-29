@@ -371,6 +371,16 @@ export const harnessTools = [
     parameters: object({ question: strValue }),
   },
   {
+    name: 'finish_incomplete',
+    description: 'End this execution with unfinished work, without submitting a business outcome or advancing the workflow. Use when the investigation allowance is ending or an observed blocker prevents further progress. Record findings and the next internal action. This does not schedule a continuation.',
+    parameters: object({
+      summary: {type: 'string', minLength: 1, maxLength: 4000, description: 'Established findings and actual attempted work.'},
+      missingEvidence: {type: 'string', minLength: 1, maxLength: 4000, description: 'What remains unverified and, if blocked, the observed obstacle and recovery attempted.'},
+      nextAction: {type: 'string', minLength: 1, maxLength: 2000, description: 'Concrete internal action needed to continue.'},
+      reason: {type: 'string', enum: ['budget', 'blocked']},
+    }),
+  },
+  {
     name: 'submit_step',
     description: 'Submit the current workflow step for validation. Stop after acceptance.',
     parameters: object(
@@ -420,17 +430,52 @@ export const toolRegistry = [...filesystemTools, ...conversationTools, ...harnes
     };
   },
 );
-const validators = new Map(toolRegistry.map((t) => [t.name, ajv.compile(t.inputSchema)]));
-export function validateToolCall(name, args) {
-  const check = validators.get(name);
-  if (!check || JSON.stringify(args ?? null).length > 40000 || !check(args))
-    throw new Error(
-      'Invalid arguments for ' +
-        name +
-        ': ' +
-        (check ? ajv.errorsText(check.errors) : 'unknown tool'),
-    );
+// Derived only for an explicitly configured workflow revision. Legacy built-in
+// definitions and pinned profile hashes remain unchanged.
+export function submissionInputSchema(base) {
+  return { ...base, properties: { ...base.properties,
+    investigation: { type: 'object', additionalProperties: false, required: ['questions'], properties: {
+      questions: { type: 'array', maxItems: 12, items: { type: 'object', additionalProperties: false,
+        required: ['question', 'material', 'internallyAnswerable', 'status', 'resolution', 'nextAction'],
+        properties: {
+          question: {type: 'string', minLength: 1, maxLength: 1000},
+          material: {type: 'boolean'}, internallyAnswerable: {type: 'boolean'},
+          status: {type: 'string', enum: ['resolved', 'unresolved']},
+          resolution: {type: 'string', maxLength: 2000}, nextAction: {type: 'string', maxLength: 2000},
+          evidence: { type: 'object', additionalProperties: false, required: ['references', 'establishes', 'unverified'], properties: {
+            references: {type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: {type: 'integer', minimum: 0, maximum: 7}},
+            establishes: {type: 'string', minLength: 1, maxLength: 2000},
+            unverified: {type: 'string', minLength: 1, maxLength: 2000},
+          } },
+        },
+      } },
+    } },
+    details: { type: 'object' , maxProperties: 12, additionalProperties: {type: 'string', minLength: 1, maxLength: 4000} },
+    references: { type: 'array', maxItems: 8, items: {
+      type: 'object', additionalProperties: false,
+      properties: { path: {type: 'string', minLength: 1, maxLength: 240}, startLine: {type: 'integer', minimum: 1}, endLine: {type: 'integer', minimum: 1} },
+      required: ['path', 'startLine', 'endLine'],
+    } },
+  }, required: [...base.required, 'outcome', 'details', 'references'] };
 }
+const structuredSubmissionValidator = ajv.compile(submissionInputSchema(toolRegistry.find(t => t.name === 'submit_step').inputSchema));
+const validators = new Map(toolRegistry.map((t) => [t.name, ajv.compile(t.inputSchema)]));
+export function validateToolCall(name, args, structured = false) {
+  const check = structured && name === 'submit_step' ? structuredSubmissionValidator : validators.get(name);
+  const oversized = JSON.stringify(args ?? null).length > 40000;
+  if (!check || oversized || !check(args)) {
+    const base = toolRegistry.find(tool => tool.name === name)?.inputSchema;
+    const schema = structured && name === 'submit_step' ? submissionInputSchema(base) : base;
+    const fields = Object.entries(schema?.properties ?? {}).map(([key, value]) =>
+      `${key}${schema.required?.includes(key) ? '' : '?'}: ${value.type ?? 'value'}`,
+    ).join(', ');
+    throw new Error(
+      `Invalid arguments for ${name}: ${!check ? 'unknown tool' : oversized ? 'arguments exceed 40000 characters' : ajv.errorsText(check.errors)}.` +
+      (schema ? ` Expected argument shape: { ${fields} }. '?' marks optional fields; use the declared JSON schema and omit other fields.` : ''),
+    );
+  }
+}
+
 export function modelTools(entries) {
   return entries
     .filter((t) => t.available)

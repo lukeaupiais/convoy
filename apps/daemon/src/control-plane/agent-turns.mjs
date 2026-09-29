@@ -343,6 +343,7 @@ export function createAgentTurns({
     let result;
     for await (const item of turnGenerate({
       model: session.model,
+      modelSettings: session.modelRunSettings,
       token,
       signal,
       tools: [],

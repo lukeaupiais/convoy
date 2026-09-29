@@ -165,11 +165,82 @@ test('a branching agent must choose a configured outcome before its submission i
   const engine = createWorkflowEngine({ state: { sessions: { routing: s } }, save: async () => {}, event: (session, type, data) => session.events.push({ type, ...data }), launch: () => true });
   await engine.start(s); await engine.pump();
   for (const outcome of [undefined, 'success', 'wrong']) {
-    await assert.rejects(engine.submit(s, s.flow.instance, { summary: 'Needs clarification', artifacts: [], ...(outcome ? { outcome } : {}) }), /No workflow edge/);
+    await assert.rejects(engine.submit(s, s.flow.instance, { summary: 'Needs clarification', artifacts: [], ...(outcome ? { outcome } : {}) }), /Choose an exact workflow outcome identifier/);
     assert.equal(s.flow.status, 'running');
     assert.equal(s.flow.lastSubmission, undefined);
     assert.equal(s.flow.history.length, 0);
   }
   await engine.submit(s, s.flow.instance, { summary: 'Needs clarification', artifacts: [], outcome: 'clarify' });
   assert.equal(s.flow.status, 'waiting_gate');
+});
+
+test('investigation settings pin valid budgets and evidence sections', () => {
+  const workflow = structuredClone(defaultWorkflowDefinition);
+  const node = workflow.nodes.find(n => n.kind === 'agent');
+  Object.assign(node, {maxRounds: 12, finalizationRounds: 2, reasoningEffort: 'medium', summaryHeadings: ['Evidence', 'Unknowns']});
+  assert.equal(normalizeWorkflow(workflow).nodes.find(n => n.id === node.id).reasoningEffort, 'medium');
+  for (const [key, value] of [['finalizationRounds', 12], ['reasoningEffort', 'invalid'], ['summaryHeadings', ['Evidence', 'Evidence']]]) {
+    const copy = structuredClone(workflow); copy.nodes.find(n => n.id === node.id)[key] = value;
+    assert.throws(() => normalizeWorkflow(copy));
+  }
+});
+
+test('missing evidence section rejects submission without advancing the workflow', async () => {
+  const workflow = structuredClone(defaultWorkflowDefinition);
+  workflow.nodes.find(n => n.id === 'plan').summaryHeadings = ['Evidence', 'Unknowns'];
+  const session = {id: 'evidence', messages: [], checks: [], events: [], workspace: {path: '/fixture'}, workflow: {...workflow, version: 1}};
+  const engine = createWorkflowEngine({state: {sessions: {evidence: session}}, save: async () => {}, event: (s, type, data) => s.events.push({type, ...data}), busy: () => false, launch: () => true});
+  await engine.start(session); await engine.pump();
+  for (const summary of ['Unstructured answer', '# Evidence\n\n# Unknowns\nNone', '# Evidence\nSource read\n# Unknowns']) {
+    await assert.rejects(engine.submit(session, session.flow.instance, {summary, artifacts: ['implementation-brief.md'], outcome: 'success'}), /nonempty Markdown section/);
+    assert.equal(session.flow.nodeId, 'plan'); assert.equal(session.flow.status, 'running');
+    assert.equal(session.events.at(-1).type, 'submission_rejected');
+  }
+});
+
+test('ordinary workflow response preserves waits and limits completion correction to exploration', async () => {
+  const events = [];
+  const engine = createWorkflowEngine({ state: { sessions: {} }, save: async () => {}, event: (_s, type, data) => events.push({ type, ...data }) });
+  const budget = { round: 1, maxRounds: 8, finalizing: false };
+  for (const status of ['paused', 'cancelled', 'waiting_gate', 'waiting_event', 'completed']) {
+    const s = { flow: { instance: 'current', status }, status };
+    assert.deepEqual(await engine.ordinaryResponse(s, 'current', { budget }), { stop: true });
+    assert.equal(s.status, status);
+  }
+  for (const pendingField of ['pending', 'pendingQuestion']) {
+    const s = { flow: { instance: 'current', status: 'running' }, status: 'waiting', [pendingField]: { id: 'pending' } };
+    assert.deepEqual(await engine.ordinaryResponse(s, 'current', { budget }), { stop: true });
+    assert.equal(s.status, 'waiting');
+  }
+  assert.equal(events.length, 0);
+  const s = { flow: { instance: 'current', status: 'running' }, status: 'running' };
+  await assert.rejects(engine.ordinaryResponse(s, 'stale', { budget }), /step has changed/);
+  const decision = await engine.ordinaryResponse(s, 'current', { budget: { ...budget, round: 6, finalizing: true } });
+  assert.equal(decision.stop, true);
+  assert.equal(s.status, 'awaiting_submission');
+  assert.equal(events.at(-1).reason, 'finalization');
+});
+
+test('cancelling a workflow clears stale queued execution and can reconcile an already cancelled run', async () => {
+  const engine = createWorkflowEngine({ state: { sessions: {} }, save: async () => {}, event: () => {} });
+  for (const status of ['paused', 'cancelled']) {
+    const s = { flow: { status }, queuedInput: 'Old workflow input', queueReason: 'Old placement failure' };
+    await engine.pause(s, true);
+    assert.equal(s.flow.status, 'cancelled');
+    assert.equal(s.queuedInput, undefined);
+    assert.equal(s.queueReason, undefined);
+  }
+});
+
+ test('workflow request budgets accept extended investigations and retain bounds', () => {
+  for (const rounds of [35, 100]) {
+    const workflow = structuredClone(defaultWorkflowDefinition);
+    workflow.nodes[0].maxRounds = rounds;
+    assert.equal(normalizeWorkflow(workflow).nodes[0].maxRounds, rounds);
+  }
+  for (const rounds of [0, 101, 35.5]) {
+    const workflow = structuredClone(defaultWorkflowDefinition);
+    workflow.nodes[0].maxRounds = rounds;
+    assert.throws(() => normalizeWorkflow(workflow), /1–100 agent rounds/);
+  }
 });

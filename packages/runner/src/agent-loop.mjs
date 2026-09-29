@@ -1,14 +1,27 @@
 // The execution driver is shared by in-process and portable workers. Provider
 // access and approval/project operations are callbacks to the coordinator.
 export async function runAgentLoop(
-  { maxRounds = 20, parallelTools = [] },
+  { maxRounds = 20, finalizationRounds = 0, parallelTools = [] },
   call,
   journal = async () => {},
 ) {
+  if (
+    !Number.isInteger(maxRounds) ||
+    maxRounds < 1 ||
+    !Number.isInteger(finalizationRounds) ||
+    finalizationRounds < 0 ||
+    finalizationRounds >= maxRounds
+  )
+    throw new Error('Invalid agent round budget.');
   const parallel = new Set(parallelTools);
   for (let round = 0; round < maxRounds; round++) {
     await journal({ type: 'round', round });
-    await call('prepare');
+    await call('prepare', {
+      round,
+      maxRounds,
+      finalizationRounds,
+      finalizing: finalizationRounds > 0 && round >= maxRounds - finalizationRounds,
+    });
     const result = await call('generate');
     if (!result || !Array.isArray(result.content)) throw new Error('Response interrupted.');
     await journal({ type: 'model_result', result });

@@ -523,9 +523,18 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
             Capability profile
             <ProfilePicker
               state={state}
-              value={draft.capabilityProfile ? `${draft.capabilityProfile.id}@${draft.capabilityProfile.version}` : ''}
+              value={
+                draft.capabilityProfile
+                  ? `${draft.capabilityProfile.id}@${draft.capabilityProfile.version}`
+                  : ''
+              }
               emptyLabel="Session / project default"
-              onChange={(value) => setDraft((current) => ({ ...current, capabilityProfile: profileRef(state, value) ?? undefined }))}
+              onChange={(value) =>
+                setDraft((current) => ({
+                  ...current,
+                  capabilityProfile: profileRef(state, value) ?? undefined,
+                }))
+              }
             />
           </label>
           <label>
@@ -922,13 +931,186 @@ function NodeInspector({
               <option value="full">Read, write and shell</option>
             </select>
           </label>
+          <label>
+            Reasoning effort
+            <select
+              value={node.reasoningEffort ?? ''}
+              onChange={(event) =>
+                onPatch(node.id, {
+                  reasoningEffort: (event.target.value ||
+                    undefined) as GraphNode['reasoningEffort'],
+                })
+              }
+            >
+              <option value="">Provider default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>
+            Reserved finalization rounds
+            <input
+              type="number"
+              min="0"
+              max={Math.max(0, (node.maxRounds ?? 12) - 1)}
+              value={node.finalizationRounds ?? 0}
+              onChange={(event) =>
+                onPatch(node.id, { finalizationRounds: Number(event.target.value) })
+              }
+            />
+          </label>
+          <details>
+            <summary>Outcome submission requirements</summary>
+            {Object.entries(node.submissionRequirements ?? {}).map(([outcome, rule]) => (
+              <div key={outcome}>
+                <strong>{outcome}</strong>
+                <label>
+                  Required fields
+                  <input
+                    value={rule.fields.join(', ')}
+                    onBlur={(event) =>
+                      onPatch(node.id, {
+                        submissionRequirements: {
+                          ...node.submissionRequirements,
+                          [outcome]: {
+                            ...rule,
+                            fields: event.target.value
+                              .split(',')
+                              .map((v) => v.trim())
+                              .filter(Boolean),
+                          },
+                        },
+                      })
+                    }
+                    onChange={(event) =>
+                      onPatch(node.id, {
+                        submissionRequirements: {
+                          ...node.submissionRequirements,
+                          [outcome]: {
+                            ...rule,
+                            fields: event.target.value.split(',').map((v) => v.trim()),
+                          },
+                        },
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={rule.requireInvestigationAssessment ?? false}
+                    onChange={(event) =>
+                      onPatch(node.id, {
+                        submissionRequirements: {
+                          ...node.submissionRequirements,
+                          [outcome]: {
+                            ...rule,
+                            requireInvestigationAssessment: event.target.checked,
+                            ...(!event.target.checked ? { requireClaimEvidence: false } : {}),
+                          },
+                        },
+                      })
+                    }
+                  />
+                  Block unresolved material internal questions
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={rule.requireClaimEvidence ?? false}
+                    onChange={(event) =>
+                      onPatch(node.id, {
+                        submissionRequirements: {
+                          ...node.submissionRequirements,
+                          [outcome]: {
+                            ...rule,
+                            requireClaimEvidence: event.target.checked,
+                            ...(event.target.checked
+                              ? { requireInvestigationAssessment: true }
+                              : {}),
+                          },
+                        },
+                      })
+                    }
+                  />
+                  Require evidence and limits for resolved claims
+                </label>
+                <label>
+                  Minimum source references
+                  <input
+                    type="number"
+                    min="0"
+                    max="8"
+                    value={rule.minReferences}
+                    onChange={(event) =>
+                      onPatch(node.id, {
+                        submissionRequirements: {
+                          ...node.submissionRequirements,
+                          [outcome]: { ...rule, minReferences: Number(event.target.value) },
+                        },
+                      })
+                    }
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = { ...node.submissionRequirements };
+                    delete next[outcome];
+                    onPatch(node.id, {
+                      submissionRequirements: Object.keys(next).length ? next : undefined,
+                    });
+                  }}
+                >
+                  Remove {outcome}
+                </button>
+              </div>
+            ))}
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const form = event.currentTarget;
+                const outcome = String(new FormData(form).get('outcome') ?? '').trim();
+                if (outcome && !Object.hasOwn(node.submissionRequirements ?? {}, outcome)) {
+                  onPatch(node.id, {
+                    submissionRequirements: {
+                      ...node.submissionRequirements,
+                      [outcome]: { fields: [], minReferences: 0 },
+                    },
+                  });
+                  form.reset();
+                }
+              }}
+            >
+              <label>
+                Outcome
+                <input name="outcome" pattern="[a-zA-Z][a-zA-Z0-9_-]{0,63}" required />
+              </label>
+              <button type="submit">Add requirements</button>
+            </form>
+          </details>
+          <label>
+            Required summary headings
+            <input
+              value={(node.summaryHeadings ?? []).join(', ')}
+              onChange={(event) =>
+                onPatch(node.id, {
+                  summaryHeadings: event.target.value
+                    .split(',')
+                    .map((v) => v.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </label>
           <div className="inspector-two">
             <label>
               Max rounds
               <input
                 type="number"
                 min="1"
-                max="20"
+                max="100"
                 value={node.maxRounds ?? 12}
                 onChange={(event) => onPatch(node.id, { maxRounds: Number(event.target.value) })}
               />
@@ -1014,24 +1196,72 @@ function NodeInspector({
       {node.type === 'wait' && (
         <details open>
           <summary>Event to resume this workflow</summary>
-          <label>Event
-            <select value={node.waitFor?.event ?? 'ticket_message_received'} onChange={(event) => onPatch(node.id, { waitFor: { ...node.waitFor, event: event.target.value as NonNullable<GraphNode['waitFor']>['event'], ticketSource: node.waitFor?.ticketSource ?? 'active_ticket' } })}>
+          <label>
+            Event
+            <select
+              value={node.waitFor?.event ?? 'ticket_message_received'}
+              onChange={(event) =>
+                onPatch(node.id, {
+                  waitFor: {
+                    ...node.waitFor,
+                    event: event.target.value as NonNullable<GraphNode['waitFor']>['event'],
+                    ticketSource: node.waitFor?.ticketSource ?? 'active_ticket',
+                  },
+                })
+              }
+            >
               <option value="ticket_message_received">Source message received</option>
               <option value="ticket_source_updated">Imported ticket updated</option>
               <option value="ticket_updated">Local ticket updated</option>
             </select>
           </label>
-          <label>Ticket
-            <select value={node.waitFor?.ticketSource ?? 'active_ticket'} onChange={(event) => onPatch(node.id, { waitFor: { event: node.waitFor?.event ?? 'ticket_message_received', ticketSource: event.target.value as NonNullable<GraphNode['waitFor']>['ticketSource'], status: node.waitFor?.status } })}>
+          <label>
+            Ticket
+            <select
+              value={node.waitFor?.ticketSource ?? 'active_ticket'}
+              onChange={(event) =>
+                onPatch(node.id, {
+                  waitFor: {
+                    event: node.waitFor?.event ?? 'ticket_message_received',
+                    ticketSource: event.target.value as NonNullable<
+                      GraphNode['waitFor']
+                    >['ticketSource'],
+                    status: node.waitFor?.status,
+                  },
+                })
+              }
+            >
               <option value="active_ticket">Active ticket</option>
               <option value="related_ticket">Related ticket</option>
             </select>
           </label>
-          {node.waitFor?.ticketSource === 'related_ticket' && <label>Relation kind (optional)
-            <input value={node.waitFor.relationKind ?? ''} onChange={(event) => onPatch(node.id, { waitFor: { ...node.waitFor!, relationKind: event.target.value || undefined } })} />
-          </label>}
-          <label>Required status (optional)
-            <input value={node.waitFor?.status ?? ''} onChange={(event) => onPatch(node.id, { waitFor: { event: node.waitFor?.event ?? 'ticket_message_received', ticketSource: node.waitFor?.ticketSource ?? 'active_ticket', status: event.target.value || undefined } })} />
+          {node.waitFor?.ticketSource === 'related_ticket' && (
+            <label>
+              Relation kind (optional)
+              <input
+                value={node.waitFor.relationKind ?? ''}
+                onChange={(event) =>
+                  onPatch(node.id, {
+                    waitFor: { ...node.waitFor!, relationKind: event.target.value || undefined },
+                  })
+                }
+              />
+            </label>
+          )}
+          <label>
+            Required status (optional)
+            <input
+              value={node.waitFor?.status ?? ''}
+              onChange={(event) =>
+                onPatch(node.id, {
+                  waitFor: {
+                    event: node.waitFor?.event ?? 'ticket_message_received',
+                    ticketSource: node.waitFor?.ticketSource ?? 'active_ticket',
+                    status: event.target.value || undefined,
+                  },
+                })
+              }
+            />
           </label>
         </details>
       )}
@@ -1136,7 +1366,14 @@ function ActionFields({
           value={operation}
           onChange={(event) => setOperation(event.target.value as ActionOperation)}
         >
-          {!['inspect_changes','create_ticket','create_related_ticket','update_ticket','move_ticket','set_external_status'].includes(operation) && <option value={operation}>Unsupported: {operation}</option>}
+          {![
+            'inspect_changes',
+            'create_ticket',
+            'create_related_ticket',
+            'update_ticket',
+            'move_ticket',
+            'set_external_status',
+          ].includes(operation) && <option value={operation}>Unsupported: {operation}</option>}
           <option value="inspect_changes">Inspect changes</option>
           <option value="create_ticket">Create ticket</option>
           <option value="create_related_ticket">Create related ticket</option>
@@ -1161,16 +1398,30 @@ function ActionFields({
           {field('title', 'Title')}
           {field('description', 'Description')}
           {field('kind', 'Relation kind', 'related')}
-          <label>Board (optional)
-            <select value={displayValue(input.boardId)} onChange={(event) => onPatchInput(node.id, 'boardId', event.target.value)}>
+          <label>
+            Board (optional)
+            <select
+              value={displayValue(input.boardId)}
+              onChange={(event) => onPatchInput(node.id, 'boardId', event.target.value)}
+            >
               <option value="">Project default</option>
-              {boards.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {boards.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
             </select>
           </label>
           {field('status', 'Status (optional)')}
         </>
       )}
-      {operation === 'set_external_status' && <>{field('connectionId', 'Connection')}{field('status', 'Source status')}{field('evidenceReply', 'Reply evidence')}</>}
+      {operation === 'set_external_status' && (
+        <>
+          {field('connectionId', 'Connection')}
+          {field('status', 'Source status')}
+          {field('evidenceReply', 'Reply evidence')}
+        </>
+      )}
       {operation === 'update_ticket' && (
         <>
           <label>
@@ -1220,7 +1471,11 @@ function ActionFields({
             Column
             <select
               value={displayValue((input.placement as { columnId?: string } | undefined)?.columnId)}
-              onChange={(event) => onPatch(node.id, { input: { ...input, placement: { columnId: event.target.value } } })}
+              onChange={(event) =>
+                onPatch(node.id, {
+                  input: { ...input, placement: { columnId: event.target.value } },
+                })
+              }
             >
               <option value="">Choose column</option>
               {(board?.columns ?? []).map((column) => (

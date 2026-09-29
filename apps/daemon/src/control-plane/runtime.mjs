@@ -964,6 +964,12 @@ export async function createRuntime({
     event,
     canProvision: (s) => placement.effective(s).mode !== 'none',
     inspectArtifact: (s, path) => tool(s, 'read_file', { path }),
+    readReference: (s, ref, node) => {
+      const args = { path: ref.path, offset: ref.startLine, limit: ref.endLine - ref.startLine + 1 };
+      capabilities.validate(s, node, 'read_file', args);
+      return tool(s, 'read_file', args);
+    },
+
     captureArtifacts: async (s, paths) => {
       if (paths.length && (!s.workspace || !s.runnerId))
         throw new Error('Submitted artifacts require an assigned workspace.');

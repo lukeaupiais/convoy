@@ -307,6 +307,70 @@ export function TicketExecution({
               ))}
             </div>
           )}
+          {flow?.lastSubmission &&
+            (flow.lastSubmission.details ||
+              flow.lastSubmission.investigation ||
+              flow.lastSubmission.references?.length) && (
+              <div className="execution-evidence">
+                {flow.lastSubmission.details && (
+                  <details>
+                    <summary>Decision evidence</summary>
+                    <dl>
+                      {Object.entries(flow.lastSubmission.details).map(([field, value]) => (
+                        <div key={field}>
+                          <dt>{field}</dt>
+                          <dd>{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </details>
+                )}
+                {flow.lastSubmission.investigation && (
+                  <details>
+                    <summary>
+                      Investigation questions ({flow.lastSubmission.investigation.questions.length})
+                    </summary>
+                    {flow.lastSubmission.investigation.questions.map((q, index) => (
+                      <div key={index}>
+                        <strong>{q.question}</strong>
+                        <p>
+                          {q.status} · {q.material ? 'Material' : 'Nonmaterial'} ·{' '}
+                          {q.internallyAnswerable
+                            ? 'Internally answerable'
+                            : 'External input needed'}
+                        </p>
+                        <p>{q.resolution || q.nextAction}</p>
+                        {q.evidence && (
+                          <>
+                            <p>{q.evidence.establishes}</p>
+                            <p>Unverified: {q.evidence.unverified}</p>
+                            <p>
+                              {q.evidence.references
+                                .map((i) => {
+                                  const ref = flow.lastSubmission?.references?.[i];
+                                  return ref
+                                    ? `${ref.path}:${ref.startLine}–${ref.endLine}`
+                                    : `Reference ${i}`;
+                                })
+                                .join(', ')}
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </details>
+                )}
+                {flow.lastSubmission.references?.map((ref) => (
+                  <details key={`${ref.path}:${ref.startLine}:${ref.endLine}`}>
+                    <summary>
+                      {ref.path}:{ref.startLine}–{ref.endLine}
+                    </summary>
+                    <pre>{ref.text}</pre>
+                    <small>Captured file SHA-256: {ref.sha256}</small>
+                  </details>
+                ))}
+              </div>
+            )}
           {!focusedArtifactReview && session.workspace && (
             <details className="execution-evidence">
               <summary>Changes & verification</summary>

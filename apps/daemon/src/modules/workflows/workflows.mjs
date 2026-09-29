@@ -1,3 +1,5 @@
+import { submissionContract, validateSubmissionContract } from './submission-contract.mjs';
+import { normalizeSubmissionRequirements, validateSubmissionRequirements } from './submission-requirements.mjs';
 import { randomUUID } from 'node:crypto';
 
 const required = (value, label, limit = 6000) => {
@@ -86,7 +88,11 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (node.requiresCheck && node.permissions !== 'full') throw new Error(`${node.name}: a required shell check needs read, write and shell permission.`);
     if (!['none', 'read', 'read-write', 'full'].includes(node.permissions)) throw new Error(`${node.name}: invalid tool policy.`);
     node.maxRounds ??= 12;
-    if (!Number.isInteger(node.maxRounds) || node.maxRounds < 1 || node.maxRounds > 20) throw new Error(`${node.name}: choose 1–20 agent rounds.`);
+    if (!Number.isInteger(node.maxRounds) || node.maxRounds < 1 || node.maxRounds > 100) throw new Error(`${node.name}: choose 1–100 agent rounds.`);
+    if (node.finalizationRounds !== undefined && (!Number.isInteger(node.finalizationRounds) || node.finalizationRounds < 0 || node.finalizationRounds >= node.maxRounds)) throw new Error(`${node.name}: finalization rounds must be nonnegative and below max rounds.`);
+    if (node.reasoningEffort !== undefined && !['low', 'medium', 'high'].includes(node.reasoningEffort)) throw new Error(`${node.name}: unsupported reasoning effort.`);
+    if (node.summaryHeadings !== undefined && (!Array.isArray(node.summaryHeadings) || node.summaryHeadings.length > 12 || new Set(node.summaryHeadings).size !== node.summaryHeadings.length || node.summaryHeadings.some(h => typeof h !== 'string' || !h.trim() || h.length > 80 || /[\r\n]/.test(h)))) throw new Error(`${node.name}: invalid summary headings.`);
+    if (node.submissionRequirements !== undefined) node.submissionRequirements = normalizeSubmissionRequirements(node.submissionRequirements);
     node.skills ??= [];
     if (!Array.isArray(node.skills) || node.skills.length > 30 || node.skills.some(id => typeof id !== 'string')) throw new Error(`${node.name}: invalid skill selection.`);
     if (node.model && (typeof node.model !== 'string' || node.model.length > 100)) throw new Error(`${node.name}: invalid model.`);
@@ -171,7 +177,7 @@ export function ensureAgentSessions(s) {
   return s.agentSessions[s.currentAgentSessionId];
 }
 
-export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), captureArtifacts = async (_s, paths) => paths, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {} }) {
+export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {} }) {
   let pumping = false; let pumpAgain = false;
   const nodes = s => s.workflow.nodes ?? s.workflow.steps;
   const current = s => { const list = nodes(s); return list.find(n => n.id === s.flow?.nodeId) ?? list[s.step]; };
@@ -179,14 +185,12 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
   function active(s) { return s.flow && !['completed', 'cancelled'].includes(s.flow.status); }
   function edgeFor(s, outcome) { const node = current(s); const edges = s.workflow.edges.filter(e => e.from === node.id); return edges.find(e => e.outcome === outcome) ?? edges.find(e => e.outcome === '*') ?? edges.find(e => e.outcome === 'default') ?? null; }
   function assertOutcome(s, outcome) {
-    if (edgeFor(s, outcome)) return;
     const node = current(s);
-    const forwardEdges = s.workflow.edges.filter(edge => edge.from === node.id && !['failed', 'changes_requested'].includes(edge.outcome));
-    // A terminal success may still expose a repair/revision loop. Custom
-    // forward routes require an explicit choice; omission must not skip them.
-    if (!forwardEdges.length && ['success', 'approved'].includes(outcome)) return;
-    throw new Error(`No workflow edge handles outcome ${outcome} from ${node.name}. Choose a configured outcome.`);
+    const {outcomes} = submissionContract(s.workflow, node);
+    if (outcomes === null || outcomes.includes(outcome)) return;
+    throw new Error(`No workflow edge handles outcome ${outcome} from ${node.name}. Choose a configured outcome: ${outcomes.join(', ')}.`);
   }
+
   function activate(s, nodeId, outcome = 'success') {
     const list = nodes(s); const index = list.findIndex(n => n.id === nodeId); if (index < 0) throw new Error('Workflow transition references an unknown node.');
     s.step = index; s.flow.nodeId = nodeId; s.flow.instance = randomUUID(); s.flow.validation = null; s.flow.submission = null; s.flow.agentSessionId = null; s.flow.lastOutcome = outcome;
@@ -216,23 +220,24 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     }
     return { artifact, digest: review?.digest, at: new Date().toISOString() };
   }
-  async function finish(s, summary, artifacts, outcome = 'success') {
+  async function finish(s, summary, artifacts, outcome = 'success', submissionEvidence = null) {
     const instance = s.flow.instance; const status = s.flow.status; const node = current(s); if (node.artifact && !artifacts.includes(node.artifact.path)) throw new Error(`Include ${node.artifact.path} in the submission.`);
     assertOutcome(s, outcome);
     if (['changes_requested', 'failed'].includes(outcome) && s.flow.revision >= s.workflow.maxRevisions) throw new Error('Workflow revision limit reached.');
-    const evidence = await validate(s, outcome); if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed during validation. Submission was not accepted.');
+    const evidence = { ...await validate(s, outcome), ...(submissionEvidence ? { ...submissionEvidence, sourceNodeId: node.id } : {}) }; if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed during validation. Submission was not accepted.');
     const capturedArtifacts = await captureArtifacts(s, artifacts);
     if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed while capturing artifacts. Submission was not accepted.');
     const primaryArtifact = capturedArtifacts.find(artifact => artifact?.path === node.artifact?.path) ?? capturedArtifacts.find(artifact => artifact?.id);
-    s.flow.validation = evidence; s.flow.submission = { summary, artifacts }; s.flow.lastSubmission = {
+    s.flow.validation = evidence; s.flow.submission = { summary, artifacts, ...(submissionEvidence ?? {}) }; s.flow.lastSubmission = {
       nodeId: node.id,
       step: node.name,
       summary,
+      ...(submissionEvidence ?? {}),
       revision: s.flow.revision + 1,
       ...(primaryArtifact?.id ? { primaryArtifactId: primaryArtifact.id } : {}),
       artifacts: capturedArtifacts,
     };
-    if (evidence.artifact || evidence.digest) { s.flow.evidenceTrail ??= []; s.flow.evidenceTrail.push({ nodeId: node.id, instance, evidence }); s.flow.evidenceTrail = s.flow.evidenceTrail.slice(-50); }
+    if (evidence.artifact || evidence.digest || evidence.details) { s.flow.evidenceTrail ??= []; s.flow.evidenceTrail.push({ nodeId: node.id, instance, evidence }); s.flow.evidenceTrail = s.flow.evidenceTrail.slice(-50); }
     event(s, 'step_submitted', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance, summary, evidence, outcome });
     if (['changes_requested', 'failed'].includes(outcome)) { s.flow.revision++; s.flow.evidenceTrail = []; event(s, 'evidence_invalidated', { fromNode: node.id, revision: s.flow.revision, outcome }); }
     if (node.advance === 'manual' && outcome === 'success') { s.flow.status = 'awaiting_continue'; s.status = 'awaiting_continue'; }
@@ -276,8 +281,22 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     },
     async submit(s, instance, args) {
       requireInstance(s, instance); const node = current(s); if (s.flow.status !== 'running' || node.kind !== 'agent') throw new Error('This agent cannot submit the current step.'); const summary = required(args.summary, 'Completion summary', 4000);
-      if (!Array.isArray(args.artifacts) || args.artifacts.length > 20 || args.artifacts.some(x => typeof x !== 'string' || x.length > 200)) throw new Error('Submit artifact paths as a list.'); const outcome = args.outcome ?? 'success'; if (!/^[\w.*:-]{1,80}$/.test(outcome)) throw new Error('Invalid workflow outcome.');
-      try { return await finish(s, summary, args.artifacts, outcome); } catch (e) { event(s, 'submission_rejected', { instance, message: e.message }); await save(); throw e; }
+      let outcome;
+      try {
+        outcome = validateSubmissionContract(submissionContract(s.workflow, node), args);
+        for (const heading of node.summaryHeadings ?? []) {
+          const lines = summary.split('\n');
+          const index = lines.findIndex(line => line.replace(/^#{1,6}\s+/, '').trim().toLowerCase() === heading.toLowerCase() && /^#{1,6}\s+/.test(line));
+          const body = index < 0 ? '' : lines.slice(index + 1).join('\n').split(/\n#{1,6}\s/)[0].trim();
+          if (!body || /^#{1,6}\s/.test(body)) throw new Error(`Submission needs a nonempty Markdown section: ${heading}.`);
+        }
+      assertOutcome(s, outcome);
+      let structured = null;
+      if (node.submissionRequirements) structured = await validateSubmissionRequirements(node, args, ref => readReference(s, ref, node));
+      else if (args.details !== undefined || args.references !== undefined || args.investigation !== undefined) throw new Error('Structured evidence is not configured for this step.');
+      requireInstance(s, instance);
+      if (s.flow.status !== 'running') throw new Error('Workflow changed during source validation.');
+      return await finish(s, summary, args.artifacts, outcome, structured); } catch (e) { event(s, 'submission_rejected', { instance, message: e.message }); await save(); throw e; }
     },
     async finishAutomated(s, instance, outcome = 'success', result = null) { requireInstance(s, instance); if (s.flow.status !== 'running') throw new Error('Workflow is no longer running.'); const node = current(s); if (result) s.flow.actionResult = result; return finish(s, `${node.name} completed`, node.artifact ? [node.artifact.path] : [], outcome); },
     async decide(s, command) {
@@ -295,6 +314,13 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
           const file = await inspectArtifact(s, s.flow.previousEvidence.artifact.path);
           if (!file || file.sha256 !== s.flow.previousEvidence.artifact.hash) throw new Error('Submitted evidence changed. Request a fresh submission before approving.');
         }
+        for (const ref of s.flow.previousEvidence?.references ?? []) {
+          const origin = (s.workflow.nodes ?? s.workflow.steps).find(n => n.id === s.flow.previousEvidence.sourceNodeId);
+          if (!origin || origin.kind !== 'agent') throw new Error('Source evidence has no originating agent step. Request a fresh submission.');
+          const file = await readReference(s, ref, origin);
+          requireInstance(s, command.instance);
+          if (s.flow.status !== 'waiting_gate' || !file || file.sha256 !== ref.sha256) throw new Error('Submitted source evidence changed. Request a fresh submission before approving.');
+        }
         if (s.flow.previousEvidence?.digest && s.workspace) {
           const review = await inspectChanges(s, s.flow.previousEvidence.artifact?.path);
           if (!review || review.digest !== s.flow.previousEvidence.digest) throw new Error('Submitted evidence changed. Request a fresh submission before approving.');
@@ -306,8 +332,51 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       else if (['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status)) { const resume = s.flow.resumeStatus; s.flow.status = ['awaiting_continue', 'waiting_gate', 'waiting_event'].includes(resume) ? resume : 'ready'; s.flow.resumeStatus = null; s.status = s.flow.status; }
       else throw new Error('This workflow is not waiting to continue.'); await save();
     },
-    async pause(s, cancel = false) { if (!active(s)) throw new Error('No active workflow.'); if (s.flow.status === 'paused' && !cancel) return; s.flow.resumeStatus = s.flow.status; s.flow.status = cancel ? 'cancelled' : 'paused'; s.status = s.flow.status; event(s, cancel ? 'workflow_cancelled' : 'workflow_paused', { instance: s.flow.instance }); abort(s); await save(); },
-    async ordinaryResponse(s, instance) { requireInstance(s, instance); s.flow.status = 'awaiting_submission'; s.status = 'awaiting_submission'; event(s, 'submission_required', { message: 'Agent replied without submit_step. The workflow has not advanced.' }); await save(); },
+    async pause(s, cancel = false) { if (!active(s) && !(cancel && s.flow?.status === 'cancelled')) throw new Error('No active workflow.'); if (cancel) { delete s.queuedInput; delete s.queueReason; } if (s.flow.status === 'paused' && !cancel) return; s.flow.resumeStatus = s.flow.status; s.flow.status = cancel ? 'cancelled' : 'paused'; s.status = s.flow.status; event(s, cancel ? 'workflow_cancelled' : 'workflow_paused', { instance: s.flow.instance }); abort(s); await save(); },
+    async finishIncomplete(s, instance, args, budget) {
+      requireInstance(s, instance);
+      if (s.flow.status !== 'running' || current(s).kind !== 'agent' || s.pending || s.pendingQuestion)
+        throw new Error('This step cannot finish incomplete while inactive or waiting for a human answer.');
+      if (!['budget', 'blocked'].includes(args.reason)) throw new Error('Choose budget or blocked.');
+      if (args.reason === 'budget' && !budget?.finalizing && !(budget && budget.round + 1 >= budget.maxRounds))
+        throw new Error('Investigation requests remain. Continue the next internal action; use budget only during finalization.');
+      const report = {
+        summary: required(args.summary, 'Established findings', 4000),
+        missingEvidence: required(args.missingEvidence, 'Missing evidence or observed blocker', 4000),
+        nextAction: required(args.nextAction, 'Next internal action', 2000),
+        reason: args.reason,
+      };
+      s.flow.status = 'awaiting_submission'; s.status = 'awaiting_submission';
+      event(s, 'workflow_incomplete', {instance, ...report});
+      await save();
+      return {accepted: true, complete: false, next: 'awaiting_submission', message: 'Incomplete work recorded. The workflow has not advanced and no continuation is scheduled. Stop this execution.'};
+    },
+    async ordinaryResponse(s, instance, { budget, corrections = 0 } = {}) {
+      requireInstance(s, instance);
+      // Never turn a pause, cancellation, or durable human wait back into work.
+      if (s.flow.status !== 'running' || s.pending || s.pendingQuestion) return { stop: true };
+      const exhausted = !budget || budget.round + 1 >= budget.maxRounds;
+      const reason = exhausted ? 'budget_exhausted'
+        : budget.finalizing ? 'finalization'
+        : corrections >= 2 ? 'completion_correction_limit' : null;
+      if (!reason) {
+        const feedback = 'Convoy workflow control: no submit_step has been accepted. '
+          + 'Continue the unfinished internal work now using the available tools; a plan for a next action does not schedule another execution. '
+          + 'Submit only an evidence-supported configured outcome. If progress needs user input or approval, use the existing request mechanism. '
+          + 'Do not invent a successful outcome or route unfinished investigation as customer clarification. '
+          + 'This continuation uses the same execution and remaining request allowance.';
+        event(s, 'completion_continued', { instance, correction: corrections + 1, message: feedback });
+        await save();
+        return { stop: false, feedback };
+      }
+      s.flow.status = 'awaiting_submission';
+      s.status = 'awaiting_submission';
+      event(s, 'submission_required', {
+        reason, message: 'Investigation incomplete: no submit_step was accepted. The workflow has not advanced.',
+      });
+      await save();
+      return { stop: true };
+    },
     async fail(s, instance) { if (s.flow?.instance === instance && !['paused', 'cancelled', 'completed'].includes(s.flow.status)) { s.flow.status = s.status === 'interrupted' ? 'interrupted' : 'failed'; await save(); } },
     async executeAction(s, instance, result = null) { requireInstance(s, instance); if (actionExecutor) return actionExecutor(s, current(s), instance, result); return null; },
   };

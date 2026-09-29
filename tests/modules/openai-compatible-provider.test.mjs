@@ -133,3 +133,10 @@ test('OpenAI-compatible adapter treats a cleanly truncated stream as uncertain',
     (error) => error.providerOutcome === 'uncertain',
   );
 });
+
+test('unsupported reasoning settings fail before dispatch with a nonretryable classification', async () => {
+  let calls = 0;
+  const adapter = createOpenAICompatibleProvider({id: 'fixture', name: 'Fixture', endpoint: 'https://example.invalid', fetch: async () => {calls++; throw new Error('Should not dispatch');}});
+  await assert.rejects(async () => {for await (const _ of adapter.generate({model: 'fixture', modelSettings: {reasoningEffort: 'medium'}})) {}}, error => error.providerOutcome === 'not-sent' && error.retryable === false);
+  assert.equal(calls, 0);
+});

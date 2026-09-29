@@ -5,3 +5,5 @@ export { createWorkflows, migrateWorkflowState } from './workflow-module.mjs';
 export { createAutomations, initializeAutomations, workflowForProject } from './automations.mjs';
 export { workflowActionInput } from './action-input.mjs';
 export { boardAutomationRelationships } from './board-automations.mjs';
+
+export { submissionContract, submissionToolSchema, validateSubmissionContract } from './submission-contract.mjs';

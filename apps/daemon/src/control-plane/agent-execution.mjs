@@ -64,6 +64,8 @@ export function createAgentExecution({
       let providerRounds = { generation: 0, compaction: 0 };
       let providerTurnKey;
       let routedGenerate;
+      let completionCorrections = 0;
+      let incomplete = false;
       let execute = (...args) => runners.execute(...args);
       const handlers = {
         setExecutor: (value) => {
@@ -74,7 +76,7 @@ export function createAgentExecution({
           event(s, 'worker_started', worker);
           await store.save();
         },
-        prepare: async () => {
+        prepare: async (budget) => {
           if (signal.aborted) throw new Error('Stopped');
           if (steering.deliver(s)) await store.save();
           if (!s.workspace && s.activeTicketId && placement.effective(s).mode !== 'none') {
@@ -87,6 +89,13 @@ export function createAgentExecution({
               );
             pinInstructions(s);
           }
+          s.modelRunSettings = {
+            ...(step?.reasoningEffort ? { reasoningEffort: step.reasoningEffort } : {}),
+          };
+          s.investigationBudget = {
+            ...budget,
+            cumulativeRequests: s.investigationBudget?.cumulativeRequests ?? 0,
+          };
           let knowledgeText = '';
           if (s.capabilityProfile?.knowledge?.collectionIds?.length) {
             await authorizeKnowledge(s);
@@ -105,7 +114,7 @@ export function createAgentExecution({
           const previousHash = s.provenance?.hash;
           s.provenance = {
             hash: compiled.hash,
-            systemPrompt,
+            systemPrompt: systemPrompt,
             contextEpoch: {
               id: compiled.epoch.id,
               baselineHash: compiled.epoch.baselineHash,
@@ -129,7 +138,10 @@ export function createAgentExecution({
             : await providerContext(s);
           partial(s, '');
           availableTools = capabilities.modelTools(s, step);
+          if (budget?.finalizing)
+            availableTools = availableTools.filter((t) => ['submit_step', 'finish_incomplete'].includes(t.name));
           declaredTools = availableTools;
+          s.provenance.modelSettings = s.modelRunSettings;
           s.provenance.capabilityProfile = s.capabilityProfile;
           s.provenance.activeSkills = [...(s.activeSkills ?? [])];
           s.provenance.toolSchemaHash = digest(JSON.stringify(declaredTools));
@@ -183,6 +195,7 @@ export function createAgentExecution({
           const contextMessages = await contextFiles.hydrate(s, compacted);
           prepared = {
             model: s.model,
+            modelSettings: s.modelRunSettings,
             prompt: {
               stableInstructions,
               turnInstructions,
@@ -195,6 +208,14 @@ export function createAgentExecution({
           };
         },
         generate: async () => {
+          s.investigationBudget.cumulativeRequests++;
+          event(s, 'model_request_settings', {
+            model: s.model,
+            settings: s.modelRunSettings,
+            budget: s.investigationBudget,
+            toolNames: availableTools.map((t) => t.name),
+          });
+          await store.save();
           let result;
           let persisted = Date.now();
           for await (const item of routedGenerate(prepared)) {
@@ -243,7 +264,7 @@ export function createAgentExecution({
                     adapter: toolDefinition.extension.adapter,
                   }
                 : undefined;
-            if (submitted)
+            if (submitted || incomplete)
               throw new Error('Step already submitted. Remaining calls were not executed.');
             if (call.name === 'submit_step') {
               if (steering.ready(s))
@@ -257,9 +278,20 @@ export function createAgentExecution({
                 throw new Error(
                   'Stop running session commands and native terminals before submitting this workflow step.',
                 );
-              event(s, 'tool_started', { tool: call.name, callId: call.id, ...(extension ? { extension } : {}) });
+              event(s, 'tool_started', {
+                tool: call.name,
+                callId: call.id,
+                ...(extension ? { extension } : {}),
+              });
               output = await getEngine().submit(s, instance, call.arguments);
               submitted = true;
+            } else if (call.name === 'finish_incomplete') {
+              if (steering.ready(s)) throw new Error('New user direction is queued. Read it before ending execution.');
+              if ((s.commands ?? []).some(c => ['running', 'stopping'].includes(c.state)) || activeTerminal(s))
+                throw new Error('Stop running commands and terminals before ending execution.');
+              event(s, 'tool_started', {tool: call.name, callId: call.id});
+              output = await getEngine().finishIncomplete(s, instance, call.arguments, s.investigationBudget);
+              incomplete = true;
             } else if (call.name === 'ask_user') {
               event(s, 'tool_started', { tool: call.name, callId: call.id });
               output = await agentTurns.ask(s, call.arguments, signal);
@@ -377,7 +409,7 @@ export function createAgentExecution({
             }
           } catch (error) {
             isError = true;
-            output = { error: error.message };
+            output = { error: error.message, ...(error.submissionFeedback ?? {}) };
           }
           if (s.inFlightTool?.mutating && (signal.aborted || s.assignment?.state === 'uncertain'))
             steering.interrupt(
@@ -385,7 +417,13 @@ export function createAgentExecution({
               'A tool may have partially changed state. Inspect its result and workspace before resuming.',
               true,
             );
-          event(s, 'tool_result', { tool: call.name, callId: call.id, output, isError, ...(extension ? { extension } : {}) });
+          event(s, 'tool_result', {
+            tool: call.name,
+            callId: call.id,
+            output,
+            isError,
+            ...(extension ? { extension } : {}),
+          });
           delete s.inFlightTool;
           s.messages.push({
             role: 'toolResult',
@@ -402,10 +440,23 @@ export function createAgentExecution({
           return { submitted, output, isError };
         },
         afterRound: async ({ hasCalls, submitted }) => {
-          if (submitted) return true;
-          if (hasCalls || steering.ready(s)) return false;
-          if (instance) await getEngine().ordinaryResponse(s, instance);
-          else {
+          if (signal.aborted) throw new Error('Stopped');
+          if (submitted || incomplete) return true;
+          if (hasCalls || steering.ready(s)) {
+            completionCorrections = 0;
+            return false;
+          }
+          if (instance) {
+            const decision = await getEngine().ordinaryResponse(s, instance, {
+              budget: s.investigationBudget, corrections: completionCorrections,
+            });
+            if (!decision.stop) {
+              completionCorrections++;
+              s.messages.push({ role: 'user', content: decision.feedback, timestamp: Date.now() });
+              await store.save();
+            }
+            return decision.stop;
+          } else {
             s.status = 'awaiting_review';
             s.completedStep = s.step;
             event(s, 'completed', {
@@ -417,6 +468,7 @@ export function createAgentExecution({
       };
       const options = {
         maxRounds: instance ? (step.maxRounds ?? 20) : 20,
+        finalizationRounds: instance ? (step.finalizationRounds ?? 0) : 0,
         workspace: s.workspace?.path,
         parallelTools: [
           'read_file',

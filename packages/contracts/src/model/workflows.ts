@@ -66,11 +66,7 @@ export type WorkflowSessionRule = {
 };
 export type WorkflowArtifact = { path: string; headings: string[] };
 export type WorkflowActionOperation =
-  | 'inspect_changes'
-  | 'create_ticket'
-  | 'create_related_ticket'
-  | 'update_ticket'
-  | 'move_ticket';
+  'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'update_ticket' | 'move_ticket';
 export type WorkflowConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type WorkflowCondition = {
   source: WorkflowConditionSource;
@@ -95,10 +91,27 @@ export type WorkflowStep = {
   session?: WorkflowSessionRule;
   permissions?: WorkflowPermission;
   maxRounds?: number;
+  finalizationRounds?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  summaryHeadings?: string[];
+  submissionRequirements?: Record<
+    string,
+    {
+      fields: string[];
+      minReferences: number;
+      requireInvestigationAssessment?: boolean;
+      requireClaimEvidence?: boolean;
+    }
+  >;
   skills?: string[];
   model?: string;
   condition?: WorkflowCondition;
-  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource?: 'active_ticket' | 'related_ticket'; relationKind?: string; status?: string };
+  waitFor?: {
+    event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated';
+    ticketSource?: 'active_ticket' | 'related_ticket';
+    relationKind?: string;
+    status?: string;
+  };
   x?: number;
   y?: number;
 };

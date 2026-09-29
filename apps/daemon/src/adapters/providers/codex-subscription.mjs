@@ -132,7 +132,8 @@ export function encodeTools(tools = []) {
   }));
 }
 
-function requestBody({ model, prompt, messages, systemPrompt, tools, sessionId }) {
+function requestBody({ model, prompt, messages, systemPrompt, tools, sessionId, modelSettings }) {
+  if (modelSettings?.reasoningEffort !== undefined && !['low', 'medium', 'high'].includes(modelSettings.reasoningEffort)) throw new Error('Unsupported reasoning effort.');
   const instructions = prompt?.stableInstructions ?? systemPrompt;
   const input = [
     ...(prompt?.turnInstructions ? [{
@@ -151,7 +152,7 @@ function requestBody({ model, prompt, messages, systemPrompt, tools, sessionId }
     include: ['reasoning.encrypted_content'],
     tool_choice: 'auto',
     parallel_tool_calls: true,
-    reasoning: { effort: 'low', summary: 'auto' },
+    reasoning: { effort: modelSettings?.reasoningEffort ?? 'low', summary: 'auto' },
   };
   if (sessionId) body.prompt_cache_key = sessionId;
   const declared = encodeTools(tools);
@@ -259,7 +260,7 @@ function finalizeResponse(state, response) {
 }
 
 export function createCodexSubscriptionGenerate({ fetch: request = globalThis.fetch, endpoint = ENDPOINT } = {}) {
-  return async function* generate({ model, prompt, messages, signal, token, systemPrompt, tools, sessionId }) {
+  return async function* generate({ model, prompt, messages, signal, token, systemPrompt, tools, sessionId, modelSettings }) {
     if (!codexSubscriptionModels.some(item => item.id === model)) {
       const error = new Error(`Unknown ChatGPT subscription model: ${model}`);
       error.providerOutcome = 'not-sent';
@@ -281,7 +282,7 @@ export function createCodexSubscriptionGenerate({ fetch: request = globalThis.fe
     try {
       response = await request(endpoint, {
         method: 'POST', headers,
-        body: JSON.stringify(requestBody({ model, prompt, messages, systemPrompt, tools, sessionId })),
+        body: JSON.stringify(requestBody({ model, prompt, messages, systemPrompt, tools, sessionId, modelSettings })),
         signal: combined,
       });
     } catch (caught) {
