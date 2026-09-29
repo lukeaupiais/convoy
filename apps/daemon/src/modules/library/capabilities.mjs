@@ -140,7 +140,7 @@ export function migrateLibraryState(state) {
     }
 }
 
-export function createCapabilities({ state }) {
+export function createCapabilities({ state, validateKnowledge }) {
   migrateLibraryState(state);
   const organizationForProject = (projectId) =>
     state.projects?.find((project) => project.id === projectId)?.organizationId ?? 'personal';
@@ -260,6 +260,8 @@ export function createCapabilities({ state }) {
         !selectedSkills(s, step).length
       )
         reason = 'No skills selected';
+      else if (t.group === 'knowledge' && !pinned?.knowledge?.collectionIds?.length)
+        reason = 'No knowledge selected';
       else if (t.group !== 'harness' && pinned && !selected) reason = 'Not selected in profile';
       else if (selected && selected.hash !== toolHash(t))
         reason = 'Tool definition changed; publish and apply a fresh profile';
@@ -525,7 +527,10 @@ export function createCapabilities({ state }) {
         });
         if (new Set(skills.map((k) => k.name)).size !== skills.length)
           throw new Error('Choose one revision per skill.');
+        const knowledge = c.knowledge === undefined ? undefined : validateKnowledge?.(c.knowledge, organizationId);
+        if (c.knowledge !== undefined && !knowledge) throw new Error('Knowledge selection unavailable.');
         const p = {
+          ...(knowledge ? { knowledge } : {}),
           id,
           organizationId,
           name,
@@ -535,7 +540,7 @@ export function createCapabilities({ state }) {
           extensions,
           at: new Date().toISOString(),
         };
-        p.hash = digest(JSON.stringify({ id, name, tools, skills, extensions }));
+        p.hash = digest(JSON.stringify({ id, name, tools, skills, extensions, ...(knowledge ? { knowledge } : {}) }));
         state.capabilityProfiles.push(p);
         return p;
       }

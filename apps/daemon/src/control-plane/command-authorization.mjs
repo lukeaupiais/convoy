@@ -24,6 +24,7 @@ const projectWrite = new Set([
  */
 export function createCommandAuthorization({
   state,
+  knowledgeAccess,
   contextFor,
   requireProjectPermission,
   requireOrganizationPermission,
@@ -99,6 +100,11 @@ export function createCommandAuthorization({
   }
 
   async function authorize(command, actor) {
+    const knowledge = knowledgeAccess?.(command);
+    if (knowledge) {
+      await projectId(knowledge.projectId, knowledge.permission, command, actor);
+      return;
+    }
     if (command.action === 'validateSkill') return;
     if (localOnly.has(command.action)) {
       if (!isBootstrapPrincipal(actor)) denied();

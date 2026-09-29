@@ -21,6 +21,7 @@ const sessionCommands = ['setCapabilityProfile'];
  */
 export function createLibrary({
   state,
+  validateKnowledge,
   save,
   catalog,
   parseSessionId,
@@ -30,7 +31,7 @@ export function createLibrary({
   event,
 }) {
   migrateLibraryState(state);
-  const capabilities = createCapabilities({ state });
+  const capabilities = createCapabilities({ state, validateKnowledge });
   const instructions = createInstructionLibrary({
     state,
     save,

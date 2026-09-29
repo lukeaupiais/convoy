@@ -14,6 +14,16 @@ const session = (required = [], optional = []) => contract(required, optional);
  * drift before orchestration begins.
  */
 export const runtimeCommandContracts = {
+  updateKnowledgeCollection: contract(['collectionId', 'expectedRevision', 'name', 'description', 'startPageIds', 'pageOrder']),
+  createKnowledgeCollection: contract(['projectId', 'name']),
+  setKnowledgeCollectionState: contract(['collectionId', 'expectedRevision', 'state']),
+  saveKnowledgeDraft: contract(['collectionId', 'expectedRevision', 'title', 'body'], ['pageId', 'aliases', 'language', 'applicability']),
+  publishKnowledgePage: contract(['pageId', 'expectedRevision']),
+  setKnowledgePageState: contract(['pageId', 'expectedRevision', 'state']),
+  listKnowledgePages: contract(['projectId'], ['collectionId', 'offset', 'limit', 'draft']),
+  readKnowledgePage: contract(['pageId'], ['version', 'draft', 'offset', 'limit', 'anchor']),
+  searchKnowledge: contract(['projectId', 'query'], ['collectionId', 'limit']),
+
   querySecurityAudit: contract(
     ['organizationId'],
     ['cursor', 'limit', 'eventAction', 'outcome', 'projectId'],
@@ -154,7 +164,7 @@ export const runtimeCommandContracts = {
   publishExtension: contract(['manifest', 'trusted'], ['organizationId', 'projectId']),
   publishProfile: contract(
     ['name', 'tools', 'skills'],
-    ['organizationId', 'projectId', 'id', 'baseVersion', 'extensions'],
+    ['organizationId', 'projectId', 'id', 'baseVersion', 'extensions', 'knowledge'],
   ),
   publishSkill: contract(
     ['files', 'trusted'],
@@ -259,6 +269,8 @@ export const runtimeCommandContracts = {
 };
 
 const primitiveShapes = {
+  startPageIds: 'array', pageOrder: 'array',
+  collectionId: 'string', pageId: 'string', draft: 'boolean', body: 'string', aliases: 'array', language: 'string', applicability: 'string', knowledge: 'object', anchor: 'string',
   action: 'string',
   client: 'string',
   sessionId: 'string',

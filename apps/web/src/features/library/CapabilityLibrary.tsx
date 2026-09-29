@@ -17,6 +17,8 @@ import type {
 } from '../../../../../packages/contracts/src';
 import { Select } from '../../shared/ui/Select';
 import './capabilities.css';
+import { KnowledgePicker } from '../knowledge';
+import type { KnowledgeSelection } from '../../../../../packages/contracts/src';
 import { ToolLibrary } from './ToolLibrary';
 
 export type {
@@ -179,6 +181,7 @@ export function CapabilityLibrary({
   const [trusted, setTrusted] = useState(false);
   const [profileId, setProfileId] = useState('');
   const [profileName, setProfileName] = useState('');
+  const [knowledge, setKnowledge] = useState<KnowledgeSelection>({ collectionIds: [] });
   const [baseVersion, setBaseVersion] = useState(0);
   const [tools, setTools] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
@@ -206,6 +209,7 @@ export function CapabilityLibrary({
   function editProfile(p?: CapabilityProfile) {
     setProfileId(p?.id ?? '');
     setProfileName(p?.name ?? '');
+    setKnowledge(p?.knowledge ?? { collectionIds: [] });
     setBaseVersion(p?.version ?? 0);
     setTools(p?.tools.map((t) => t.id) ?? []);
     setSkills(p?.skills.map((s) => `${s.name}@${s.version}`) ?? []);
@@ -473,6 +477,7 @@ export function CapabilityLibrary({
               void perform('publishProfile', {
                 id: profileId,
                 name: profileName,
+                knowledge,
                 baseVersion,
                 tools,
                 skills: skills.map((v) => {
@@ -509,6 +514,7 @@ export function CapabilityLibrary({
                 />
               </label>
             </div>
+            <KnowledgePicker state={state} value={knowledge} onChange={setKnowledge} />
             <fieldset>
               <legend>Tools</legend>
               <div className="capability-options">

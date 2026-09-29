@@ -23,3 +23,5 @@ shared contracts when changing code or UI copy.
 Architecture documents describe current boundaries and note unfinished work
 where relevant. The nearest source README describes ownership within a directory;
 tests verify behavior at the corresponding boundary.
+
+Project knowledge: [Wiki foundation](architecture/wiki-foundation.md) and [Wiki interface](architecture/wiki-interface.md).
