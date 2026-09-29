@@ -8,6 +8,7 @@ desktop-dist/
 .convoy/
 /.convoy
 .convoy-worktrees/
+/.worktrees/
 .playwright-cli/
 output/
 .env
