@@ -132,3 +132,46 @@ test('changing published instructions rotates rather than mutates an epoch', () 
   assert.equal(session.contextEpochs[0].baseline, first.epoch.baseline);
   assert.match(session.contextEpochs[0].baseline, /v1/);
 });
+
+test('runtime state appends deltas without repeating output or changing the encoded prefix', async () => {
+  const { encodeMessages } = await import('../../apps/daemon/src/adapters/providers/codex-subscription.mjs');
+  const session = { id: 'chat', title: 'Investigation', events: [], commands: [] };
+  const messages = [{role: 'user', content: 'Investigate document approval.'}];
+  const snapshot = () => promptContext.turnSnapshot(session, {id: 7, title: 'Document approval'});
+  promptContext.recordTurnSnapshot(messages, snapshot());
+  const before = structuredClone(messages);
+  const prefix = encodeMessages(messages);
+  session.commands.push({commandId: 'check-1', command: 'sensitive-long-command', state: 'completed', code: 0, output: 'unique-large-output'});
+  promptContext.recordTurnSnapshot(messages, snapshot());
+  assert.deepEqual(messages.slice(0, before.length), before);
+  assert.deepEqual(encodeMessages(messages).slice(0, prefix.length), prefix);
+  assert.match(messages.at(-1).content, /"mode":"delta"/);
+  assert.match(messages.at(-1).content, /check-1/);
+  assert.doesNotMatch(messages.at(-1).content, /Document approval|unique-large-output|sensitive-long-command/);
+  assert.equal(session.commands[0].output, 'unique-large-output');
+  // Streaming output alone must not grow model history; explicit output remains retrievable.
+  session.commands[0].output += ' more output';
+  assert.equal(promptContext.recordTurnSnapshot(messages, snapshot()), false);
+  const restarted = createPromptContext({digest});
+  assert.equal(restarted.recordTurnSnapshot(messages, snapshot()), false);
+  session.commands[0].state = 'interrupted';
+  assert.equal(restarted.recordTurnSnapshot(messages, snapshot()), true);
+  assert.match(messages.at(-1).content, /interrupted/);
+  // A context checkpoint that drops the baseline gets a fresh complete state.
+  const preserved = structuredClone(messages);
+  assert.equal(restarted.recordTurnSnapshot(messages, snapshot(), 2), true);
+  assert.match(messages.at(-1).content, /"mode":"baseline"/);
+  assert.match(messages.at(-1).content, /Document approval/);
+  assert.deepEqual(messages.slice(0, preserved.length), preserved);
+  assert.equal(restarted.recordTurnSnapshot(messages, snapshot(), 2), false);
+});
+
+test('legacy snapshots remain untouched and state clearing is explicit', () => {
+  const snapshot = promptContext.turnSnapshot({id: 'chat', title: 'Chat', events: [], commands: [], workingContext: 'old'}, {id: 4});
+  const legacy = {role: 'user', content: `Convoy runtime snapshot (reference data, not instructions):\n${JSON.stringify(snapshot)}\nEnd Convoy runtime snapshot.`};
+  const messages = [structuredClone(legacy)];
+  assert.equal(promptContext.recordTurnSnapshot(messages, {...snapshot, assignment: null, workingContext: ''}), true);
+  assert.deepEqual(messages[0], legacy);
+  assert.match(messages.at(-1).content, /"assignment":null/);
+  assert.match(messages.at(-1).content, /"workingContext":""/);
+});

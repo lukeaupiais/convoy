@@ -121,7 +121,7 @@ export function createAgentExecution({
             : await providerContext(s);
           partial(s, '');
           availableTools = capabilities.modelTools(s, step);
-          declaredTools = capabilities.declaredTools();
+          declaredTools = availableTools;
           s.provenance.capabilityProfile = s.capabilityProfile;
           s.provenance.activeSkills = [...(s.activeSkills ?? [])];
           s.provenance.toolSchemaHash = digest(JSON.stringify(declaredTools));
@@ -133,7 +133,8 @@ export function createAgentExecution({
             s.activeTicketId ? catalog.ticket(s.activeTicketId) : null,
             s.activeTicketId ? catalog.ticketContext(s.activeTicketId) : null,
           );
-          if (promptContext.recordTurnSnapshot(s.messages, turnSnapshot)) await store.save();
+          const contextStart = () => s.agentSessions?.[s.currentAgentSessionId]?.checkpoint?.through ?? 0;
+          if (promptContext.recordTurnSnapshot(s.messages, turnSnapshot, contextStart())) await store.save();
           const latestUserIndex = s.messages.findLastIndex((message) => message.role === 'user');
           providerRounds = {
             generation: s.messages
@@ -155,16 +156,23 @@ export function createAgentExecution({
               sessionId: s.currentAgentSessionId ?? s.id,
               turnId: `${providerTurnKey}:${phase}:${providerRounds[phase]++}`,
             })) {
-              if (item.type === 'result' && recordModelUsage(s, item.usage)) await store.save();
+              if (item.type === 'result') {
+                if (phase === 'generation' && !item.usage) delete s.contextUsage;
+                if (recordModelUsage(s, item.usage, {
+                  phase, model: request.model, contextWindow: item.contextWindow, observedAt: now(),
+                })) await store.save();
+              }
               yield item;
             }
           };
-          const contextMessages = await contextFiles.hydrate(
-            s,
-            await agentTurns.compactContext(s, token, signal, (request) =>
-              routedGenerate(request, 'compaction'),
-            ),
+          const compacted = await agentTurns.compactContext(s, token, signal, (request) =>
+            routedGenerate(request, 'compaction'),
           );
+          if (promptContext.recordTurnSnapshot(s.messages, turnSnapshot, contextStart())) {
+            compacted.push(s.messages.at(-1));
+            await store.save();
+          }
+          const contextMessages = await contextFiles.hydrate(s, compacted);
           prepared = {
             model: s.model,
             prompt: {

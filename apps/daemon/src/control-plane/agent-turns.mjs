@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { shouldCompactContext } from '../modules/conversations/index.mjs';
 
 /** Owns the durable human-input gates and context compaction for agent turns. */
 export function createAgentTurns({
@@ -327,26 +328,14 @@ export function createAgentTurns({
         ]
       : [];
     const remaining = session.messages.slice(start);
-    const contextSize = (messages) =>
-      JSON.stringify(messages).length +
-      messages.reduce(
-        (total, message) =>
-          total +
-          (message.attachments ?? [])
-            .filter((file) => file.mime === 'text/plain')
-            .reduce((sum, file) => sum + file.size, 0),
-        0,
-      );
-    if (contextSize(remaining) < 180000) return [...prefix, ...remaining];
+    if (!shouldCompactContext(session)) return [...prefix, ...remaining];
+    const measurement = session.contextUsage;
+    // Keep the latest user boundary and its complete tool interactions intact.
+    // Full durable history remains in storage; only the model projection changes.
     let cut = -1;
-    for (let index = session.messages.length - 1; index > start; index--)
-      if (
-        session.messages[index].role === 'user' &&
-        contextSize(session.messages.slice(index)) < 160000
-      ) {
-        cut = index;
-        break;
-      }
+    for (let index = session.messages.length - 1; index > start; index--) {
+      if (session.messages[index].role === 'user') { cut = index; break; }
+    }
     if (cut < 0)
       throw new Error(
         'Context limit reached within one turn. Stop and split this request; history remains saved.',
@@ -365,7 +354,10 @@ export function createAgentTurns({
           content: JSON.stringify({
             previousSummary: checkpoint?.summary,
             workingContext: session.workingContext,
-            history: await contextFiles.hydrate(session, session.messages.slice(start, cut), false),
+            history: (await contextFiles.hydrate(session, session.messages.slice(start, cut), false))
+              .map((message) => ({ ...message, content: Array.isArray(message.content)
+                ? message.content.map(({ thinkingSignature, textSignature, ...block }) => block)
+                : message.content })),
           }),
           timestamp: Date.now(),
         },
@@ -386,7 +378,11 @@ export function createAgentTurns({
       at: now(),
       sourceHash: digest(JSON.stringify(session.messages.slice(0, cut))),
     };
+    delete session.contextUsage;
     event(session, 'context_compacted', {
+      inputTokens: measurement.inputTokens,
+      contextWindow: measurement.contextWindow,
+      compactAtTokens: measurement.compactAtTokens,
       summary,
       through: cut,
       sourceHash: record.checkpoint.sourceHash,

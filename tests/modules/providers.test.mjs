@@ -458,3 +458,17 @@ test('fallback issues a separate pinned grant only after policy-approved safe ou
   await providers.routing.recordOutcome(fallback.id, { classification: 'uncertain' });
   await assert.rejects(providers.routing.resolveFallbackGrant(fallback.id), /not permitted/);
 });
+
+test('compatibility context limits fill missing metadata and preserve discovered limits', async () => {
+  const state = {};
+  const providers = createProviders({ state });
+  const input = { organizationId: 'personal', userId: 'local', providerId: 'subscription', displayName: 'Subscription', credentialRef: { kind: 'subscription', reference: 'oauth', version: '1' }, models: [{ id: 'example-model', input: ['text'] }] };
+  await providers.administration.ensureSubscriptionCompatibility(input);
+  assert.equal(state.modelOfferings[0].verifiedCapabilities.contextWindow, undefined);
+  input.models[0].contextWindow = 64000;
+  await providers.administration.ensureSubscriptionCompatibility(input);
+  assert.equal(state.modelOfferings[0].verifiedCapabilities.contextWindow, 64000);
+  state.modelOfferings[0].verifiedCapabilities.contextWindow = 128000;
+  await providers.administration.ensureSubscriptionCompatibility(input);
+  assert.equal(state.modelOfferings[0].verifiedCapabilities.contextWindow, 128000);
+});

@@ -262,10 +262,19 @@ test('project context cannot leak through reassignment; workflow decisions and r
 });
 
 test('context compaction retains full history and a durable checkpoint',async t=>{
-  const f=await fixture(t,(input)=>input.systemPrompt?.startsWith('Summarize conversation')?reply('Decision: blue architecture; do not deploy.'):reply('Continuing'));
+  const f=await fixture(t,(input)=>{
+    if (input.systemPrompt?.startsWith('Summarize conversation')) {
+      assert.equal(JSON.stringify(input.messages).includes('opaque-test-signature'), false);
+      return reply('Decision: blue architecture; do not deploy.');
+    }
+    return reply('Continuing');
+  });
   await f.runtime.close();
   const path=join(f.options.directory,'state.json');const data=JSON.parse(await readFile(path,'utf8'));
-  const s=data.sessions[f.c.sessionId];s.messages=Array.from({length:24},(_,i)=>i%2?reply('Evidence '+ 'x'.repeat(9500)):{role:'user',content:'Blue architecture '+ 'y'.repeat(9500),timestamp:Date.now()});
+  const s=data.sessions[f.c.sessionId];s.messages=Array.from({length:24},(_,i)=>i%2?reply('Evidence '+ 'x'.repeat(95)):{role:'user',content:'Blue architecture '+ 'y'.repeat(95),timestamp:Date.now()});
+  s.messages[1].content.push({type:'thinking',thinking:'Useful observation',thinkingSignature:'opaque-test-signature'});
+  s.currentAgentSessionId='context-agent';s.agentSessions={'context-agent':{id:'context-agent',name:'Agent',messages:s.messages,createdAt:new Date().toISOString()}};
+  s.contextUsage={model:'test',agentSessionId:s.currentAgentSessionId,checkpointThrough:0,inputTokens:200000,contextWindow:240000,compactAtTokens:192000,observedAt:new Date().toISOString()};
   await writeFile(path,JSON.stringify(data));
   const runtime=await createRuntime(f.options);
   try {
@@ -276,4 +285,32 @@ test('context compaction retains full history and a durable checkpoint',async t=
   } finally { await runtime.close(); }
   const saved=JSON.parse(await readFile(path,'utf8')).sessions[s.id];
   assert.equal(saved.messages.length,27);assert.ok(saved.agentSessions[saved.currentAgentSessionId].checkpoint.summary);
+});
+
+test('large stored history below measured token threshold does not compact', async t => {
+  const f = await fixture(t, input => {
+    assert.notEqual(input.systemPrompt?.startsWith('Summarize conversation'), true);
+    return { message: reply('Done'), usage: { inputTokens: 44000, outputTokens: 5 } };
+  });
+  await f.runtime.close();
+  const path = join(f.options.directory, 'state.json');
+  const data = JSON.parse(await readFile(path, 'utf8'));
+  const s = data.sessions[f.c.sessionId];
+  s.messages = [{ role: 'user', content: 'x'.repeat(200000), timestamp: Date.now() }];
+  s.currentAgentSessionId = 'context-agent';
+  s.agentSessions = { 'context-agent': { id: 'context-agent', name: 'Agent', messages: s.messages, createdAt: new Date().toISOString() } };
+  s.contextUsage = { model: 'test', agentSessionId: s.currentAgentSessionId, checkpointThrough: 0, inputTokens: 42670, contextWindow: 272000, compactAtTokens: 217600, observedAt: new Date().toISOString() };
+  s.modelUsage = { requests: 30, inputTokens: 1000000 };
+  await writeFile(path, JSON.stringify(data));
+  const runtime = await createRuntime({ ...f.options, models: [{ id: 'test', contextWindow: 272000 }] });
+  try {
+    await runtime.command({ action: 'claim', sessionId: s.id, client: 'context-test' });
+    await runtime.command({ action: 'start', sessionId: s.id, client: 'context-test', model: 'test', text: 'Continue', requestId: 'continue' });
+    await until(async () => (await runtime.snapshot()).sessions[0].status === 'awaiting_review');
+    const current = (await runtime.snapshot()).sessions[0];
+    assert.equal(current.events.some(e => e.type === 'context_compacted'), false);
+    assert.equal(current.contextUsage.inputTokens, 44000);
+    assert.equal(current.contextUsage.contextWindow, 272000);
+    assert.ok(f.prompts.at(-1).messages.some(m => m.content?.length === 200000));
+  } finally { await runtime.close(); }
 });

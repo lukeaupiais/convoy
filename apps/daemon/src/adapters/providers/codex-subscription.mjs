@@ -36,7 +36,8 @@ export const codexSubscriptionModels = [
   { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', input: ['text', 'image'] },
   { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', input: ['text', 'image'] },
   { id: 'gpt-6-astra', name: 'GPT-6 Astra', input: ['text', 'image'] },
-  { id: 'gpt-6-luna', name: 'GPT-6 Luna', input: ['text', 'image'] },
+  // Default capacity observed in the subscription model catalog, 2026-09-28.
+  { id: 'gpt-6-luna', name: 'GPT-6 Luna', input: ['text', 'image'], contextWindow: 272000 },
 ];
 
 function decodeToken(token) {
@@ -321,6 +322,7 @@ export function createCodexSubscriptionGenerate({ fetch: request = globalThis.fe
       type: 'result',
       message: { role: 'assistant', content: state.content, stopReason: state.stopReason, timestamp: Date.now() },
       ...(state.usage ? { usage: state.usage } : {}),
+      contextWindow: codexSubscriptionModels.find((item) => item.id === model)?.contextWindow,
     };
   };
 }

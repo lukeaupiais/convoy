@@ -107,6 +107,7 @@ export function createProviders({
     }) {
       const connectionId = `connection_${organizationId}_chatgpt_subscription`;
       let changed = false;
+      let contextLimitsChanged = false;
       let connection = state.providerConnections.find(
         (candidate) => candidate.id === connectionId && candidate.organizationId === organizationId,
       );
@@ -164,6 +165,12 @@ export function createProviders({
           state.modelOfferings.push(offering);
           changed = true;
         }
+        // Fill absent compatibility metadata without overriding discovered limits.
+        if (!offering.verifiedCapabilities.contextWindow && Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0) {
+          offering.verifiedCapabilities.contextWindow = model.contextWindow;
+          contextLimitsChanged = true;
+          changed = true;
+        }
         const existingRoute = state.modelRoutes.find(
           (candidate) => candidate.id === model.id && candidate.organizationId === organizationId,
         );
@@ -183,6 +190,15 @@ export function createProviders({
           state.modelRoutes.push(route);
           changed = true;
         }
+      }
+      if (contextLimitsChanged) {
+        const current = state.modelOfferings.filter((item) =>
+          item.providerConnectionId === connection.id && item.catalogRevision === connection.catalogRevision);
+        const nextRevision = digest({ previous: connection.catalogRevision,
+          limits: current.map((item) => ({ id: item.id, contextWindow: item.verifiedCapabilities.contextWindow })) });
+        for (const item of current) item.catalogRevision = nextRevision;
+        connection.catalogRevision = nextRevision;
+        connection.revision = revision(connection);
       }
       if (changed) await save();
       return clone(connection);
@@ -823,6 +839,7 @@ export function createProviders({
         offering: {
           id: offering.id,
           upstreamModelId: offering.upstreamModelId,
+          contextWindow: offering.verifiedCapabilities.contextWindow,
           catalogRevision: offering.catalogRevision,
         },
       };
