@@ -9,6 +9,7 @@ shared contracts when changing code or UI copy.
 - [Module command ownership](architecture/module-command-registry.md)
 - [Provider boundary](architecture/provider-boundary.md)
 - [Tool and approval contract](architecture/tool-harness.md)
+- [Repository guidance and read-only shell — proposed spec](architecture/repository-guidance-and-read-only-shell-spec.md)
 - [Workflow selection and start automations](architecture/workflow-selection-and-automation-spec.md)
 - [Board workflow visibility](architecture/board-workflow-visibility-spec.md)
 - [Board integrations product and behavior spec](board-integrations-spec.md)
