@@ -142,7 +142,7 @@ export function migrateLibraryState(state) {
     }
 }
 
-export function createCapabilities({ state, validateKnowledge }) {
+export function createCapabilities({ state, executionPolicy, validateKnowledge }) {
   migrateLibraryState(state);
   const organizationForProject = (projectId) =>
     state.projects?.find((project) => project.id === projectId)?.organizationId ?? 'personal';
@@ -227,7 +227,7 @@ export function createCapabilities({ state, validateKnowledge }) {
         : step.permissions === 'read-write'
           ? [...reads, 'write_file', 'apply_patch']
           : step.permissions === 'read'
-            ? reads
+            ? [...reads, ...(pinned && executionPolicy?.readOnlyShell(s) ? ['shell', 'read_command_output'] : [])]
             : [];
     return [...toolRegistry, ...extensionTools(s)].map((t) => {
       let reason = '';
@@ -295,6 +295,8 @@ export function createCapabilities({ state, validateKnowledge }) {
         ['none', 'read'].includes(step.permissions)
       )
         reason = 'Blocked by workflow permissions';
+      if (!reason && t.group === 'workspace')
+        reason = executionPolicy?.toolRestriction(s, t.name) ?? '';
       return { ...t, available: !reason, reason };
     });
   }
@@ -516,6 +518,9 @@ export function createCapabilities({ state, validateKnowledge }) {
         if ((c.baseVersion ?? 0) !== (previous?.version ?? 0))
           throw new Error('Profile changed. Reload before publishing.');
         const name = bounded(c.name, 100, 'profile name');
+        if (c.loadWorkspaceAgentsMd !== undefined && typeof c.loadWorkspaceAgentsMd !== 'boolean')
+          throw new Error('Load workspace AGENTS.md must be a boolean.');
+        const loadWorkspaceAgentsMd = c.loadWorkspaceAgentsMd ?? false;
         if (
           !Array.isArray(c.tools) ||
           c.tools.length > 50 ||
@@ -547,13 +552,14 @@ export function createCapabilities({ state, validateKnowledge }) {
           organizationId,
           name,
           version: (previous?.version ?? 0) + 1,
+          loadWorkspaceAgentsMd,
           tools,
           skills,
           extensions,
           at: new Date().toISOString(),
         };
         p.hash = digest(
-          JSON.stringify({ id, name, tools, skills, extensions, ...(knowledge ? { knowledge } : {}) }),
+          JSON.stringify({ id, name, tools, skills, extensions, loadWorkspaceAgentsMd, ...(knowledge ? { knowledge } : {}) }),
         );
         state.capabilityProfiles.push(p);
         return p;

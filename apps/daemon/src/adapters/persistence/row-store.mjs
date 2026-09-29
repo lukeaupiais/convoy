@@ -8,6 +8,11 @@ const identity = (bucket, key) => JSON.stringify([bucket, key]);
 
 function itemKey(name, item) {
   if (name === 'disabledTools') return item;
+  if (name === 'runtimeDefinitions') {
+    if (!item?.id || !item.projectId || !Number.isInteger(item.version) || item.version < 1)
+      throw new Error('Runtime definitions need valid project and revision identities.');
+    return JSON.stringify([item.organizationId ?? 'personal', item.projectId, item.id, item.version]);
+  }
   if (['skills', 'capabilityProfiles', 'extensions'].includes(name)) {
     const id = name === 'skills' ? item?.name : item?.id;
     const revision = name === 'extensions' ? item?.revision : item?.version;

@@ -24,6 +24,7 @@ export const runtimeCommandContracts = {
   readKnowledgePage: contract(['pageId'], ['version', 'draft', 'offset', 'limit', 'anchor']),
   searchKnowledge: contract(['projectId', 'query'], ['collectionId', 'limit']),
 
+  publishRuntimeDefinition: contract(['projectId', 'definition', 'baseVersion'], ['organizationId']),
   querySecurityAudit: contract(
     ['organizationId'],
     ['cursor', 'limit', 'eventAction', 'outcome', 'projectId'],
@@ -34,6 +35,7 @@ export const runtimeCommandContracts = {
   ),
   advance: session(),
   answerQuestion: session(['questionId', 'answer']),
+  refreshWorkspaceGuidance: session(['captureId']),
   approveGate: session(['instance']),
   attachContext: session([], ['path', 'name', 'mime', 'data']),
   attachTicketFile: contract(['taskId', 'revision', 'name', 'mime', 'data']),
@@ -120,10 +122,25 @@ export const runtimeCommandContracts = {
   createConversation: contract(['requestId'], ['title', 'projectId', 'placement']),
   createTicket: contract(
     ['requestId', 'projectId', 'title'],
-    ['description', 'status', 'label', 'agent', 'priority', 'customFields', 'boardId', 'destination'],
+    [
+      'description',
+      'status',
+      'label',
+      'agent',
+      'priority',
+      'customFields',
+      'boardId',
+      'destination',
+    ],
   ),
-  createRelatedTicket: contract(['requestId', 'sourceTicketId', 'sourceRevision', 'title'], ['description', 'boardId', 'status', 'kind']),
-  linkTickets: contract(['sourceTicketId', 'sourceRevision', 'targetTicketId', 'targetRevision'], ['kind']),
+  createRelatedTicket: contract(
+    ['requestId', 'sourceTicketId', 'sourceRevision', 'title'],
+    ['description', 'boardId', 'status', 'kind'],
+  ),
+  linkTickets: contract(
+    ['sourceTicketId', 'sourceRevision', 'targetTicketId', 'targetRevision'],
+    ['kind'],
+  ),
   unlinkTickets: contract(['relationId', 'sourceRevision']),
   saveTicketConnection: contract(
     ['organizationId', 'name', 'provider'],
@@ -136,11 +153,17 @@ export const runtimeCommandContracts = {
   reconcileTicketPublish: contract(['ticketId', 'revision'], ['remoteId', 'confirmNotCreated']),
   syncExternalTicket: contract(['ticketId', 'revision', 'connectionId'], ['resolution']),
   importExternalTickets: contract(['connectionId', 'projectId'], ['limit']),
-  saveTicketImportBinding: contract(['connectionId', 'projectId', 'name', 'workType'], ['id', 'revision', 'enabled', 'pollIntervalMinutes']),
+  saveTicketImportBinding: contract(
+    ['connectionId', 'projectId', 'name', 'workType'],
+    ['id', 'revision', 'enabled', 'pollIntervalMinutes'],
+  ),
   syncTicketImportBinding: contract(['id'], ['limit']),
   syncExternalTicketThread: contract(['ticketId', 'connectionId']),
   postExternalTicketReply: contract(['requestId', 'ticketId', 'connectionId', 'body']),
-  setExternalTicketStatus: contract(['requestId', 'ticketId', 'connectionId', 'status'], ['evidenceReplyRequestId']),
+  setExternalTicketStatus: contract(
+    ['requestId', 'ticketId', 'connectionId', 'status'],
+    ['evidenceReplyRequestId'],
+  ),
   reconcileExternalTicketReply: contract(['requestId'], ['remoteId', 'confirmNotPosted']),
   decide: session(['approvalId'], ['allow', 'decision']),
   deleteBoard: contract(['id', 'revision']),
@@ -164,7 +187,7 @@ export const runtimeCommandContracts = {
   publishExtension: contract(['manifest', 'trusted'], ['organizationId', 'projectId']),
   publishProfile: contract(
     ['name', 'tools', 'skills'],
-    ['organizationId', 'projectId', 'id', 'baseVersion', 'extensions', 'knowledge'],
+    ['organizationId', 'projectId', 'id', 'baseVersion', 'extensions', 'loadWorkspaceAgentsMd', 'knowledge'],
   ),
   publishSkill: contract(
     ['files', 'trusted'],
@@ -173,6 +196,7 @@ export const runtimeCommandContracts = {
   saveOrganizationPolicy: contract(['organizationId', 'scope', 'rules', 'baseRevision']),
   removeApprovalRule: contract(['ruleId']),
   removeTicketFile: contract(['taskId', 'revision', 'attachmentId']),
+  resetVerificationRuntime: session(['runtimeId', 'generation']),
   readCommandOutput: session(['commandId'], ['cursor']),
   readTerminalOutput: session(['terminalId'], ['cursor']),
   renewChannelGrant: session(['id', 'revision'], ['expiresInSeconds']),
@@ -214,13 +238,25 @@ export const runtimeCommandContracts = {
   ),
   saveBoardTemplate: contract(
     ['name', 'columns'],
-    ['id', 'description', 'revision', 'swimlanes', 'filters', 'cardFields', 'grouping', 'creationPolicy', 'creationWorkType', 'destinationConnectionIds', 'density'],
+    [
+      'id',
+      'description',
+      'revision',
+      'swimlanes',
+      'filters',
+      'cardFields',
+      'grouping',
+      'creationPolicy',
+      'creationWorkType',
+      'destinationConnectionIds',
+      'density',
+    ],
   ),
   saveEnvironment: contract(
     ['name', 'kind'],
     ['id', 'organizationId', 'revision', 'host', 'enabled', 'maxConcurrent', 'tags'],
   ),
-  saveProject: contract(['name'], ['id', 'organizationId', 'teamId', 'revision', 'description']),
+  saveProject: contract(['name'], ['id', 'organizationId', 'teamId', 'revision', 'description', 'runtime']),
   saveRunnerPool: contract(['name', 'runnerIds'], ['id', 'organizationId', 'revision']),
   saveWorkflow: contract(
     ['workflow'],

@@ -52,6 +52,8 @@ export async function driveCommand(
     command: request.args.command,
     timeoutMs,
     lifetime,
+    ...(request.execution ? { execution: request.execution } : {}),
+    ...(request.executionProfile ? { executionProfile: request.executionProfile } : {}),
     ...(request.accessMode ? { accessMode: request.accessMode } : {}),
   });
   let cursor = 0;

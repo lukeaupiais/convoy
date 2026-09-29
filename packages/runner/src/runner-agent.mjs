@@ -1,7 +1,16 @@
+import { probeVerificationRuntime, prepareVerificationRuntime, runtimeCommand, runtimeTool, runtimeLifecycle } from './verification-runtime.mjs';
+import { runInspectionProbe } from './inspection-probe.mjs';
+import { tmpdir } from 'node:os';
+import { bindInspection, assertInspectionBinding } from './execution-binding.mjs';
+import { readWorkspaceGuidance, seedWorkspaceGuidance } from './workspace-guidance.mjs';
 // This exact module runs locally or over SSH. No provider credentials are sent to runners.
+import { validateExecutionDescriptor } from './execution-descriptor.mjs';
+import { openInspectionFilter } from './inspection-filter.mjs';
 import { spawn } from 'node:child_process';
 import {
   realpath,
+  mkdtemp,
+  rm,
   lstat,
   readFile,
   writeFile,
@@ -14,6 +23,7 @@ import {
 import { resolve, join, relative, dirname, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
+const nameNotCommand = name => !['shell', 'start_command'].includes(name);
 const safeEnv = {
   PATH: '/usr/local/bin:/usr/bin:/bin',
   LANG: 'C.UTF-8',
@@ -33,14 +43,14 @@ function trustedEnvironment() {
 export function processRun(
   command,
   args,
-  { cwd, signal, timeout = 60000, input, env = safeEnv } = {},
+  { cwd, signal, timeout = 60000, input, env = safeEnv, extraFd } = {},
 ) {
   return new Promise((resolveResult, reject) => {
     const child = spawn(command, args, {
       cwd,
       env,
       detached: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe', ...(extraFd === undefined ? [] : [extraFd])],
     });
     let output = '';
     let stopped = false;
@@ -136,7 +146,14 @@ async function gitMetadataSandboxArgs(root) {
     return ['--ro-bind', '/dev/null', '/workspace/.git'];
   }
 }
-async function sandboxArgs(root, command, interactive = false) {
+async function sandboxArgs(
+  root,
+  command,
+  interactive = false,
+  inspect = false,
+  probe = false,
+  probeControl = false,
+) {
   const args = [
     '--unshare-all',
     '--die-with-parent',
@@ -161,7 +178,7 @@ async function sandboxArgs(root, command, interactive = false) {
     '/dev',
     '--tmpfs',
     '/tmp',
-    '--bind',
+    inspect ? '--ro-bind' : '--bind',
     root,
     '/workspace',
     '--chdir',
@@ -193,33 +210,66 @@ async function sandboxArgs(root, command, interactive = false) {
       );
     } catch {}
   }
+  if (inspect && !probeControl) args.push('--seccomp', '3');
+  if (probe) args.push('--ro-bind', process.execPath, '/convoy-probe');
   args.push('/bin/sh', '-c', command);
   return args;
 }
-async function sandbox(root, command, signal, supervisor, timeoutMs, launchId, lifetime) {
-  const args = await sandboxArgs(root, command);
-  if (supervisor)
-    return {
-      commandId: supervisor.start('bwrap', args, {
-        signal,
-        env: safeEnv,
-        owner: root,
-        timeoutMs,
-        launchId,
-        lifetime,
-      }),
-    };
-  const result = await processRun('bwrap', args, { signal });
-  if (result.output.startsWith('bwrap:'))
-    throw new Error(
-      'Sandbox unavailable or denied. Shell execution is disabled; there is no unsandboxed fallback.',
-    );
-  return result;
+async function sandbox(
+  root,
+  command,
+  signal,
+  supervisor,
+  timeoutMs,
+  launchId,
+  lifetime,
+  inspect = false,
+  probe = false,
+  probeControl = false,
+) {
+  const args = await sandboxArgs(root, command, false, inspect, probe, probeControl);
+  const filter = inspect && !probeControl ? openInspectionFilter() : null;
+  try {
+    if (supervisor)
+      return {
+        commandId: supervisor.start('bwrap', args, {
+          signal,
+          env: safeEnv,
+          owner: root,
+          timeoutMs,
+          launchId,
+          lifetime,
+          extraFd: filter?.fd,
+        }),
+      };
+    const result = await processRun('bwrap', args, {
+      signal,
+      timeout: timeoutMs,
+      extraFd: filter?.fd,
+    });
+    if (result.output.startsWith('bwrap:'))
+      throw new Error(
+        'Sandbox unavailable or denied. Shell execution is disabled; there is no unsandboxed fallback.',
+      );
+    return result;
+  } finally {
+    filter?.close();
+  }
 }
+
 function executionAccess(value = 'contained') {
   if (!['contained', 'trusted'].includes(value)) throw new Error('Invalid execution access mode.');
   return value;
 }
+// Allow ordinary multiline scripts while staying below the tool argument envelope
+// and the OS single-argument limit, including four-byte Unicode characters.
+function validateShellCommand(command) {
+  if (typeof command !== 'string' || !command.trim())
+    throw new Error('Shell command must be a non-empty string.');
+  if (command.length > 32000)
+    throw new Error(`Shell command has ${command.length} characters; maximum is 32000. Split the script into smaller commands or write it in chunks and execute the file.`);
+}
+
 async function executeCommand(
   root,
   command,
@@ -229,9 +279,20 @@ async function executeCommand(
   launchId,
   lifetime,
   accessMode,
+  execution,
 ) {
+  if (execution?.grant.profileId === 'verify') return runtimeCommand(root, execution, command, {signal, timeoutMs, launchId}, supervisor);
   if (executionAccess(accessMode) === 'contained')
-    return sandbox(root, command, signal, supervisor, timeoutMs, launchId, lifetime);
+    return sandbox(
+      root,
+      command,
+      signal,
+      supervisor,
+      timeoutMs,
+      launchId,
+      lifetime,
+      execution?.grant.profileId === 'inspect',
+    );
   const env = trustedEnvironment();
   if (supervisor)
     return {
@@ -263,16 +324,35 @@ const git = (root, args, signal) =>
   );
 const runnerContracts = {
   probe: { required: ['repository'], optional: ['operationId', 'accessMode'] },
-  provision: { required: ['repository', 'workspaceId'], optional: ['operationId'] },
-  diff: { required: ['workspace'], optional: ['operationId', 'ignoreArtifact'] },
-  tool: { required: ['workspace', 'name', 'args'], optional: ['operationId', 'accessMode'] },
+  provision: {
+    required: ['repository', 'workspaceId'],
+    optional: ['operationId', 'loadWorkspaceAgentsMd'],
+  },
+  bind_execution: { required: ['workspace', 'binding'], optional: ['operationId'] },
+  verification: { required: ['workspace', 'operation', 'execution'], optional: ['operationId', 'files'] },
+  workspace_guidance: {
+    required: ['workspace'],
+    optional: ['operationId', 'execution', 'executionProfile', 'accessMode'],
+  },
+  diff: { required: ['workspace'], optional: ['operationId', 'ignoreArtifact', 'execution'] },
+  tool: {
+    required: ['workspace', 'name', 'args'],
+    optional: ['operationId', 'accessMode', 'execution', 'executionProfile'],
+  },
   extension: {
     required: ['workspace', 'extension', 'adapter', 'tool', 'args'],
     optional: ['operationId'],
   },
   command_start: {
     required: ['workspace', 'command', 'launchId'],
-    optional: ['operationId', 'timeoutMs', 'lifetime', 'accessMode'],
+    optional: [
+      'operationId',
+      'timeoutMs',
+      'lifetime',
+      'accessMode',
+      'execution',
+      'executionProfile',
+    ],
   },
   command_poll: {
     required: ['workspace', 'commandId'],
@@ -286,7 +366,16 @@ const runnerContracts = {
   },
   terminal_start: {
     required: ['workspace'],
-    optional: ['operationId', 'command', 'cols', 'rows', 'timeoutMs', 'accessMode'],
+    optional: [
+      'operationId',
+      'command',
+      'cols',
+      'rows',
+      'timeoutMs',
+      'accessMode',
+      'execution',
+      'executionProfile',
+    ],
   },
   terminal_status: { required: ['workspace', 'terminalId'], optional: ['operationId'] },
   terminal_stop: { required: ['workspace', 'terminalId'], optional: ['operationId'] },
@@ -880,6 +969,10 @@ export async function executeRunner(
   extensionAdapters = {},
 ) {
   validateRunnerRequest(request);
+  validateExecutionDescriptor(request);
+  if (request.action === 'bind_execution')
+    return bindInspection(request.workspace, request.binding);
+  await assertInspectionBinding(request);
   const { action } = request;
   if (action === 'probe') {
     const accessMode = executionAccess(request.accessMode);
@@ -903,6 +996,68 @@ export async function executeRunner(
           )
         ).code === 0;
     } catch {}
+    let inspection = false;
+    let inspectionReason;
+    const probeRoot = await mkdtemp(join(tmpdir(), 'convoy-inspection-probe-'));
+    const cli = {};
+    try {
+      await mkdir(join(probeRoot, '.git'));
+      const standalone = typeof CONVOY_STANDALONE !== 'undefined' && CONVOY_STANDALONE;
+      const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+      const command = (denied) =>
+        standalone
+          ? `/convoy-probe --inspection-probe${denied ? '' : ' --expect-sockets'}`
+          : `/convoy-probe -e ${quote(`(${runInspectionProbe.toString()})(${denied}).then(()=>process.exit(0),()=>process.exit(1))`)}`;
+      // A control run establishes that this runtime can create both socket
+      // families in an otherwise identical private sandbox (Bun omits errno).
+      const control = await sandbox(
+        probeRoot,
+        command(false),
+        signal,
+        undefined,
+        5000,
+        undefined,
+        'turn',
+        true,
+        true,
+        true,
+      );
+      if (control.code !== 0) throw new Error('Inspection runtime control probe failed.');
+      const result = await sandbox(
+        probeRoot,
+        command(true),
+        signal,
+        undefined,
+        5000,
+        undefined,
+        'turn',
+        true,
+        true,
+      );
+      inspection = result.code === 0;
+      if (!inspection)
+        inspectionReason = `Read-only filesystem and socket enforcement probe failed: ${result.output.slice(0, 500)}`;
+      if (inspection) {
+        const result = await sandbox(
+          probeRoot,
+          'for tool in pwd ls rg sed git; do if command -v "$tool" >/dev/null; then echo "$tool=1"; else echo "$tool=0"; fi; done',
+          signal,
+          undefined,
+          5000,
+          undefined,
+          'turn',
+          true,
+        );
+        for (const line of result.output.trim().split('\n')) {
+          const [name, value] = line.split('=');
+          if (['pwd', 'ls', 'rg', 'sed', 'git'].includes(name)) cli[name] = value === '1';
+        }
+      }
+    } catch (error) {
+      inspectionReason = error.message;
+    } finally {
+      await rm(probeRoot, { recursive: true, force: true });
+    }
     let terminal = false;
     if (shell)
       try {
@@ -932,6 +1087,11 @@ export async function executeRunner(
           : []),
       ],
       shell,
+      inspection,
+      verification: await probeVerificationRuntime(),
+      ...(inspectionReason ? { inspectionReason } : {}),
+      executionDescriptorVersion: inspection ? 1 : 0,
+      cli,
       terminal,
       accessMode,
       extensionAdapters: Object.keys(extensionAdapters).sort(),
@@ -966,7 +1126,21 @@ export async function executeRunner(
         actualCommon.output.trim() !== expectedCommon.output.trim()
       )
         throw new Error('Existing workspace does not match this task. Inspect it manually.');
-      return { path, branch };
+      return {
+        path,
+        branch,
+        ...(request.loadWorkspaceAgentsMd === true
+          ? {
+              guidanceBootstrap: await seedWorkspaceGuidance(
+                root,
+                path,
+                request.workspaceId,
+                git,
+                signal,
+              ),
+            }
+          : {}),
+      };
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
@@ -975,9 +1149,27 @@ export async function executeRunner(
       throw new Error(
         'Worktree creation failed. Check repository HEAD and permissions. No automatic cleanup was attempted.',
       );
-    return { path, branch };
+    return {
+      path,
+      branch,
+      ...(request.loadWorkspaceAgentsMd === true
+        ? {
+            guidanceBootstrap: await seedWorkspaceGuidance(
+              root,
+              path,
+              request.workspaceId,
+              git,
+              signal,
+            ),
+          }
+        : {}),
+    };
   }
   const root = await realpath(request.workspace);
+  if (action === 'verification') return request.operation === 'prepare' ? prepareVerificationRuntime(root, request.execution, signal) : runtimeLifecycle(root, request.execution, request.operation, request.files);
+  if (request.execution?.grant.profileId === 'verify' && action === 'tool' && nameNotCommand(request.name)) return runtimeTool(root, request.execution, request.name, request.args);
+  if (request.execution?.grant.profileId === 'verify' && action === 'diff') return {status:'',diff:'',digest:request.execution.grant.runtime.definition.digest,truncated:false};
+  if (action === 'workspace_guidance') return readWorkspaceGuidance(root);
   if (request.action.startsWith('terminal_')) {
     if (!terminals) throw new Error('Native terminal supervisor unavailable.');
     if (request.action === 'terminal_status') return terminals.status(request.terminalId, root);
@@ -1017,12 +1209,7 @@ export async function executeRunner(
   }
   if (request.action === 'command_start') {
     if (!supervisor) throw new Error('Command supervisor unavailable.');
-    if (
-      typeof request.command !== 'string' ||
-      !request.command.trim() ||
-      request.command.length > 4000
-    )
-      throw new Error('Invalid shell command.');
+    validateShellCommand(request.command);
     return executeCommand(
       root,
       request.command,
@@ -1032,6 +1219,7 @@ export async function executeRunner(
       request.launchId,
       request.lifetime,
       request.accessMode,
+      request.execution,
     );
   }
   if (action === 'diff') {
@@ -1048,12 +1236,14 @@ export async function executeRunner(
     const head = await git(root, ['rev-parse', 'HEAD'], signal);
     const changed = await git(root, ['diff', '--name-only', '-z', 'HEAD', '--', '.'], signal);
     const untracked = await git(root, ['ls-files', '-o', '--exclude-standard', '-z'], signal);
-    if ([head, changed, untracked].some(result => result.code !== 0 || result.stopped))
+    if ([head, changed, untracked].some((result) => result.code !== 0 || result.stopped))
       throw new Error('Workspace fingerprint exceeded its safe limit.');
     const hash = createHash('sha256');
     hash.update(head.output.trim() + '\0');
     let bytes = 0;
-    for (const name of [...new Set([...changed.output.split('\0'), ...untracked.output.split('\0')].filter(Boolean))].sort()) {
+    for (const name of [
+      ...new Set([...changed.output.split('\0'), ...untracked.output.split('\0')].filter(Boolean)),
+    ].sort()) {
       if (name === request.ignoreArtifact) continue;
       const path = resolve(root, name);
       if (relative(root, path).startsWith('..')) throw new Error('Invalid Git path.');
@@ -1123,8 +1313,7 @@ export async function executeRunner(
     return applyPatch(root, args, signal);
   }
   if (name === 'shell') {
-    if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 4000)
-      throw new Error('Invalid shell command.');
+    validateShellCommand(args.command);
     return executeCommand(
       root,
       args.command,
@@ -1134,6 +1323,7 @@ export async function executeRunner(
       undefined,
       undefined,
       request.accessMode,
+      request.execution,
     );
   }
   throw new Error('Unsupported runner operation.');

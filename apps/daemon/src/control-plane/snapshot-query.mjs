@@ -39,6 +39,7 @@ export function createSnapshotQuery({
   getSession,
   jobs,
   capabilities,
+  guidanceView = (session) => session.workspaceGuidance,
   moduleSnapshots,
   canMessage,
   auth,
@@ -69,6 +70,7 @@ export function createSnapshotQuery({
             : undefined;
         return {
           ...session,
+          workspaceGuidance: guidanceView(session),
           ...(jobs.has(session.id) && session.status === 'awaiting_review'
             ? { status: 'running' }
             : {}),
@@ -90,14 +92,26 @@ export function createSnapshotQuery({
     );
 
     const automationDecisions = Object.entries(state.automationDecisionLedger)
-      .filter(([, trigger]) => moduleState.tickets?.some(ticket => ticket.id === trigger.ticketId))
+      .filter(([, trigger]) =>
+        moduleState.tickets?.some((ticket) => ticket.id === trigger.ticketId),
+      )
       .map(([triggerKey, trigger]) => ({ triggerKey, ...trigger }));
     const boardAutomations = boardAutomationRelationships({
-      boards: moduleState.boards ?? [], projects: moduleState.projects ?? [],
-      workflows: moduleState.workflows ?? [], rules: moduleState.automations ?? [],
+      boards: moduleState.boards ?? [],
+      projects: moduleState.projects ?? [],
+      workflows: moduleState.workflows ?? [],
+      rules: moduleState.automations ?? [],
       decisions: automationDecisions,
-      eventLabels: Object.fromEntries(workAutomationCapabilities.events.map(event => [event.id, event.label])),
-      resolveEffect: input => resolveBoardEffect({ ...input, connections: moduleState.ticketConnections ?? [], bindings: moduleState.ticketImportBindings ?? [], tickets: moduleState.tickets ?? [] }),
+      eventLabels: Object.fromEntries(
+        workAutomationCapabilities.events.map((event) => [event.id, event.label]),
+      ),
+      resolveEffect: (input) =>
+        resolveBoardEffect({
+          ...input,
+          connections: moduleState.ticketConnections ?? [],
+          bindings: moduleState.ticketImportBindings ?? [],
+          tickets: moduleState.tickets ?? [],
+        }),
     });
     return structuredClone({
       ...moduleState,
@@ -121,7 +135,10 @@ export function createSnapshotQuery({
           return !scope || scope.projectIds.includes(ticket?.projectId);
         })
         .slice(-100),
-      automationCapabilities: { ...workAutomationCapabilities, ruleActions: [{ id: 'start_workflow', label: 'Start workflow' }] },
+      automationCapabilities: {
+        ...workAutomationCapabilities,
+        ruleActions: [{ id: 'start_workflow', label: 'Start workflow' }],
+      },
       automationDecisions,
       sessions: publicSessions,
       auth: legacyProviderVisible

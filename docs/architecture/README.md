@@ -59,7 +59,8 @@ Deployment storage, migration, and offline backup are documented in
 Authoritative state has one owner. Work owns projects/tickets/boards; workflows
 owns graph definitions and transitions; conversations owns durable dialogue and
 steering; execution owns placement and runner eligibility; library owns capability
-and instruction revisions. The control plane can transact across owners but should
+and instruction revisions; knowledge owns wiki collections, page publication and
+retrieval. The control plane can transact across owners but should
 not duplicate their rules.
 
 ## Safety invariants

@@ -127,6 +127,59 @@ export function SessionCapabilities({
       </div>
       {!owns(s) && <p className="muted">Claim session control to change its profile.</p>}
       {error && <p role="alert">{error}</p>}
+      <details>
+        <summary>
+          Workspace guidance ·{' '}
+          {s.workspaceGuidance?.status ??
+            (s.capabilityProfile?.loadWorkspaceAgentsMd ? 'pending' : 'disabled')}
+        </summary>
+        {s.workspaceGuidance?.hash && (
+          <p>
+            <code>{s.workspaceGuidance.hash}</code>
+          </p>
+        )}
+        {s.workspaceGuidance?.source && (
+          <p>
+            {s.workspaceGuidance.source.kind}
+            {s.workspaceGuidance.source.repository && ` · ${s.workspaceGuidance.source.repository}`}
+          </p>
+        )}
+        {s.workspaceGuidance?.error && <p role="alert">{s.workspaceGuidance.error}</p>}
+        {s.workspaceGuidance?.status === 'missing' && (
+          <p>
+            AGENTS.md is absent in this workspace. Add it through authorized workspace setup, or
+            create a new workspace with local guidance enabled.
+          </p>
+        )}
+        <button
+          className="secondary"
+          disabled={
+            busy ||
+            !owns(s) ||
+            !!s.control?.busy ||
+            !s.workspace ||
+            !s.capabilityProfile?.loadWorkspaceAgentsMd ||
+            s.assignment?.state === 'uncertain'
+          }
+          onClick={async () => {
+            setBusy(true);
+            setError('');
+            try {
+              await command('refreshWorkspaceGuidance', {
+                sessionId: s.id,
+                captureId: s.workspaceGuidance?.id ?? null,
+              });
+            } catch (e) {
+              setError((e as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Refresh
+        </button>
+      </details>
+      <p>Execution · {s.executionGrant?.profileId ?? s.executionProfile ?? 'inherit'}</p>
       <div className="capability-list">
         {s.effectiveCapabilities?.tools.map((t) => (
           <div key={t.id}>
@@ -181,6 +234,7 @@ export function CapabilityLibrary({
   const [trusted, setTrusted] = useState(false);
   const [profileId, setProfileId] = useState('');
   const [profileName, setProfileName] = useState('');
+  const [loadWorkspaceAgentsMd, setLoadWorkspaceAgentsMd] = useState(false);
   const [knowledge, setKnowledge] = useState<KnowledgeSelection>({ collectionIds: [] });
   const [baseVersion, setBaseVersion] = useState(0);
   const [tools, setTools] = useState<string[]>([]);
@@ -209,6 +263,7 @@ export function CapabilityLibrary({
   function editProfile(p?: CapabilityProfile) {
     setProfileId(p?.id ?? '');
     setProfileName(p?.name ?? '');
+    setLoadWorkspaceAgentsMd(p?.loadWorkspaceAgentsMd === true);
     setKnowledge(p?.knowledge ?? { collectionIds: [] });
     setBaseVersion(p?.version ?? 0);
     setTools(p?.tools.map((t) => t.id) ?? []);
@@ -477,6 +532,7 @@ export function CapabilityLibrary({
               void perform('publishProfile', {
                 id: profileId,
                 name: profileName,
+                loadWorkspaceAgentsMd,
                 knowledge,
                 baseVersion,
                 tools,
@@ -514,6 +570,17 @@ export function CapabilityLibrary({
                 />
               </label>
             </div>
+            <label className="capability-check">
+              <input
+                type="checkbox"
+                checked={loadWorkspaceAgentsMd}
+                onChange={(e) => setLoadWorkspaceAgentsMd(e.target.checked)}
+              />
+              Load workspace AGENTS.md
+            </label>
+            <p className="muted">
+              Also copies local root guidance into new workspaces when Git does not include it.
+            </p>
             <KnowledgePicker state={state} value={knowledge} onChange={setKnowledge} />
             <fieldset>
               <legend>Tools</legend>

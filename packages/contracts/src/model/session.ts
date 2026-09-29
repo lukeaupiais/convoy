@@ -24,6 +24,27 @@ export type WorkflowSubmission = {
       evidence?: { references: number[]; establishes: string; unverified: string };
     }[];
   };
+  verification?: {
+    id: string;
+    generation: number;
+    state: string;
+    sourceCommit: string;
+    sourceDigest?: string;
+    availability?: 'ready' | 'unavailable';
+    setupError?: string;
+    bundle: string;
+    definitionDigest: string;
+    fixtureDigest: string;
+    receipts: {
+      commandId: string;
+      command: string;
+      code: number | null;
+      reason?: string;
+      output?: string;
+      outputDigest?: string;
+      outputTruncated?: boolean;
+    }[];
+  };
   details?: Record<string, string>;
   references?: { path: string; startLine: number; endLine: number; sha256: string; text: string }[];
   revision?: number;
@@ -32,12 +53,7 @@ export type WorkflowSubmission = {
   artifacts: (WorkflowSubmissionArtifact | string)[];
 };
 export type InstructionScope =
-  | 'organization'
-  | 'user'
-  | 'project'
-  | 'skill'
-  | 'environment'
-  | 'task';
+  'organization' | 'user' | 'project' | 'skill' | 'environment' | 'task';
 export type Instruction = {
   id: string;
   scope: InstructionScope;
@@ -153,6 +169,22 @@ export type Session = {
     needsReview: boolean;
     tool?: string;
     lastCompletedTool?: string;
+  };
+  verificationRuntime?: Pick<
+    NonNullable<WorkflowSubmission['verification']>,
+    'id' | 'generation' | 'state' | 'sourceCommit' | 'availability' | 'setupError'
+  >;
+  verificationResetRequested?: boolean;
+  workspaceGuidance?: {
+    id?: string;
+    status: 'disabled' | 'pending' | 'loaded' | 'missing' | 'error';
+    hash?: string;
+    contentId?: string;
+    error?: string;
+    path?: string;
+    at?: string;
+    workspace?: string;
+    source?: { kind: string; repository?: string; sourceHash?: string };
   };
   capabilityProfile?: CapabilityProfile | null;
   effectiveCapabilities?: EffectiveCapabilities;

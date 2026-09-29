@@ -24,3 +24,8 @@ It is the transaction/orchestration layer, not a home for every rule.
 
 Extract cohesive policy back into its owning module. Keep mutation ordering,
 cross-module transactions, and fail-closed uncertainty handling here.
+
+Runtime review artifacts come from the runner's immutable sealed capture,
+validated against its digest. Do not route artifact capture through the model's
+line-limited `read_file` preview: a valid single-line JSON evidence file may be
+larger than that preview. Attachment storage still enforces its own size limits.

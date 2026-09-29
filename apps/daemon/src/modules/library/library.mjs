@@ -22,6 +22,7 @@ const sessionCommands = ['setCapabilityProfile'];
 export function createLibrary({
   state,
   validateKnowledge,
+  executionPolicy,
   save,
   catalog,
   parseSessionId,
@@ -31,7 +32,7 @@ export function createLibrary({
   event,
 }) {
   migrateLibraryState(state);
-  const capabilities = createCapabilities({ state, validateKnowledge });
+  const capabilities = createCapabilities({ state, executionPolicy, validateKnowledge });
   const instructions = createInstructionLibrary({
     state,
     save,
@@ -66,9 +67,10 @@ export function createLibrary({
       await save();
       return result;
     },
-    async sessionCommand(session, command, { assertProfileChange }) {
+    async sessionCommand(session, command, { assertProfileChange, profileChanged }) {
       assertProfileChange(session);
       capabilities.pin(session, command.profile);
+      profileChanged?.(session);
       event(session, 'profile_applied', {
         profile: session.capabilityProfile
           ? {

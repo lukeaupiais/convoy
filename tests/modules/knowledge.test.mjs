@@ -224,6 +224,7 @@ test('profile selection pins knowledge and requires explicit tool selection', as
   const session = { projectId: 'support' };
   caps.pin(session, profile);
   assert.ok(caps.modelTools(session).some((t) => t.name === 'read_knowledge'));
+  assert.equal(session.capabilityProfile.loadWorkspaceAgentsMd, false);
   caps.command({
     action: 'publishProfile',
     id: 'support',

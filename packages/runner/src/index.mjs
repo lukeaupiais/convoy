@@ -5,3 +5,6 @@ export { digest, executeRunner, processRun, validateRunnerRequest } from './runn
 export { sshArgs } from './ssh-transport.mjs';
 export { TerminalSupervisor } from './terminal-supervisor.mjs';
 export { createRpc } from './worker-rpc.mjs';
+
+export { runInspectionProbe } from './inspection-probe.mjs';
+export { probeVerificationRuntime, prepareVerificationRuntime, runtimeCommand, runtimeTool, runtimeLifecycle } from './verification-runtime.mjs';

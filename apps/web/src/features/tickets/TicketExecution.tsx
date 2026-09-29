@@ -192,6 +192,33 @@ export function TicketExecution({
               </button>
             </header>
           )}
+          {!focusedArtifactReview && session.verificationRuntime && (
+            <details>
+              <summary>Verification runtime · {session.verificationRuntime.state}</summary>
+              {session.verificationRuntime.setupError && (
+                <p>{session.verificationRuntime.setupError}</p>
+              )}
+              {session.verificationResetRequested ? (
+                <p>Reset requested. Continue to prepare a new generation.</p>
+              ) : (
+                ['awaiting_submission', 'paused', 'interrupted', 'failed'].includes(
+                  session.status,
+                ) && (
+                  <button
+                    disabled={working || busy}
+                    onClick={() =>
+                      void act('resetVerificationRuntime', {
+                        runtimeId: session.verificationRuntime!.id,
+                        generation: session.verificationRuntime!.generation,
+                      })
+                    }
+                  >
+                    Reset runtime
+                  </button>
+                )
+              )}
+            </details>
+          )}
           {!focusedArtifactReview && !!shownNodes.length && (
             <details className="execution-progress">
               <summary>{flow?.status === 'completed' ? 'Steps taken' : 'Workflow steps'}</summary>
@@ -308,7 +335,8 @@ export function TicketExecution({
             </div>
           )}
           {flow?.lastSubmission &&
-            (flow.lastSubmission.details ||
+            (flow.lastSubmission.verification ||
+              flow.lastSubmission.details ||
               flow.lastSubmission.investigation ||
               flow.lastSubmission.references?.length) && (
               <div className="execution-evidence">
@@ -323,6 +351,28 @@ export function TicketExecution({
                         </div>
                       ))}
                     </dl>
+                  </details>
+                )}
+                {flow.lastSubmission.verification && (
+                  <details>
+                    <summary>
+                      Runtime evidence · generation {flow.lastSubmission.verification.generation}
+                    </summary>
+                    <p>Source: {flow.lastSubmission.verification.sourceCommit}</p>
+                    {flow.lastSubmission.verification.availability === 'unavailable' && (
+                      <p>Runtime unavailable. Evidence contains source inspection only.</p>
+                    )}
+                    {flow.lastSubmission.verification.receipts.map((receipt) => (
+                      <details key={receipt.commandId}>
+                        <summary>
+                          {receipt.command} · exit {receipt.code ?? 'unknown'}
+                        </summary>
+                        {receipt.outputTruncated && (
+                          <p>Output truncated. Retained-output hash: {receipt.outputDigest}</p>
+                        )}
+                        <pre>{receipt.output}</pre>
+                      </details>
+                    ))}
                   </details>
                 )}
                 {flow.lastSubmission.investigation && (

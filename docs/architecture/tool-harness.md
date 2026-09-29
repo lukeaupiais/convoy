@@ -54,7 +54,25 @@ their server identity and execution location. LSP and web access are optional
 external capabilities; neither may silently inherit workspace or network
 authority.
 
+## Repository guidance
 
+Versioned capability profiles can opt into **Load workspace AGENTS.md**; older
+profiles default to disabled without changing their hashes. Here workspace means
+the assigned repository root, not OS `$HOME`. Fresh worktrees may receive an
+untracked or ignored root guidance file from their registered source repository.
+A journal makes this exclusive, bounded bootstrap retryable without overwrites.
+
+Before model execution, Convoy captures at most 32 KiB of valid UTF-8 root guidance
+as an immutable context file. Symlinks and nonregular files fail closed; absence
+is recorded normally. Prompt provenance contains references and hashes, and
+guidance remains subordinate to runtime instructions and authority. Within an
+assignment, tools do not silently reload it. A new assignment captures again.
+
+The session capability panel shows capture status and offers explicit refresh
+while idle under the current session lease. Disabling guidance retires its active
+capture; reenabling requires preparation again. Generic instructions encourage
+README-first navigation with native CLI tools such as `rg` and `sed`, including
+reading applicable nested guidance before edits. No new search tool is introduced.
 
 ## Investigation controls
 
@@ -62,13 +80,17 @@ Model requests receive only the effective tool schemas: the intersection of the
 pinned capability profile, workflow permissions, runner support and execution
 policy. Tool calls are checked again at dispatch. A CLI-oriented profile can
 select `shell`, `read_file`, `inspect_repository` and `read_command_output`; no
-new search service is required. Runtime execution restrictions remain enforced at dispatch.
+new search service is required. Read-only workflow nodes may use the output
+reader with an eligible inspection grant. Background commands remain denied.
 
 Malformed built-in tool calls return the expected argument shape, including optional
 fields, without echoing supplied values. Local validation remains authoritative;
 provider strict-schema mode is unchanged.
 
-Large command previews preserve the beginning and end with an explicit omission notice. The command ID and cursor support bounded reads of retained output; retention and disconnect limits still apply.
+Large command results preserve the beginning and end of output with an explicit
+omission notice and a command ID/cursor for the existing retained-output reader.
+Full progress chunks still enter the session-owned command log. Retention limits
+and quota/disconnection reasons continue to apply; a preview is not the whole log.
 
 Agent nodes can pin these optional settings in a workflow revision:
 
