@@ -77,6 +77,7 @@ export function Sidebar({
     ['Sessions', 'Live', Activity],
     ['Workflows', 'Workflows', Workflow],
     ['Skills & instructions', 'Library', BookOpen],
+    ['Wiki', 'Wiki', BookOpen],
   ] as const;
   const settings = [
     ['Project settings', 'Project settings', Folder],

@@ -7,6 +7,7 @@ Each folder owns one operator capability:
 | `access`    | active deployment, organization, team, and project context |
 | `board`     | multi-project board views and card interactions            |
 | `chat`      | conversation transcript, streaming, context, and steering  |
+| `knowledge`   | project wiki authoring, publication and reading            |
 | `library`   | tools, skills, profiles, and instructions                  |
 | `projects`  | project settings and placement defaults                    |
 | `providers` | provider connection and model route presentation           |

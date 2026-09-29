@@ -10,6 +10,7 @@ import { ChatWorkspace } from '../features/chat/ChatWorkspace';
 import { NewChatDialog } from '../features/chat/ChatWorkspaceContext';
 import { RuntimeSessions } from '../features/sessions/RuntimeViews';
 import { liveModel } from '../features/sessions/sessionMonitor';
+import { Wiki, parseWikiLocation, wikiHref } from '../features/knowledge';
 import { SettingsPage } from './SettingsPage';
 import {
   command,
@@ -103,7 +104,44 @@ function App() {
     liveRuntime?.projects.find((p) => p.id === id)?.name ?? 'Project';
   const [saving, setSaving] = useState(false);
   const createRequest = useRef('');
-  const [page, setPage] = useState('Project board');
+  const [page, setPageState] = useState(() =>
+    parseWikiLocation(window.location.hash) ? 'Wiki' : 'Project board',
+  );
+  function setPage(value: string) {
+    if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return;
+    if (value !== 'Wiki' && parseWikiLocation(window.location.hash))
+      window.history.pushState(null, '', window.location.pathname + window.location.search);
+    setPageState(value);
+  }
+  const routeProjects = (liveRuntime?.projects ?? [])
+    .map((p) => `${p.id}:${p.organizationId}`)
+    .join('|');
+  useEffect(() => {
+    const followWikiLink = (event?: Event) => {
+      if (event && !window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) {
+        if (event instanceof HashChangeEvent) window.history.replaceState(null, '', event.oldURL);
+        return;
+      }
+      window.dispatchEvent(new Event('convoy-wiki-route'));
+      const route = parseWikiLocation(window.location.hash);
+      if (!route) {
+        setPageState((current) => (current === 'Wiki' ? 'Project board' : current));
+        return;
+      }
+      setPageState('Wiki');
+      const target = liveRuntime?.projects.find((p) => p.id === route.projectId);
+      if (target) {
+        setProjectId(target.id);
+        if (liveRuntime?.activeContext?.projectId !== target.id)
+          void command('selectActiveContext', {
+            context: { organizationId: target.organizationId, projectId: target.id },
+          }).catch((e) => setToast(e.message));
+      }
+    };
+    followWikiLink();
+    window.addEventListener('hashchange', followWikiLink);
+    return () => window.removeEventListener('hashchange', followWikiLink);
+  }, [routeProjects]);
   const [workflowReference, setWorkflowReference] = useState<WorkflowReference>();
   const workflowContextKey = JSON.stringify([
     liveRuntime?.deployment?.id,
@@ -127,9 +165,11 @@ function App() {
   } | null>(null);
   const [toast, setToast] = useState('');
   async function selectContext(context: ContextRef) {
+    if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return;
     try {
       await command('selectActiveContext', { context });
       setProjectId(context.projectId);
+      if (page === 'Wiki') window.location.hash = wikiHref({ projectId: context.projectId });
     } catch (error) {
       setToast(error instanceof Error ? error.message : 'Context selection failed.');
     }
@@ -416,13 +456,16 @@ function App() {
           </p>
         )}
 
-        {['Project settings', 'Skills & instructions'].includes(page) && (
+        {['Project settings', 'Skills & instructions', 'Wiki'].includes(page) && (
           <label className="page-project-scope">
             Project
             <Select
               aria-label="Settings project"
               value={project?.id ?? ''}
-              onChange={(e) => setProjectId(e.target.value)}
+              onChange={(e) => {
+                if (page === 'Wiki') window.location.hash = wikiHref({ projectId: e.target.value });
+                else setProjectId(e.target.value);
+              }}
             >
               {liveRuntime?.projects.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -528,6 +571,11 @@ function App() {
         {page === 'Runners' && <SettingsPage key="runner-settings" view="Runners" />}
         {page === 'Providers' && <SettingsPage key="provider-settings" view="Providers" />}
         {page === 'Integrations' && <SettingsPage key="integration-settings" view="Integrations" />}
+        {page === 'Wiki' && liveRuntime && (
+          <React.Suspense fallback={<p>Loading wiki…</p>}>
+            <Wiki key={project?.id ?? 'wiki'} state={liveRuntime} projectId={project?.id} />
+          </React.Suspense>
+        )}
         {page === 'Skills & instructions' && (
           <SettingsPage
             key={project?.id ?? 'instruction-settings'}

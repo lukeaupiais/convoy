@@ -42,6 +42,7 @@ export type ExtensionManifest = {
 };
 
 export type CapabilityProfile = ProfileRef & {
+  knowledge?: import('./knowledge').KnowledgeSelection;
   name: string;
   hash: string;
   tools: { id: string; hash: string }[];

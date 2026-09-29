@@ -52,6 +52,7 @@ import type {
 } from './model/workflows';
 export type ModelCheck = { available: boolean; checkedAt: string; message?: string };
 export type RuntimeSnapshot = {
+  knowledgeCollections?: import('./model/knowledge').KnowledgeCollection[];
   deployment?: Deployment;
   currentUser?: User;
   activeContext?: ActiveContext;

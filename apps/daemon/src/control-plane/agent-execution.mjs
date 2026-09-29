@@ -13,6 +13,8 @@ export function createAgentExecution({
   store,
   contextFiles,
   capabilities,
+  knowledge,
+  authorizeKnowledge,
   steering,
   placement,
   pinInstructions,
@@ -85,7 +87,13 @@ export function createAgentExecution({
               );
             pinInstructions(s);
           }
+          let knowledgeText = '';
+          if (s.capabilityProfile?.knowledge?.collectionIds?.length) {
+            await authorizeKnowledge(s);
+            knowledgeText = knowledge.orientation(s);
+          }
           const compiled = promptContext.compile({
+            knowledgeText,
             session: s,
             step,
             instance,
@@ -255,6 +263,10 @@ export function createAgentExecution({
             } else if (call.name === 'ask_user') {
               event(s, 'tool_started', { tool: call.name, callId: call.id });
               output = await agentTurns.ask(s, call.arguments, signal);
+            } else if (call.name === 'search_knowledge' || call.name === 'read_knowledge') {
+              await authorizeKnowledge(s);
+              event(s, 'tool_started', { tool: call.name, callId: call.id });
+              output = knowledge.agent(s, call.name, call.arguments);
             } else if (call.name === 'load_skill' || call.name === 'read_skill_resource') {
               event(s, 'tool_started', { tool: call.name, callId: call.id });
               output = capabilities.load(

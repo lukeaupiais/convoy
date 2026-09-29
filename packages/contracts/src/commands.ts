@@ -80,6 +80,41 @@ type BoardTemplateDefinition = Pick<BoardTemplate, 'name' | 'columns'> &
   >;
 
 export type RuntimeCommandInputMap = {
+  updateKnowledgeCollection: { collectionId: string; expectedRevision: number; name: string; description: string; startPageIds: string[]; pageOrder: string[] };
+  createKnowledgeCollection: { projectId: string; name: string };
+  setKnowledgeCollectionState: {
+    collectionId: string;
+    expectedRevision: number;
+    state: 'active' | 'archived';
+  };
+  saveKnowledgeDraft: {
+    collectionId: string;
+    pageId?: string;
+    expectedRevision: number;
+    title: string;
+    body: string;
+    aliases?: string[];
+    language?: string;
+    applicability?: string;
+  };
+  publishKnowledgePage: { pageId: string; expectedRevision: number };
+  setKnowledgePageState: { pageId: string; expectedRevision: number; state: 'active' | 'archived' };
+  listKnowledgePages: {
+    projectId: string;
+    collectionId?: string;
+    offset?: number;
+    limit?: number;
+    draft?: boolean;
+  };
+  readKnowledgePage: {
+    pageId: string;
+    version?: number;
+    draft?: boolean;
+    offset?: number;
+    limit?: number;
+    anchor?: string;
+  };
+  searchKnowledge: { projectId: string; query: string; collectionId?: string; limit?: number };
   querySecurityAudit: SecurityAuditQuery;
   exportSecurityAudit: SecurityAuditQuery & { format?: 'jsonl' };
   advance: SessionTarget;
@@ -373,6 +408,7 @@ export type RuntimeCommandInputMap = {
     content: string;
   };
   publishProfile: {
+    knowledge?: import('./model/knowledge').KnowledgeSelection;
     organizationId?: string;
     projectId?: string;
     id?: string;
@@ -548,6 +584,19 @@ export type RuntimeCommand<Action extends RuntimeAction = RuntimeAction> =
     : never;
 
 type RuntimeCommandKnownResults = {
+  updateKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
+  createKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
+  setKnowledgeCollectionState: import('./model/knowledge').KnowledgeCollection;
+  saveKnowledgeDraft: import('./model/knowledge').KnowledgePage;
+  publishKnowledgePage: import('./model/knowledge').KnowledgePage;
+  setKnowledgePageState: import('./model/knowledge').KnowledgePage;
+  listKnowledgePages: {
+    pages: import('./model/knowledge').KnowledgePageSummary[];
+    hasMore: boolean;
+  };
+  readKnowledgePage:
+    import('./model/knowledge').KnowledgeRead | import('./model/knowledge').KnowledgePage;
+  searchKnowledge: { results: import('./model/knowledge').KnowledgeHit[]; hasMore: boolean };
   acceptInvitation: Membership;
   attachContext: ContextFile;
   attachTicketFile: Ticket;

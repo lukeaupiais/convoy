@@ -29,6 +29,7 @@ import {
   canMessage,
   messageBinding,
 } from '../modules/conversations/index.mjs';
+import { createKnowledge } from '../modules/knowledge/index.mjs';
 import { createLibrary } from '../modules/library/index.mjs';
 import { createIdentity } from '../modules/identity/index.mjs';
 import { createOrganizations } from '../modules/organizations/index.mjs';
@@ -621,6 +622,7 @@ export async function createRuntime({
     await store.save();
   }
   const commandAuthorization = createCommandAuthorization({
+    knowledgeAccess: command => knowledge.accessForCommand(command),
     state,
     contextFor,
     requireProjectPermission,
@@ -661,7 +663,9 @@ export async function createRuntime({
   });
   const placement = execution.placement;
   const promptContext = createPromptContext({ digest, now });
+  const knowledge = createKnowledge({ state, save: () => store.save(), now });
   const library = createLibrary({
+    validateKnowledge: knowledge.validateSelection,
     state,
     save: () => store.save(),
     catalog,
@@ -1007,6 +1011,8 @@ export async function createRuntime({
       ),
   });
   const agentExecution = createAgentExecution({
+    knowledge,
+    authorizeKnowledge: s => requireProjectPermission(s.projectId, 'project.read', s.executionPrincipal ?? localPrincipal),
     providerGateway,
     providerContext: providerContextForSession,
     provider,
@@ -1428,7 +1434,7 @@ export async function createRuntime({
     library,
   ]);
   const moduleCommands = createModuleCommandRegistry(
-    [library, work, execution, workflows, conversationModule, agentModule],
+    [library, knowledge, work, execution, workflows, conversationModule, agentModule],
     {
       expectedActions: Object.keys(runtimeCommandContracts),
       orchestrationActions: orchestrationCommands,
@@ -1473,6 +1479,7 @@ export async function createRuntime({
         },
       },
       library,
+      knowledge,
       work,
       execution,
       conversationModule,

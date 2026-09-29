@@ -9,6 +9,7 @@ Sibling modules import that surface, never private implementation files.
 | `audit`         | append-only tenant security evidence and bounded export |
 | `conversations` | durable discussion, steering, context files, recovery   |
 | `execution`     | placement, runner eligibility, and command evidence     |
+| `knowledge`     | wiki collections, drafts, revisions and retrieval     |
 | `library`       | tools, skills, profiles, and instruction revisions      |
 | `work`          | projects, tickets, boards, and optimistic revisions     |
 | `workflows`     | graph definitions, publication, and run transitions     |

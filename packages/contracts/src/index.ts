@@ -1,3 +1,4 @@
+export * from './model/knowledge';
 export * from './commands';
 export * from './errors';
 export * from './events';
