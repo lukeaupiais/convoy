@@ -79,6 +79,15 @@ export type SessionEvent = {
   reason?: string;
 };
 export type Session = {
+  contextUsage?: {
+    model: string;
+    agentSessionId: string;
+    checkpointThrough: number;
+    inputTokens: number;
+    contextWindow?: number;
+    compactAtTokens?: number;
+    observedAt: string;
+  };
   modelUsage?: {
     requests: number;
     inputTokens?: number;

@@ -124,3 +124,49 @@ attributed retroactively.
 Sources for provider behavior: [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching),
 [Claude prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
 and [Gemini context caching](https://ai.google.dev/gemini-api/docs/caching).
+
+
+### Append-only runtime state updates
+
+Runtime context starts with a baseline, then appends top-level state deltas.
+Commands carry IDs and status, not copies of their command text/output. The original
+tool messages and durable command records retain those details; full output remains
+available through the normal output tool. Streaming output alone does not append
+another snapshot. Cleared fields are explicit empty/null values.
+
+Earlier messages are never rewritten or removed for this optimization. Restart
+reconstructs the visible state from existing baseline/delta messages. If context
+compaction removes the baseline, preparation appends a fresh complete state after
+that checkpoint. Compaction already changes the provider prefix; normal updates
+preserve earlier encoded messages. This establishes local prefix stability, not a
+provider cache-hit guarantee. Changing tool policies, instruction revisions or
+other request fields may independently affect caching.
+
+
+## Measured context occupancy
+
+Automatic compaction uses the latest generation response's provider-reported
+`inputTokens`, including cached input, rather than serialized history size or
+cumulative usage. The threshold is 80% of the model context window, leaving 20%
+headroom for generation and intervening tool output. This is a policy threshold,
+not a preflight count of the next request. No extra counting API call is made.
+
+The provider gateway supplies capacity from the selected offering, falling back
+to adapter metadata. The subscription compatibility catalog includes Luna's
+272,000-token default observed on 2026-09-28 (not the larger optional maximum).
+Missing catalog capacity is filled without replacing already discovered limits.
+Models with unknown capacity retain measured input usage but cannot automatically
+compact by a percentage until capacity is provided; there is no character fallback.
+
+The conversation's `contextUsage` is separate from cumulative `modelUsage`, scoped
+to the model, agent session and checkpoint. Summarizer usage contributes to
+consumption totals but never replaces the main agent's context observation.
+Compaction invalidates the observation until another generation reports usage.
+The chat usage display labels the measured value **Last input** and cumulative
+consumption **Total in**. Percentage uses total input, not input minus cache reads.
+
+Compaction projects readable message data into its summary request and omits
+opaque reasoning/text signatures. Native provider reasoning remains in ordinary
+requests and durable history. The latest user boundary and its complete tool
+interactions remain intact. Successful compaction records the measured input,
+capacity and threshold in its event.

@@ -75,7 +75,11 @@ export function createProviderGateway({
 
   async function* generate(input) {
     if (legacyById.has(input.model)) {
-      yield* legacyGenerate(input);
+      for await (const item of legacyGenerate(input)) {
+        yield item.type === 'result'
+          ? { ...item, contextWindow: legacyById.get(input.model).contextWindow ?? item.contextWindow }
+          : item;
+      }
       return;
     }
     const { context, purpose, sessionId, turnId, constraints, ...providerInput } = input;
@@ -153,7 +157,9 @@ export function createProviderGateway({
               }),
             );
           }
-          yield item;
+          yield item.type === 'result'
+            ? { ...item, contextWindow: plan.offering.contextWindow ?? item.contextWindow }
+            : item;
         }
         if (!terminal) throw new Error('Provider stream ended before a terminal response.');
         return;
