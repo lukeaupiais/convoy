@@ -154,7 +154,8 @@ export function createOpenAICompatibleProvider({ id, name, endpoint, fetch: requ
         .filter((model) => typeof model?.id === 'string' && model.id)
         .map((model) => ({ id: model.id, name: model.name ?? model.id, input: ['text'] }));
     },
-    async *generate({ model, prompt, messages: input, systemPrompt, tools: declared, token, signal }) {
+    async *generate({ model, prompt, messages: input, systemPrompt, tools: declared, token, signal, modelSettings }) {
+      if (modelSettings?.reasoningEffort) throw Object.assign(new Error("This provider adapter does not advertise configurable reasoning effort."), { providerOutcome: 'not-sent', retryable: false });
       const instructions = prompt
         ? [prompt.stableInstructions, prompt.turnInstructions].filter(Boolean).join('\n\n')
         : systemPrompt;

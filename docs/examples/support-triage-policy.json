@@ -1,0 +1,41 @@
+{
+  "prompt": "Investigate the support request as a single agent. Load the configured support skill. For user-visible behavior with a ready authorized application, attempt the UI reproduction first using native CLI tools such as Playwright, then inspect source as needed to explain or unblock it. Submit only a supported outcome. Existing human approval gates remain mandatory. Use the submission summary for readable findings and the structured details/references for review evidence. No customer messages or development work during this investigation.",
+  "instructions": "Classify the request provisionally before investigating: a defect report alleges behavior contrary to an existing requirement; a change request states desired new behavior; a question requests an explanation. Do not require a reproduced incident to investigate or escalate a bounded change request. For a defect, identify the violated requirement and reproduction evidence or explicitly state what remains unverified. For a change request, establish the affected flow, current implementation, requested rule, owner, impact and testable acceptance criteria.\n\nFor user-visible behavior, when an authorized application environment is ready, begin by attempting the reported flow through the UI with native CLI tools such as Playwright. Observe the response and verify resulting state after reload. Use synthetic data within the declared environment boundaries. Use source inspection afterward to explain the result or resolve a concrete obstacle. A real application reproduction can establish the observed behavior without exhaustive source tracing. For source investigation, read the repository README and applicable guidance, discover actual filenames, then use scoped native CLI searches and bounded reads. Follow relevant dispatch and validation when the conclusion depends on them; a short handler excerpt alone does not prove a rule is absent. Compare plausible alternative interpretations proportionately: a remote theoretical possibility is not automatically a customer blocker. Separate supplied facts, inspected code and unverified runtime behavior. Do not invent a tenant incident.\n\nChoose clarify only for a material external blocker. Supply missingQuestion (one focused question), internalInvestigation (what you inspected and why available sources cannot answer it), decisionImpact (how different answers change the next action), and selfCheck. Do not ask the customer to repeat desired behavior already provided, or use missing severity, timestamp or order ID as automatic blockers for a policy-change request. Unfinished code navigation, missing tool access or budget exhaustion requires an ordinary progress report with the next internal action, without submit_step.\n\nChoose escalate for either a supported defect or a bounded change request. Supply requestKind, scope, owner, impact, acceptanceCriteria, evidenceAssessment, and selfCheck. Clearly qualify inferred impact and unverified deployed behavior. Do not claim a defect from source structure alone. A change request does not require production reproduction, but material ambiguity about its scope still needs resolution. Choose reply only for an answer supported by the inspected evidence, with answer, basis and selfCheck.\n\nBefore using a passing test to resolve a material question, inspect its setup and identify whether the relevant implementation is real or substituted. If substituted, follow the production registration and call path using scoped native CLI reads. Limit the conclusion to what the evidence establishes. Record the strongest claim, evidence scope and remaining uncertainty in selfCheck; distinguish a passing test, source-supported behavior and application reproduction. If internal investigation is incomplete, continue within the allowance or pause for continuation; do not route unfinished work as customer clarification. No additional agent is involved. Include exact relative source references and inclusive line ranges supporting the key claims. Nonempty fields and valid references do not prove the recommendation correct.\n\nKeep the customer draft separate, concise and in the customer's language. Preserve facts already supplied. Use screen/business language rather than internal field names. Ask only questions needed to choose the next action. Never claim a fix was delivered. Human review approves any customer reply, external status change or development escalation.\n\nRecord investigation questions in the structured investigation assessment, including material counterexamples raised in selfCheck. Before submission, resolve material internally answerable questions by inspecting the relevant path, and record the concrete finding. If an answer could overturn your claim that a rule is missing, resolve it through the relevant application reproduction or validation path before making the claim. Do not merely qualify the claim and submit anyway. Continue with the same agent while exploration remains. If genuinely blocked or out of allowance, report the exact next internal action without submit_step. External business decisions and nonmaterial unknowns may remain, with a next action; do not demand production reproduction for every change request. Never erase or relabel a question merely to pass the gate.",
+  "submissionRequirements": {
+    "clarify": {
+      "fields": [
+        "missingQuestion",
+        "internalInvestigation",
+        "decisionImpact",
+        "selfCheck"
+      ],
+      "minReferences": 1,
+      "requireInvestigationAssessment": true,
+      "requireClaimEvidence": true
+    },
+    "escalate": {
+      "fields": [
+        "requestKind",
+        "scope",
+        "owner",
+        "impact",
+        "acceptanceCriteria",
+        "evidenceAssessment",
+        "selfCheck"
+      ],
+      "minReferences": 2,
+      "requireInvestigationAssessment": true,
+      "requireClaimEvidence": true
+    },
+    "reply": {
+      "fields": [
+        "answer",
+        "basis",
+        "selfCheck"
+      ],
+      "minReferences": 1,
+      "requireInvestigationAssessment": true,
+      "requireClaimEvidence": true
+    }
+  }
+}

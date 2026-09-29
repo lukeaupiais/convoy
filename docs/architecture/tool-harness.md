@@ -53,3 +53,43 @@ cancellation, output, and audit broker. They are not built-ins and must expose
 their server identity and execution location. LSP and web access are optional
 external capabilities; neither may silently inherit workspace or network
 authority.
+
+
+
+## Investigation controls
+
+Model requests receive only the effective tool schemas: the intersection of the
+pinned capability profile, workflow permissions, runner support and execution
+policy. Tool calls are checked again at dispatch. A CLI-oriented profile can
+select `shell`, `read_file`, `inspect_repository` and `read_command_output`; no
+new search service is required. Runtime execution restrictions remain enforced at dispatch.
+
+Malformed built-in tool calls return the expected argument shape, including optional
+fields, without echoing supplied values. Local validation remains authoritative;
+provider strict-schema mode is unchanged.
+
+Large command previews preserve the beginning and end with an explicit omission notice. The command ID and cursor support bounded reads of retained output; retention and disconnect limits still apply.
+
+Agent nodes can pin these optional settings in a workflow revision:
+
+- `finalizationRounds`: reserve the last N requests within `maxRounds`. The model
+  sees the remaining exploration budget. During finalization only `submit_step` and `finish_incomplete`
+  are exposed, and other tool calls are rejected. An ordinary progress report
+  leaves the workflow `awaiting_submission`; it does not invent a business outcome.
+  Explicit continuation starts another bounded invocation, while the cumulative
+  request count remains in session events. Existing workflows default to zero.
+- `reasoningEffort`: `low`, `medium` or `high`. The subscription adapter forwards
+  it to the provider; omission retains its existing low default. The compatible
+  HTTP adapter rejects explicit settings before network dispatch until support
+  is implemented, rather than silently ignoring them. Model-specific rejection
+  is surfaced. `model_request_settings` events and prompt provenance record the
+  selected settings; these are not claims about undocumented model internals.
+- `summaryHeadings`: up to 12 required Markdown sections, checked before accepting
+  a submission. Missing/empty sections return a repairable tool error and cannot
+  advance the workflow. This is a structural check, not proof of factual accuracy.
+
+Use the workflow editor to set these controls. Investigation procedure, business
+outcomes, acceptance criteria and requester wording belong in versioned workflow
+prompts or skills. See the [generic configuration example](../investigation-workflow-example.json).
+Publishing a revision does not change an already pinned run. Human review remains
+necessary for evidence quality and any external effect.

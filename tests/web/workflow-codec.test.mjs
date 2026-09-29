@@ -191,3 +191,15 @@ test('workflow editor preserves an exact capability profile through graph round 
   const graph = fromWorkflow({ id: 'article', name: 'Article', capabilityProfile: profile, nodes: [{ id: 'review', type: 'approval', name: 'Review' }] });
   assert.deepEqual(toWorkflow(graph).capabilityProfile, profile);
 });
+
+test('agent investigation settings survive an editor round trip', () => {
+  const wire = {id: 'inspect', name: 'Inspect', nodes: [{id: 'inspect', kind: 'agent', name: 'Inspect', prompt: 'Inspect', maxRounds: 12, finalizationRounds: 2, reasoningEffort: 'medium', summaryHeadings: ['Evidence', 'Unknowns']}], edges: []};
+  const roundTrip = toWorkflow(fromWorkflow(wire));
+  for (const key of ['maxRounds', 'finalizationRounds', 'reasoningEffort', 'summaryHeadings']) assert.deepEqual(roundTrip.nodes[0][key], wire.nodes[0][key]);
+});
+
+test('outcome-specific requirements survive editor publication without dropping policies', () => {
+  const policy = {publish: {fields: ['audience', 'selfCheck'], minReferences: 1, requireInvestigationAssessment: true, requireClaimEvidence: true}};
+  const wire = {id: 'editorial', name: 'Editorial', nodes: [{id: 'draft', kind: 'agent', name: 'Draft', prompt: 'Inspect', submissionRequirements: policy}], edges: []};
+  assert.deepEqual(toWorkflow(fromWorkflow(wire)).nodes[0].submissionRequirements, policy);
+});

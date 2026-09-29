@@ -1,0 +1,40 @@
+{
+  "id": "evidence-investigation",
+  "name": "Evidence investigation",
+  "schemaVersion": 3,
+  "entryNode": "investigate",
+  "maxRevisions": 3,
+  "nodes": [
+    {
+      "id": "investigate",
+      "kind": "agent",
+      "name": "Investigate",
+      "permissions": "read",
+      "maxRounds": 12,
+      "finalizationRounds": 2,
+      "reasoningEffort": "medium",
+      "summaryHeadings": [
+        "Facts",
+        "Evidence",
+        "Unknowns",
+        "Recommendation",
+        "Requester response"
+      ],
+      "prompt": "Investigation procedure: Orient using the repository README and loaded project guidance. Write a short evidence plan, then use scoped native CLI searches (rg, sed, find) and bounded reads to follow the relevant entrypoint into validation and state transition, including defaults and existing tests. Compare other plausible interpretations only as needed; explain which evidence rules them in or out. Track facts supplied by the requester separately from observed code and unverified runtime behavior. Do not infer a missing validation from a field being optional in a schema: follow the execution path. Before submission, check that your citations actually support each claim and identify unexamined paths. Ask only requester questions whose answers materially change the next action and cannot be obtained from available evidence; do not ask the requester to repeat the stated desired behavior. If investigation is incomplete because of time, tools or budget, report progress and the next concrete investigation step without submitting a requester clarification merely to finish. State the owner, bounded change and acceptance criteria only when supported. Required sections may explicitly say unknown; never invent evidence to fill them. Submit outcome success only when ready for human review, using an empty artifact list unless a distinct artifact was produced."
+    },
+    {
+      "id": "review",
+      "kind": "human",
+      "name": "Review evidence",
+      "prompt": "Check the evidence against the request and source. Decide the next action; incomplete investigation needs further internal work."
+    }
+  ],
+  "edges": [
+    {
+      "id": "review",
+      "from": "investigate",
+      "to": "review",
+      "outcome": "success"
+    }
+  ]
+}

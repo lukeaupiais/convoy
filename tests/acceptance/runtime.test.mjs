@@ -726,7 +726,7 @@ test('brief, approval, implementation, independent review and revision preserve 
   assert.equal(prompts[2].messages.length, 2);
   assert.match(prompts[2].messages[1].content, /convoy_runtime_snapshot/);
   assert.ok(prompts.every((p) => JSON.stringify(p.tools) === JSON.stringify(prompts[0].tools)));
-  assert.match(prompts[0].systemPrompt, /"available":\["ask_user","submit_step"\]/);
+  assert.match(prompts[0].systemPrompt, /"available":\["ask_user","finish_incomplete","submit_step"\]/);
   await assert.rejects(act('approveGate', { instance: firstGate }), /changed/);
   await act('requestChanges', { instance: s.flow.instance, feedback: 'Handle empty input' });
   await until(
@@ -768,9 +768,9 @@ test('ordinary replies never advance; questions are separate; pause and restart 
     yield {
       type: 'result',
       message: assistant(
-        turns === 1
+        turns <= 3
           ? [{ type: 'text', text: 'Not submitted' }]
-          : turns === 2
+          : turns === 4
             ? [
                 {
                   type: 'toolCall',
@@ -806,7 +806,7 @@ test('ordinary replies never advance; questions are separate; pause and restart 
   await runtime.close();
   const restarted = await createRuntime(options);
   assert.equal((await restarted.snapshot('1')).sessions[0].flow.status, 'paused');
-  assert.equal(turns, 1);
+  assert.equal(turns, 3);
   const command = (action, extra = {}) =>
     restarted.command({ action, taskId: '1', client: 'test-web-client', ...extra });
   await command('claim', { label: 'Web' });

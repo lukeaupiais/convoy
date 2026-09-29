@@ -1,3 +1,4 @@
+import { submissionContract, submissionToolSchema, validateSubmissionContract } from '../workflows/index.mjs';
 import { parseDocument } from 'yaml';
 import Ajv from 'ajv/dist/2020.js';
 import { digest } from '../../../../../packages/runner/src/index.mjs';
@@ -6,6 +7,7 @@ import {
   modelTools,
   declaredModelTools,
   validateToolCall,
+  submissionInputSchema,
 } from './tool-registry.mjs';
 import { migrateExtensionState, parseExtensionManifest } from './extensions.mjs';
 
@@ -253,7 +255,7 @@ export function createCapabilities({ state, validateKnowledge }) {
         )
       )
         reason = 'Disabled by workspace policy';
-      else if (t.name === 'submit_step' && !workflow)
+      else if (['submit_step', 'finish_incomplete'].includes(t.name) && !workflow)
         reason = 'Only available in an agent workflow step';
       else if (
         ['load_skill', 'read_skill_resource'].includes(t.name) &&
@@ -305,8 +307,11 @@ export function createCapabilities({ state, validateKnowledge }) {
     }
   }
   function resolveForWorkflow(session, workflow, options = {}) {
-    const ref = Object.hasOwn(options, 'profile') ? options.profile
-      : workflow.capabilityProfile ?? session.capabilityProfile ?? state.projectProfiles[session.projectId];
+    const ref = Object.hasOwn(options, 'profile')
+      ? options.profile
+      : (workflow.capabilityProfile ??
+        session.capabilityProfile ??
+        state.projectProfiles[session.projectId]);
     const selected = ref ? structuredClone(profile(ref, organizationForSession(session))) : null;
     // Historical workflows without a selected profile retain their legacy tool set.
     if (selected || workflow.capabilityProfile) {
@@ -366,7 +371,11 @@ export function createCapabilities({ state, validateKnowledge }) {
       return declaredModelTools();
     },
     modelTools(s, step) {
-      return modelTools(entries(s, step));
+      return modelTools(entries(s, step)).map(tool => {
+        if (tool.name !== 'submit_step' || !step) return tool;
+        const base = step.submissionRequirements ? submissionInputSchema(tool.parameters) : tool.parameters;
+        return {...tool, description: `${tool.description} Use only for a completed decision. Use finish_incomplete for unfinished work at the allowance limit or an observed blocker.`, parameters: submissionToolSchema(base, submissionContract(s.workflow, step))};
+      });
     },
     validate(s, step, name, args) {
       const t = entries(s, step).find((t) => t.name === name);
@@ -375,7 +384,10 @@ export function createCapabilities({ state, validateKnowledge }) {
         const check = new Ajv({ allErrors: true, strict: true }).compile(t.inputSchema);
         if (JSON.stringify(args ?? null).length > 40000 || !check(args))
           throw new Error('Invalid extension tool arguments.');
-      } else validateToolCall(name, args);
+      } else {
+        if (name === 'submit_step' && step) validateSubmissionContract(submissionContract(s.workflow, step), args);
+        validateToolCall(name, args, !!step?.submissionRequirements);
+      }
       return t;
     },
     extensionTool(session, step, name) {
@@ -540,7 +552,9 @@ export function createCapabilities({ state, validateKnowledge }) {
           extensions,
           at: new Date().toISOString(),
         };
-        p.hash = digest(JSON.stringify({ id, name, tools, skills, extensions, ...(knowledge ? { knowledge } : {}) }));
+        p.hash = digest(
+          JSON.stringify({ id, name, tools, skills, extensions, ...(knowledge ? { knowledge } : {}) }),
+        );
         state.capabilityProfiles.push(p);
         return p;
       }

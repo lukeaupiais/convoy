@@ -25,3 +25,5 @@ where relevant. The nearest source README describes ownership within a directory
 tests verify behavior at the corresponding boundary.
 
 Project knowledge: [Wiki foundation](architecture/wiki-foundation.md) and [Wiki interface](architecture/wiki-interface.md).
+
+Workflow investigation: [Structured submissions](architecture/structured-submissions.md) and [configuration example](investigation-workflow-example.json).

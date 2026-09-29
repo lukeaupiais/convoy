@@ -13,6 +13,19 @@ export type WorkflowSubmission = {
   nodeId?: string;
   step: string;
   summary: string;
+  investigation?: {
+    questions: {
+      question: string;
+      material: boolean;
+      internallyAnswerable: boolean;
+      status: 'resolved' | 'unresolved';
+      resolution: string;
+      nextAction: string;
+      evidence?: { references: number[]; establishes: string; unverified: string };
+    }[];
+  };
+  details?: Record<string, string>;
+  references?: { path: string; startLine: number; endLine: number; sha256: string; text: string }[];
   revision?: number;
   primaryArtifactId?: string;
   /** String paths are retained only for snapshots created before artifact capture. */
@@ -203,6 +216,7 @@ export type Session = {
   contextEpochs?: ContextEpoch[];
   provenance?: {
     systemPrompt: string;
+    modelSettings?: { reasoningEffort?: 'low' | 'medium' | 'high' };
     hash: string;
     contextEpoch?: Pick<ContextEpoch, 'id' | 'baselineHash' | 'createdAt'>;
     contextUpdates?: { kind: string; hash: string }[];

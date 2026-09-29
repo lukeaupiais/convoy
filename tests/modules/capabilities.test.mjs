@@ -160,3 +160,25 @@ test('workflow profiles resolve in project scope, validate required skills, and 
   assert.equal(preview.skills[0].version, 1);
   assert.equal(preview.tools.find(tool => tool.name === 'shell').available, false);
 });
+
+test('malformed arguments return the selected tool shape without echoing input', () => {
+  assert.throws(() => validateToolCall('shell', {path: 'sensitive-fixture', offset: 4}), error => {
+    assert.match(error.message, /Expected argument shape: \{ command: string/);
+    assert.doesNotMatch(error.message, /sensitive-fixture/); return true;
+  });
+  assert.throws(() => validateToolCall('shell', {command: 'x'.repeat(40001)}), /exceed 40000/);
+  validateToolCall('shell', {command: 'pwd'});
+});
+
+test('structured submission schemas are revision-scoped without mutating legacy tool hashes', () => {
+  const {c} = catalog(); const session = {};
+  const legacy = c.modelTools(session, {permissions: 'none'}).find(t => t.name === 'submit_step');
+  const step = {id: 'draft', permissions: 'none', submissionRequirements: {publish: {fields: ['audience'], minReferences: 0}}};
+  session.workflow = {edges: [{from: 'draft', to: 'review', outcome: 'publish'}]};
+  const derived = c.modelTools(session, step).find(t => t.name === 'submit_step');
+  assert.ok(derived.parameters.required.includes('details'));
+  assert.equal(legacy.parameters.properties.details, undefined);
+  assert.deepEqual(c.modelTools(session, {permissions: 'none'}).find(t => t.name === 'submit_step'), legacy);
+  c.validate(session, step, 'submit_step', {outcome: 'publish', summary: 'Done', artifacts: [], details: {audience: 'Readers'}, references: []});
+  assert.throws(() => c.validate(session, step, 'submit_step', {summary: 'Done', artifacts: []}), /Choose an exact workflow outcome/);
+});

@@ -152,3 +152,55 @@ test('native subscription adapter normalizes account probes and uncertain transp
     (error) => error.providerOutcome === 'uncertain' && !error.message.includes(token),
   );
 });
+
+test('reasoning effort is explicit on the wire and invalid values never dispatch', async () => {
+  const bodies = [];
+  const generate = createCodexSubscriptionGenerate({fetch: async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return sse([{type: 'response.completed', response: {status: 'completed', output: []}}]);
+  }});
+  for (const modelSettings of [undefined, {reasoningEffort: 'medium'}]) {
+    for await (const _ of generate({model: 'gpt-6-luna', token, sessionId: 'effort', systemPrompt: 'Inspect', messages: [], tools: [], modelSettings})) {}
+  }
+  assert.deepEqual(bodies.map(body => body.reasoning.effort), ['low', 'medium']);
+  await assert.rejects(async () => {for await (const _ of generate({model: 'gpt-6-luna', token, messages: [], tools: [], modelSettings: {reasoningEffort: 'invalid'}})) {}}, /reasoning effort/i);
+  assert.equal(bodies.length, 2);
+});
+
+test('actual compiled request prefix survives changing investigation budgets and finalization reminders', async () => {
+  const {createHash} = await import('node:crypto');
+  const {createPromptContext} = await import('../../apps/daemon/src/modules/agents/prompt-context.mjs');
+  const context = createPromptContext({digest: value => createHash('sha256').update(value).digest('hex')});
+  const requests = [];
+  const generate = createCodexSubscriptionGenerate({fetch: async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return sse([{type: 'response.completed', response: {status: 'completed', output: []}}]);
+  }});
+  const session = {id: 'budget-cache', title: 'Investigation', step: 0, instructions: [], events: [], commands: [], messages: []};
+  const step = {name: 'Investigate', prompt: 'Inspect relevant implementation.', finalizationRounds: 2};
+  for (const round of [0, 1, 10]) {
+    session.investigationBudget = {round, maxRounds: 12, finalizationRounds: 2, finalizing: round >= 10};
+    const compiled = context.compile({session, step, instance: 'one-step'});
+    context.recordTurnSnapshot(session.messages, context.turnSnapshot(session, null));
+    for await (const _ of generate({model: 'gpt-6-luna', token, sessionId: session.id, tools: [],
+      prompt: {...compiled, messages: session.messages}})) void _;
+    session.messages.push({role: 'assistant', content: 'Continue investigation.'});
+  }
+  for (let i = 1; i < requests.length; i++) {
+    assert.deepEqual({...requests[i], input: []}, {...requests[0], input: []});
+    assert.deepEqual(requests[i].input.slice(0, requests[i-1].input.length), requests[i-1].input);
+  }
+  assert.doesNotMatch(requests[0].input[0].content[0].text, /Request 1 of 12/);
+  assert.match(requests[1].input.at(-1).content[0].text, /"request":2/);
+  assert.match(requests[2].input.at(-1).content[0].text, /"finalizing":true/);
+});
+
+test('Luna results expose the subscription catalog default context window', async () => {
+  const generate = createCodexSubscriptionGenerate({ fetch: async () => sse([
+    { type: 'response.completed', response: { status: 'completed', output: [], usage: { input_tokens: 42670, output_tokens: 2 } } },
+  ]) });
+  const items = [];
+  for await (const item of generate({ model: 'gpt-6-luna', token, messages: [] })) items.push(item);
+  assert.equal(items.at(-1).contextWindow, 272000);
+  assert.equal(items.at(-1).usage.inputTokens, 42670);
+});

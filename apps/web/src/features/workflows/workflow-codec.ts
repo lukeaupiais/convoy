@@ -3,7 +3,13 @@ import { newId } from '../../shared/lib/browser';
 
 export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait';
 export type SessionMode = 'continue' | 'new' | 'reuse';
-export type ActionOperation = 'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'set_external_status' | 'update_ticket' | 'move_ticket';
+export type ActionOperation =
+  | 'inspect_changes'
+  | 'create_ticket'
+  | 'create_related_ticket'
+  | 'set_external_status'
+  | 'update_ticket'
+  | 'move_ticket';
 export type ConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type ConditionOperator = 'equals' | 'notEquals' | 'exists';
 export type ConditionValueType = 'text' | 'number' | 'boolean' | 'null';
@@ -32,10 +38,19 @@ export type GraphNode = {
   operation?: ActionOperation;
   input?: ActionInput;
   condition?: Condition;
-  waitFor?: { event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'; ticketSource: 'active_ticket' | 'related_ticket'; relationKind?: string; status?: string };
+  waitFor?: {
+    event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated';
+    ticketSource: 'active_ticket' | 'related_ticket';
+    relationKind?: string;
+    status?: string;
+  };
   session?: { mode: SessionMode; name?: string; target?: string };
   permissions?: string;
   maxRounds?: number;
+  finalizationRounds?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  summaryHeadings?: string[];
+  submissionRequirements?: WorkflowStep['submissionRequirements'];
   skills?: string[];
   model?: string;
   outcomes?: string[];
@@ -213,11 +228,12 @@ export function fresh(type: NodeKind = 'agent', index = 0): GraphNode {
       operation: 'inspect_changes',
       input: {},
     };
-  if (type === 'wait') return {
-    ...common,
-    prompt: 'Wait for the selected ticket event.',
-    waitFor: { event: 'ticket_message_received', ticketSource: 'active_ticket' },
-  };
+  if (type === 'wait')
+    return {
+      ...common,
+      prompt: 'Wait for the selected ticket event.',
+      waitFor: { event: 'ticket_message_received', ticketSource: 'active_ticket' },
+    };
   return {
     ...common,
     prompt: '',
@@ -271,7 +287,10 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     value.condition && typeof value.condition === 'object'
       ? (value.condition as Record<string, unknown>)
       : undefined;
-  const rawWait = value.waitFor && typeof value.waitFor === 'object' ? value.waitFor as Record<string, unknown> : undefined;
+  const rawWait =
+    value.waitFor && typeof value.waitFor === 'object'
+      ? (value.waitFor as Record<string, unknown>)
+      : undefined;
   const artifact =
     value.artifact && typeof value.artifact === 'object'
       ? (value.artifact as Record<string, unknown>)
@@ -363,6 +382,15 @@ export function safeNode(raw: unknown, index: number): GraphNode {
         : type === 'agent'
           ? []
           : undefined,
+    finalizationRounds:
+      type === 'agent' ? (value.finalizationRounds as number | undefined) : undefined,
+    reasoningEffort:
+      type === 'agent' ? (value.reasoningEffort as GraphNode['reasoningEffort']) : undefined,
+    submissionRequirements:
+      type === 'agent'
+        ? (value.submissionRequirements as WorkflowStep['submissionRequirements'])
+        : undefined,
+    summaryHeadings: type === 'agent' ? (value.summaryHeadings as string[] | undefined) : undefined,
     model: type === 'agent' && value.model ? String(value.model) : undefined,
     condition:
       type === 'branch'
@@ -385,14 +413,21 @@ export function safeNode(raw: unknown, index: number): GraphNode {
             falseOutcome: String(rawCondition?.falseOutcome ?? conditionOutcomes.false ?? 'no'),
           }
         : undefined,
-    waitFor: type === 'wait' ? {
-      event: ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(String(rawWait?.event))
-        ? rawWait?.event as 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated'
-        : 'ticket_message_received',
-      ticketSource: rawWait?.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket',
-      ...(rawWait?.relationKind ? { relationKind: String(rawWait.relationKind) } : {}),
-      ...(rawWait?.status ? { status: String(rawWait.status) } : {}),
-    } : undefined,
+    waitFor:
+      type === 'wait'
+        ? {
+            event: ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(
+              String(rawWait?.event),
+            )
+              ? (rawWait?.event as
+                  'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated')
+              : 'ticket_message_received',
+            ticketSource:
+              rawWait?.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket',
+            ...(rawWait?.relationKind ? { relationKind: String(rawWait.relationKind) } : {}),
+            ...(rawWait?.status ? { status: String(rawWait.status) } : {}),
+          }
+        : undefined,
     outcomes,
   };
   normalized.outcomes = outcomesFor(normalized);
@@ -426,6 +461,10 @@ export function backendNode(node: GraphNode): WorkflowStep {
     result.session = session ?? { mode: 'continue' };
     result.permissions = node.permissions;
     result.maxRounds = node.maxRounds;
+    if (node.finalizationRounds !== undefined) result.finalizationRounds = node.finalizationRounds;
+    if (node.reasoningEffort) result.reasoningEffort = node.reasoningEffort;
+    if (node.submissionRequirements) result.submissionRequirements = node.submissionRequirements;
+    if (node.summaryHeadings) result.summaryHeadings = node.summaryHeadings;
     result.skills = node.skills ?? [];
     if (node.model) result.model = node.model;
   }
@@ -437,7 +476,8 @@ export function backendNode(node: GraphNode): WorkflowStep {
     result.operation = operation ?? 'inspect_changes';
     result.input = input ?? {};
   }
-  if (type === 'wait') result.waitFor = waitFor ?? { event: 'ticket_message_received', ticketSource: 'active_ticket' };
+  if (type === 'wait')
+    result.waitFor = waitFor ?? { event: 'ticket_message_received', ticketSource: 'active_ticket' };
   if (type === 'branch' && condition)
     result.condition = {
       source: condition.source,
@@ -553,7 +593,7 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
   }
   if (workflow.entryNode && ids.has(workflow.entryNode)) {
     const reached = new Set([workflow.entryNode]);
-    for (let changed = true; changed; ) {
+    for (let changed = true; changed;) {
       changed = false;
       for (const edge of workflow.edges)
         if (reached.has(edge.from) && !reached.has(edge.to)) {
