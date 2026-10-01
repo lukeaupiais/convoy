@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 
 const source = await readFile(
-  new URL('../../apps/web/src/features/tickets/artifact-markdown.ts', import.meta.url),
+  new URL('../../apps/web/src/features/workflows/artifact-markdown.ts', import.meta.url),
   'utf8',
 );
 const compiled = ts.transpileModule(source, {

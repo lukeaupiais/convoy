@@ -11,6 +11,7 @@ export type WorkflowSubmissionArtifact = Pick<
 > & { path: string };
 export type WorkflowSubmission = {
   nodeId?: string;
+  instance?: string;
   step: string;
   summary: string;
   investigation?: {
@@ -233,12 +234,30 @@ export type Session = {
     revision: number;
     nodeId?: string | null;
     lastSubmission?: WorkflowSubmission;
+    decisionSubmissionRef?: { nodeId: string; instance: string; revision: number };
+    approvedSubmission?: {
+      reviewNodeId: string;
+      reviewInstance: string;
+      sourceSubmissionRef?: { nodeId: string; instance: string; revision: number };
+      submission: WorkflowSubmission;
+    };
+    actionResult?: { awaitingDelivery?: boolean; replyRequestId?: string; deliveryStatus?: string; message?: string; [key: string]: unknown };
     history?: {
       nodeId: string;
       instance?: string;
       outcome: string;
       at?: string;
       to?: string | null;
+      submission?: WorkflowSubmission;
+      decisionSubmissionRef?: { nodeId: string; instance: string; revision: number };
+      sourceEvidence?: {
+        sourceNodeId: string;
+        sourceInstance: string;
+        artifact?: { path: string; hash: string };
+        digest?: string;
+        details?: Record<string, string>;
+        references?: { path: string; startLine: number; endLine: number; sha256: string }[];
+      };
     }[];
   };
   agentSessions?: { id: string; name: string; messageCount: number }[];

@@ -25,7 +25,7 @@ export function createSteering(event) {
       // Check retries before limits; never duplicate a delivered or discarded message.
       if(Object.hasOwn(s.steeringRequests??{},c.requestId)){request(s,c.requestId,payload);return false;}
       s.pendingMessages??=[];
-      const textBytes=items=>items.reduce((n,m)=>n+(m.attachments??[]).filter(f=>f.mime==='text/plain').reduce((a,f)=>a+f.size,0),0);
+      const textBytes=items=>items.reduce((n,m)=>n+(m.attachments??[]).filter(f=>['text/plain','text/markdown','application/json'].includes(f.mime)).reduce((a,f)=>a+f.size,0),0);
       if(textBytes([...s.pendingMessages,c])>128000)throw new Error('Queued text attachments exceed 128 KB. Wait for delivery before adding more.');
       if(s.pendingMessages.length>=20||s.pendingMessages.reduce((n,m)=>n+m.text.length,0)+payload.text.length>60000)throw new Error('Message queue is full. Remove a message or let the agent continue.');
       request(s,c.requestId,payload);

@@ -8,12 +8,14 @@ export type ActionOperation =
   | 'create_ticket'
   | 'create_related_ticket'
   | 'set_external_status'
+  | 'send_external_reply'
   | 'update_ticket'
   | 'move_ticket';
 export type ConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type ConditionOperator = 'equals' | 'notEquals' | 'exists';
 export type ConditionValueType = 'text' | 'number' | 'boolean' | 'null';
 export type Artifact = { path: string; headings: string[] };
+export type PresentationBinding = NonNullable<WorkflowStep['presentationBindings']>[number];
 export type Condition = {
   source: ConditionSource;
   field: string;
@@ -33,6 +35,7 @@ export type GraphNode = {
   y: number;
   advance?: 'automatic' | 'manual';
   artifact?: Artifact;
+  presentationBindings?: PresentationBinding[];
   requiresCheck?: boolean;
   checkCommand?: string;
   operation?: ActionOperation;
@@ -70,6 +73,18 @@ export type GraphWorkflow = {
   entryNode?: string;
   maxRevisions: number;
 };
+
+export function canAddPresentationBinding(
+  bindings: PresentationBinding[],
+  availableDetailFields: string[],
+): boolean {
+  if (bindings.length >= 12) return false;
+  return (
+    !bindings.some((binding) => binding.source === 'summary') ||
+    availableDetailFields.length > 0 ||
+    !bindings.some((binding) => binding.source === 'artifact')
+  );
+}
 
 export const kindLabels: Record<NodeKind, string> = {
   agent: 'Agent',
@@ -296,6 +311,21 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     value.artifact && typeof value.artifact === 'object'
       ? (value.artifact as Record<string, unknown>)
       : undefined;
+  const presentationBindings = Array.isArray(value.presentationBindings)
+    ? value.presentationBindings.flatMap((rawBinding): PresentationBinding[] => {
+        if (!rawBinding || typeof rawBinding !== 'object') return [];
+        const binding = rawBinding as Record<string, unknown>;
+        if (!['summary', 'detail', 'artifact'].includes(String(binding.source))) return [];
+        return [
+          {
+            source: binding.source as PresentationBinding['source'],
+            ...(typeof binding.field === 'string' ? { field: binding.field } : {}),
+            ...(typeof binding.label === 'string' ? { label: binding.label } : {}),
+            ...(typeof binding.primary === 'boolean' ? { primary: binding.primary } : {}),
+          },
+        ];
+      })
+    : undefined;
   const operation = String(value.operation ?? 'inspect_changes') as ActionOperation;
   const outcomes = Array.isArray(value.outcomes) ? value.outcomes.map(String) : undefined;
   const conditionOutcomes =
@@ -352,6 +382,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
           headings: Array.isArray(artifact.headings) ? artifact.headings.map(String) : [],
         }
       : undefined,
+    presentationBindings,
     requiresCheck: Boolean(value.requiresCheck),
     checkCommand:
       type === 'check' || value.requiresCheck ? String(value.checkCommand ?? '') : undefined,
@@ -445,6 +476,7 @@ export function backendNode(node: GraphNode): WorkflowStep {
     input,
     session,
     artifact,
+    presentationBindings,
     ...rest
   } = node;
   const result: Record<string, unknown> = {
@@ -458,6 +490,13 @@ export function backendNode(node: GraphNode): WorkflowStep {
       path: artifact.path,
       headings: artifact.headings.map((heading) => heading.trim()).filter(Boolean),
     };
+  if (presentationBindings?.length)
+    result.presentationBindings = presentationBindings.map((binding) => ({
+      source: binding.source,
+      ...(binding.source === 'detail' && binding.field ? { field: binding.field } : {}),
+      ...(binding.label?.trim() ? { label: binding.label.trim() } : {}),
+      ...(binding.primary ? { primary: true } : {}),
+    }));
   if (type === 'agent') {
     result.session = session ?? { mode: 'continue' };
     result.permissions = node.permissions;
@@ -622,6 +661,44 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
     if (node.type === 'check' && !node.checkCommand?.trim())
       errors.push(`${node.name}: check command is required.`);
     if (node.type === 'wait' && !node.waitFor) errors.push(`${node.name}: wait event is required.`);
+    const bindings = node.presentationBindings ?? [];
+    if (bindings.length && node.type !== 'agent')
+      errors.push(`${node.name}: material bindings require an agent submission.`);
+    if (bindings.length > 12) errors.push(`${node.name}: use at most 12 material bindings.`);
+    if (bindings.some((binding) => binding.source === 'detail' && !binding.field?.trim()))
+      errors.push(`${node.name}: choose a field for each detail binding.`);
+    if (
+      bindings.some(
+        (binding) =>
+          binding.source === 'detail' &&
+          binding.field &&
+          !Object.values(node.submissionRequirements ?? {}).some((rule) =>
+            rule.fields.includes(binding.field!),
+          ),
+      )
+    )
+      errors.push(`${node.name}: each detail binding must use a declared submission field.`);
+    if (bindings.filter((binding) => binding.primary).length > 1)
+      errors.push(`${node.name}: choose at most one primary material binding.`);
+    if (
+      bindings.filter((binding) => binding.source === 'summary').length > 1 ||
+      bindings.filter((binding) => binding.source === 'artifact').length > 1
+    )
+      errors.push(`${node.name}: summary and artifact material can each be bound once.`);
+    const detailFields = bindings
+      .filter((binding) => binding.source === 'detail')
+      .map((binding) => binding.field);
+    if (new Set(detailFields).size !== detailFields.length)
+      errors.push(`${node.name}: bind each detail field once.`);
+    if (
+      node.type === 'approval' &&
+      workflow.edges.some(
+        (edge) =>
+          edge.from === node.id &&
+          !['approved', 'changes_requested', '*', 'default'].includes(edge.outcome),
+      )
+    )
+      errors.push(`${node.name}: human outcomes support approved and changes_requested only.`);
   }
   return [...new Set(errors)];
 }
@@ -663,6 +740,7 @@ export function actionInputDefaults(operation: ActionOperation): ActionInput {
       priority: 'Medium',
     };
   if (operation === 'create_related_ticket') return { title: '', description: '', kind: 'related' };
+  if (operation === 'send_external_reply') return { connectionId: '', sourceNodeId: '', field: '' };
   if (operation === 'update_ticket') return { ticketSource: 'active_ticket', patch: {} };
   if (operation === 'move_ticket')
     return { ticketSource: 'active_ticket', boardId: '', placement: { columnId: '' } };

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AtSign, FileText, Paperclip, X } from 'lucide-react';
 import { command, type ContextFile } from '../../shared/api/runtime';
+import { WorkflowArtifactContent } from '../workflows';
 
 const url = (sessionId: string, file: ContextFile) =>
   `/api/context/${encodeURIComponent(sessionId)}/${file.id}`;
@@ -31,11 +32,22 @@ export function AttachmentList({
     setText('');
     setError('');
     const controller = new AbortController();
-    if (preview.mime === 'text/plain')
+    const mime = preview.mime.split(';')[0].trim().toLowerCase();
+    const isMarkdown = mime === 'text/markdown' || (!mime && /\.md(?:own)?$/i.test(preview.name));
+    const isPlain = mime === 'text/plain';
+    const isJson = mime === 'application/json' || mime.endsWith('+json');
+    if (isMarkdown || isPlain || isJson)
       void fetch(url(sessionId, preview), { signal: controller.signal })
         .then(async (r) => {
           if (!r.ok) throw new Error('File unavailable. Reattach it before sending.');
-          setText(await r.text());
+          const contents = await r.text();
+          if (isJson) {
+            try {
+              setText(JSON.stringify(JSON.parse(contents), null, 2));
+            } catch {
+              setText(contents);
+            }
+          } else setText(contents);
         })
         .catch((e) => {
           if (!controller.signal.aborted) setError(e.message);
@@ -117,8 +129,24 @@ export function AttachmentList({
               alt={preview.name}
               onError={() => setError('Image preview unavailable.')}
             />
+          ) : ['text/markdown', 'text/plain', 'application/json'].includes(
+              preview.mime.split(';')[0].trim().toLowerCase(),
+            ) ||
+            preview.mime.split(';')[0].trim().toLowerCase().endsWith('+json') ||
+            (!preview.mime && /\.md(?:own)?$/i.test(preview.name)) ? (
+            preview.mime.split(';')[0].trim().toLowerCase() === 'text/markdown' ||
+            (!preview.mime && /\.md(?:own)?$/i.test(preview.name)) ? (
+              <WorkflowArtifactContent text={text || 'Loading…'} />
+            ) : (
+              <pre>{text || 'Loading…'}</pre>
+            )
           ) : (
-            <pre>{text || 'Loading…'}</pre>
+            <div>
+              <p>Preview is unavailable for this content type.</p>
+              <p>
+                {preview.mime || 'Unknown content type'} · {size(preview.size)}
+              </p>
+            </div>
           )}
           <small>SHA-256 {preview.hash}</small>
         </dialog>

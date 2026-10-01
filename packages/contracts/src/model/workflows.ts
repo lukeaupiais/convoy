@@ -66,7 +66,7 @@ export type WorkflowSessionRule = {
 };
 export type WorkflowArtifact = { path: string; headings: string[] };
 export type WorkflowActionOperation =
-  'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'update_ticket' | 'move_ticket';
+  'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'update_ticket' | 'move_ticket' | 'set_external_status' | 'send_external_reply';
 export type WorkflowConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type WorkflowCondition = {
   source: WorkflowConditionSource;
@@ -94,6 +94,13 @@ export type WorkflowStep = {
   finalizationRounds?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
   summaryHeadings?: string[];
+  /** Optional display metadata for this node's submitted output; it never changes workflow policy. */
+  presentationBindings?: {
+    source: 'summary' | 'detail' | 'artifact';
+    field?: string;
+    label?: string;
+    primary?: boolean;
+  }[];
   submissionRequirements?: Record<
     string,
     {
@@ -136,11 +143,12 @@ export type WorkflowDefinition = {
 export type { AutomationRule } from './automations';
 export type WorkflowEffect = {
   effectKey: string;
-  status: 'pending' | 'uncertain' | 'succeeded';
+  status: 'pending' | 'uncertain' | 'blocked' | 'succeeded';
   operation: string;
   at?: string;
   reconciledAt?: string;
   message?: string;
+  blockingReplyRequestId?: string;
 };
 export type AutomationDecisionFailure = {
   triggerKey: string;

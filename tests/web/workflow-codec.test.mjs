@@ -14,7 +14,7 @@ const isolatedSource = source.replace(
 const js = ts.transpileModule(isolatedSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const { fromWorkflow, toWorkflow, validateWorkflow, reorderWorkflowStages, insertWorkflowStage, workflowStageOrder } =
+const { fromWorkflow, toWorkflow, validateWorkflow, reorderWorkflowStages, insertWorkflowStage, workflowStageOrder, canAddPresentationBinding } =
   await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
 
 test('workflow codec uses the browser-compatible ID seam rather than requiring randomUUID', () => {
@@ -202,4 +202,108 @@ test('outcome-specific requirements survive editor publication without dropping 
   const policy = {publish: {fields: ['audience', 'selfCheck'], minReferences: 1, requireInvestigationAssessment: true, requireClaimEvidence: true}};
   const wire = {id: 'editorial', name: 'Editorial', nodes: [{id: 'draft', kind: 'agent', name: 'Draft', prompt: 'Inspect', submissionRequirements: policy}], edges: []};
   assert.deepEqual(toWorkflow(fromWorkflow(wire)).nodes[0].submissionRequirements, policy);
+});
+
+test('optional presentation bindings round-trip across unrelated workflow configurations', () => {
+  const examples = [
+    {
+      id: 'calculation',
+      name: 'Calculation',
+      version: 4,
+      nodes: [{
+        id: 'calculate',
+        kind: 'agent',
+        name: 'Calculate',
+        prompt: 'Calculate a result.',
+        submissionRequirements: { complete: { fields: ['total'], minReferences: 0 } },
+        presentationBindings: [
+          { source: 'summary', label: 'Outcome' },
+          { source: 'detail', field: 'total', label: 'Total', primary: true },
+        ],
+      }],
+      edges: [],
+    },
+    {
+      id: 'publishing',
+      name: 'Publishing',
+      nodes: [{
+        id: 'publish',
+        kind: 'agent',
+        name: 'Prepare publication',
+        prompt: 'Prepare a publication package.',
+        submissionRequirements: { ready: { fields: ['audience'], minReferences: 0 } },
+        presentationBindings: [{ source: 'artifact', label: 'Publication files', primary: true }],
+      }],
+      edges: [],
+    },
+  ];
+
+  for (const wire of examples) {
+    const encoded = toWorkflow(fromWorkflow(wire));
+    assert.deepEqual(encoded.nodes[0].presentationBindings, wire.nodes[0].presentationBindings);
+    if (wire.version) assert.equal(encoded.version, wire.version);
+  }
+});
+
+test('legacy workflow definitions remain valid without presentation bindings', () => {
+  const wire = { id: 'legacy', name: 'Legacy', nodes: [{ id: 'work', kind: 'agent', name: 'Work', prompt: 'Work.' }], edges: [] };
+  const encoded = toWorkflow(fromWorkflow(wire));
+  assert.equal('presentationBindings' in encoded.nodes[0], false);
+  assert.deepEqual(validateWorkflow(fromWorkflow(wire)), []);
+});
+
+test('editor validation rejects undeclared detail fields and duplicate material bindings', () => {
+  const graph = fromWorkflow({
+    id: 'invalid-bindings',
+    name: 'Invalid bindings',
+    nodes: [{
+      id: 'prepare',
+      kind: 'agent',
+      name: 'Prepare',
+      prompt: 'Prepare output.',
+      submissionRequirements: { ready: { fields: ['result'], minReferences: 0 } },
+      presentationBindings: [
+        { source: 'summary' },
+        { source: 'summary', primary: true },
+        { source: 'detail', field: 'typo' },
+      ],
+    }],
+    edges: [],
+  });
+  const errors = validateWorkflow(graph).join(' ');
+  assert.match(errors, /declared submission field/);
+  assert.match(errors, /summary and artifact material can each be bound once/);
+});
+
+test('material binding authoring stays available until all distinct sources are used', () => {
+  assert.equal(canAddPresentationBinding([{ source: 'summary' }], []), true);
+  assert.equal(canAddPresentationBinding([{ source: 'artifact' }], []), true);
+  assert.equal(canAddPresentationBinding([{ source: 'summary' }, { source: 'artifact' }], []), false);
+  assert.equal(
+    canAddPresentationBinding([{ source: 'summary' }, { source: 'artifact' }], ['result']),
+    true,
+  );
+  assert.equal(canAddPresentationBinding(Array.from({ length: 12 }, () => ({ source: 'summary' })), ['result']), false);
+});
+
+test('editor validation rejects non-agent bindings and unsupported human outcomes', () => {
+  const graph = fromWorkflow({
+    id: 'unsupported-interaction',
+    name: 'Unsupported interaction',
+    entryNode: 'review',
+    nodes: [
+      {
+        id: 'review',
+        kind: 'human',
+        name: 'Review',
+        prompt: 'Review the result.',
+        presentationBindings: [{ source: 'summary' }],
+      },
+      { id: 'done', kind: 'agent', name: 'Continue', prompt: 'Continue.' },
+    ],
+    edges: [{ id: 'custom', from: 'review', to: 'done', outcome: 'maybe' }],
+  });
+  const errors = validateWorkflow(graph).join(' ');
+  assert.match(errors, /material bindings require an agent submission/);
+  assert.match(errors, /human outcomes support approved and changes_requested only/);
 });

@@ -1,6 +1,5 @@
 import { Select } from '../shared/ui/Select';
-import { TicketExecution } from '../features/tickets/TicketExecution';
-import { TicketDetails } from '../features/tickets/TicketDetails';
+import { TicketDetails, TicketExecution, TicketMenuActions } from '../features/tickets';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArrowLeft, Check, Copy, Menu, MoreHorizontal, Plus, X } from 'lucide-react';
@@ -28,6 +27,7 @@ import '../shared/styles/readability.css';
 import '../shared/styles/identity.css';
 import { ActiveContext } from '../features/access';
 import { ProjectSwitcher } from '../features/access/ProjectSwitcher';
+import { ticketNavigationReducer } from './ticket-navigation';
 
 type Status = 'Backlog' | 'Ready' | 'In progress' | 'In review' | 'Done';
 type Task = {
@@ -175,18 +175,22 @@ function App() {
     }
   }
   const [mobile, setMobile] = useState(false);
-  const [ticketView, setTicketView] = useState<'details' | 'execution' | 'terminal'>('details');
+  const [ticketView, dispatchTicketNavigation] = React.useReducer(
+    ticketNavigationReducer,
+    'details',
+  );
   const [ticketMenuOpen, setTicketMenuOpen] = useState(false);
+  const [ticketRecoveryRequested, setTicketRecoveryRequested] = useState(false);
+  const [ticketMenuCommandActive, setTicketMenuCommandActive] = useState(false);
+  const ticketMenuCommandActiveRef = useRef(false);
+  ticketMenuCommandActiveRef.current = ticketMenuCommandActive;
   const [chatConversationId, setChatConversationId] = useState('');
   const [newChatOpen, setNewChatOpen] = useState(false);
   useEffect(() => {
-    const ticket = liveRuntime?.tickets.find((value) => value.id === selected);
-    const execution = liveRuntime?.sessions.find(
-      (session) =>
-        session.id === ticket?.executionSessionId && session.activeTicketId === ticket?.id,
-    );
-    setTicketView(execution?.flow?.status === 'waiting_gate' ? 'execution' : 'details');
+    dispatchTicketNavigation({ type: 'ticket-selected' });
     setTicketMenuOpen(false);
+    setTicketRecoveryRequested(false);
+    setTicketMenuCommandActive(false);
   }, [selected]);
   useEffect(() => {
     if (toast && !pendingPlacement) {
@@ -212,6 +216,7 @@ function App() {
     const previous = document.activeElement as HTMLElement | null;
     const trap = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
+      if (document.querySelector('dialog[open]')) return;
       const nodes = Array.from(
         document.querySelectorAll<HTMLElement>(
           '.dialog button, .dialog input, .dialog select, .dialog textarea, .dialog summary',
@@ -239,6 +244,8 @@ function App() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (document.querySelector('dialog[open]')) return;
+        if (ticketMenuCommandActiveRef.current) return;
         setSelected(null);
         setNewTask(null);
         setMobile(false);
@@ -301,6 +308,7 @@ function App() {
     }
   }
   function navigate(next: string) {
+    if (ticketMenuCommandActiveRef.current) return;
     setPage(next);
     setSelected(null);
     setMobile(false);
@@ -599,7 +607,7 @@ function App() {
         <div
           className="modal-backdrop"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setSelected(null);
+            if (e.target === e.currentTarget && !ticketMenuCommandActive) setSelected(null);
           }}
         >
           <section
@@ -620,14 +628,24 @@ function App() {
                 >
                   <MoreHorizontal size={16} />
                 </button>
-                <button autoFocus aria-label="Close ticket" onClick={() => setSelected(null)}>
+                <button
+                  autoFocus
+                  aria-label="Close ticket"
+                  disabled={ticketMenuCommandActive}
+                  onClick={() => setSelected(null)}
+                >
                   <X size={16} />
                 </button>
               </span>
             </div>
-            {ticketMenuOpen && (
-              <div className="ticket-options-menu" role="menu" aria-label="Ticket options">
+            <div
+              className="ticket-options-menu"
+              role="menu"
+              aria-label="Ticket options"
+              hidden={!ticketMenuOpen}
+            >
                 <button
+                  disabled={ticketMenuCommandActive}
                   onClick={() => {
                     togglePin(current.id);
                     setTicketMenuOpen(false);
@@ -636,29 +654,51 @@ function App() {
                   {pins.includes(current.id) ? 'Unpin' : 'Pin to sidebar'}
                 </button>
                 {linkedConversations.length === 0 ? (
-                  <button onClick={() => openChat(current.id)}>Open chat</button>
+                  <button disabled={ticketMenuCommandActive} onClick={() => openChat(current.id)}>Open chat</button>
                 ) : (
                   linkedConversations.map((conversation) => (
                     <button
                       key={conversation.id}
+                      disabled={ticketMenuCommandActive}
                       onClick={() => inspectConversation(conversation.id)}
                     >
                       {linkedConversations.length === 1 ? 'Open chat' : conversation.title}
                     </button>
                   ))
                 )}
+                {liveRuntime && currentTicket && (
+                  <TicketMenuActions
+                    key={current.id}
+                    state={liveRuntime}
+                    ticket={currentTicket}
+                    session={currentExecution}
+                    runtimeAvailable={!runtimeError}
+                    onExecutionDetails={() => {
+                      setTicketRecoveryRequested(false);
+                      dispatchTicketNavigation({ type: 'show', view: 'execution' });
+                      setTicketMenuOpen(false);
+                    }}
+                    onRecovery={() => {
+                      setTicketRecoveryRequested(true);
+                      dispatchTicketNavigation({ type: 'show', view: 'execution' });
+                      setTicketMenuOpen(false);
+                    }}
+                    onActionComplete={() => setTicketMenuOpen(false)}
+                    onWorkingChange={setTicketMenuCommandActive}
+                  />
+                )}
                 {currentExecution && (
                   <button
+                    disabled={ticketMenuCommandActive}
                     onClick={() => {
-                      setTicketView('terminal');
+                      dispatchTicketNavigation({ type: 'show', view: 'terminal' });
                       setTicketMenuOpen(false);
                     }}
                   >
                     Terminal
                   </button>
                 )}
-              </div>
-            )}
+            </div>
             <div className="inspector-pane">
               {ticketView === 'details' && liveRuntime && currentTicket && (
                 <TicketDetails
@@ -666,16 +706,20 @@ function App() {
                   state={liveRuntime}
                   ticket={currentTicket}
                   runLabel={runLabel}
-                  onRun={() => setTicketView('execution')}
+                  onRun={() => dispatchTicketNavigation({ type: 'show', view: 'execution' })}
+                  runtimeAvailable={!runtimeError}
                   onSelectTicket={(id) => {
                     setSelected(id);
-                    setTicketView('details');
+                    dispatchTicketNavigation({ type: 'show', view: 'details' });
                   }}
                 />
               )}
               {ticketView === 'execution' && liveRuntime && currentTicket && (
                 <>
-                  <button className="ticket-back" onClick={() => setTicketView('details')}>
+                  <button
+                    className="ticket-back"
+                    onClick={() => dispatchTicketNavigation({ type: 'show', view: 'details' })}
+                  >
                     <ArrowLeft size={13} />
                     Ticket
                   </button>
@@ -683,13 +727,25 @@ function App() {
                     key={current.id}
                     state={liveRuntime}
                     ticket={currentTicket}
-                    openChat={inspectConversation}
+                    runtimeAvailable={!runtimeError}
+                    focusRecovery={ticketRecoveryRequested}
+                    onOpenTicketMessages={() => {
+                      dispatchTicketNavigation({ type: 'show', view: 'details' });
+                      requestAnimationFrame(() => {
+                        const messages = document.getElementById(`ticket-messages-${current.id}`);
+                        messages?.focus();
+                        messages?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      });
+                    }}
                   />
                 </>
               )}
               {ticketView === 'terminal' && currentExecution && (
                 <div className="terminal-preview">
-                  <button className="ticket-back" onClick={() => setTicketView('details')}>
+                  <button
+                    className="ticket-back"
+                    onClick={() => dispatchTicketNavigation({ type: 'show', view: 'details' })}
+                  >
                     <ArrowLeft size={13} />
                     Ticket
                   </button>

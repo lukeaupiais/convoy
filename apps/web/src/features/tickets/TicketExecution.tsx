@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Check, Play } from 'lucide-react';
+import { Play } from 'lucide-react';
 import {
   command,
   owns,
@@ -13,16 +13,20 @@ import { Select } from '../../shared/ui/Select';
 import { SessionControls } from '../sessions';
 import './ticket-execution.css';
 import { ProfilePicker, profileRef } from '../library';
-import { ArtifactReview } from './ArtifactReview';
+import { WorkflowRunDetails } from '../workflows';
 
 export function TicketExecution({
   state,
   ticket,
-  openChat,
+  runtimeAvailable = true,
+  focusRecovery = false,
+  onOpenTicketMessages,
 }: {
   state: RuntimeState;
   ticket: Ticket;
-  openChat: (id: string) => void;
+  runtimeAvailable?: boolean;
+  focusRecovery?: boolean;
+  onOpenTicketMessages?: () => void;
 }) {
   const session = state.sessions.find(
     (s) => s.id === ticket.executionSessionId && s.activeTicketId === ticket.id,
@@ -56,8 +60,6 @@ export function TicketExecution({
   const [profile, setProfile] = useState('');
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
-  const [feedback, setFeedback] = useState('');
-  const [answer, setAnswer] = useState('');
   const request = useRef('');
   const [pendingRequest, setPendingRequest] = useState(false);
   const active = !!session?.flow && !['completed', 'cancelled'].includes(session.flow.status);
@@ -90,20 +92,6 @@ export function TicketExecution({
       (!s.projectId || s.projectId === ticket.projectId) &&
       (!s.activeTicketId || s.activeTicketId === ticket.id),
   );
-  const flow = session?.flow;
-  const nodes = session?.workflow?.nodes ?? session?.workflow?.steps ?? [];
-  const node = nodes.find((n) => n.id === flow?.nodeId);
-  const visited = new Set(flow?.history?.map((h) => h.nodeId));
-  const shownNodes =
-    flow?.status === 'completed' ? nodes.filter((item) => visited.has(item.id ?? '')) : nodes;
-  const canRevise = session?.workflow?.edges?.some(
-    (e) => e.from === flow?.nodeId && e.outcome === 'changes_requested',
-  );
-  const capturedSubmission = flow?.lastSubmission?.artifacts?.some(
-    (artifact) => typeof artifact !== 'string',
-  );
-  const focusedArtifactReview = flow?.status === 'waiting_gate' && capturedSubmission;
-  const failure = session?.events.filter((e) => /failed|rejected|interrupted/.test(e.type)).at(-1);
   useEffect(() => {
     if (!session || !owns(session)) return;
     const timer = setInterval(
@@ -172,27 +160,7 @@ export function TicketExecution({
       )}
       {session && (
         <>
-          {!focusedArtifactReview && (
-            <header className="execution-heading">
-              <div>
-                <small>Workflow</small>
-                <h2>{session.workflow?.name ?? 'Agent session'}</h2>
-                <span role="status">
-                  {(flow?.status ?? session.status)
-                    .replaceAll('_', ' ')
-                    .replace(/^./, (letter) => letter.toUpperCase())}
-                </span>
-              </div>
-              <button
-                className="secondary"
-                onClick={() => openChat(session.conversationId ?? session.id)}
-              >
-                Agent chat
-                <ArrowUpRight size={14} />
-              </button>
-            </header>
-          )}
-          {!focusedArtifactReview && session.verificationRuntime && (
+          {session.verificationRuntime && (
             <details>
               <summary>Verification runtime · {session.verificationRuntime.state}</summary>
               {session.verificationRuntime.setupError && (
@@ -219,340 +187,44 @@ export function TicketExecution({
               )}
             </details>
           )}
-          {!focusedArtifactReview && !!shownNodes.length && (
-            <details className="execution-progress">
-              <summary>{flow?.status === 'completed' ? 'Steps taken' : 'Workflow steps'}</summary>
-              <ol className="execution-steps" aria-label="Workflow progress">
-                {shownNodes.map((n) => (
-                  <li
-                    key={n.id}
-                    className={
-                      active && n.id === flow?.nodeId
-                        ? 'current'
-                        : visited.has(n.id ?? '')
-                          ? 'visited'
-                          : ''
-                    }
-                  >
-                    {visited.has(n.id ?? '') ? (
-                      <Check size={13} />
-                    ) : (
-                      <span className="execution-dot" />
-                    )}
-                    <span>{n.name}</span>
-                    {active && n.id === flow?.nodeId && <small>Current</small>}
-                  </li>
-                ))}
-              </ol>
-            </details>
-          )}
-          {!focusedArtifactReview && node && active && (
-            <div className="execution-objective">
-              <strong>{node.name}</strong>
-              <p>{node.prompt}</p>
-            </div>
-          )}
-          {!focusedArtifactReview && session.partial && (
-            <p className="execution-output">{session.partial}</p>
-          )}
-          {failure &&
-            ['failed', 'interrupted', 'awaiting_submission'].includes(
-              flow?.status ?? session.status,
-            ) && (
-              <p role="status" className="execution-error">
-                {failure.message ?? failure.text ?? failure.type.replaceAll('_', ' ')}
-              </p>
-            )}
-          {session.pending && (
-            <div className="execution-decision">
-              <strong>Approve operation · {session.pending.tool}</strong>
-              <pre>{JSON.stringify(session.pending.args, null, 2)}</pre>
-              <div className="execution-actions">
-                <button
-                  className="primary"
-                  disabled={working}
-                  onClick={() =>
-                    void act('decide', { approvalId: session.pending!.id, allow: true })
-                  }
-                >
-                  Approve once
-                </button>
-                <button
-                  className="secondary"
-                  disabled={working}
-                  onClick={() =>
-                    void act('decide', { approvalId: session.pending!.id, allow: false })
-                  }
-                >
-                  Deny
-                </button>
-              </div>
-            </div>
-          )}
-          {session.pendingQuestion && (
-            <div className="execution-decision">
-              <strong>{session.pendingQuestion.question}</strong>
-              <textarea
-                aria-label="Answer agent"
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-              />
-              <button
-                className="primary"
-                disabled={working || !answer.trim()}
-                onClick={() =>
-                  void act('answerQuestion', { questionId: session.pendingQuestion!.id, answer })
-                }
-              >
-                Send answer
-              </button>
-            </div>
-          )}
-          {flow?.lastSubmission && capturedSubmission && (
-            <ArtifactReview
-              sessionId={session.id}
-              submission={flow.lastSubmission}
-              waitingForDecision={flow.status === 'waiting_gate'}
-              canRevise={!!canRevise}
-              focused={focusedArtifactReview}
-              working={working}
-              onApprove={() => void act('approveGate', { instance: flow.instance })}
-              onRequestChanges={(revisionFeedback) =>
-                void act('requestChanges', {
-                  instance: flow.instance,
-                  feedback: revisionFeedback,
-                })
-              }
+          <details className="execution-evidence" open={focusRecovery}>
+            <summary>Execution details</summary>
+            <WorkflowRunDetails
+              session={session}
+              working={working || !runtimeAvailable}
+              onRefreshDiff={() => void act('diff')}
             />
-          )}
-          {flow?.lastSubmission && !capturedSubmission && flow.status !== 'completed' && (
-            <div className="execution-evidence">
-              <strong>Latest submission · {flow.lastSubmission.step}</strong>
-              <p>{flow.lastSubmission.summary}</p>
-              {flow.lastSubmission.artifacts?.map((path) => (
-                <code key={String(path)}>{String(path)}</code>
-              ))}
-            </div>
-          )}
-          {flow?.lastSubmission &&
-            (flow.lastSubmission.verification ||
-              flow.lastSubmission.details ||
-              flow.lastSubmission.investigation ||
-              flow.lastSubmission.references?.length) && (
-              <div className="execution-evidence">
-                {flow.lastSubmission.details && (
-                  <details>
-                    <summary>Decision evidence</summary>
-                    <dl>
-                      {Object.entries(flow.lastSubmission.details).map(([field, value]) => (
-                        <div key={field}>
-                          <dt>{field}</dt>
-                          <dd>{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </details>
-                )}
-                {flow.lastSubmission.verification && (
-                  <details>
-                    <summary>
-                      Runtime evidence · generation {flow.lastSubmission.verification.generation}
-                    </summary>
-                    <p>Source: {flow.lastSubmission.verification.sourceCommit}</p>
-                    {flow.lastSubmission.verification.availability === 'unavailable' && (
-                      <p>Runtime unavailable. Evidence contains source inspection only.</p>
-                    )}
-                    {flow.lastSubmission.verification.receipts.map((receipt) => (
-                      <details key={receipt.commandId}>
-                        <summary>
-                          {receipt.command} · exit {receipt.code ?? 'unknown'}
-                        </summary>
-                        {receipt.outputTruncated && (
-                          <p>Output truncated. Retained-output hash: {receipt.outputDigest}</p>
-                        )}
-                        <pre>{receipt.output}</pre>
-                      </details>
-                    ))}
-                  </details>
-                )}
-                {flow.lastSubmission.investigation && (
-                  <details>
-                    <summary>
-                      Investigation questions ({flow.lastSubmission.investigation.questions.length})
-                    </summary>
-                    {flow.lastSubmission.investigation.questions.map((q, index) => (
-                      <div key={index}>
-                        <strong>{q.question}</strong>
-                        <p>
-                          {q.status} · {q.material ? 'Material' : 'Nonmaterial'} ·{' '}
-                          {q.internallyAnswerable
-                            ? 'Internally answerable'
-                            : 'External input needed'}
-                        </p>
-                        <p>{q.resolution || q.nextAction}</p>
-                        {q.evidence && (
-                          <>
-                            <p>{q.evidence.establishes}</p>
-                            <p>Unverified: {q.evidence.unverified}</p>
-                            <p>
-                              {q.evidence.references
-                                .map((i) => {
-                                  const ref = flow.lastSubmission?.references?.[i];
-                                  return ref
-                                    ? `${ref.path}:${ref.startLine}–${ref.endLine}`
-                                    : `Reference ${i}`;
-                                })
-                                .join(', ')}
-                            </p>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </details>
-                )}
-                {flow.lastSubmission.references?.map((ref) => (
-                  <details key={`${ref.path}:${ref.startLine}:${ref.endLine}`}>
-                    <summary>
-                      {ref.path}:{ref.startLine}–{ref.endLine}
-                    </summary>
-                    <pre>{ref.text}</pre>
-                    <small>Captured file SHA-256: {ref.sha256}</small>
-                  </details>
-                ))}
-              </div>
-            )}
-          {!focusedArtifactReview && session.workspace && (
-            <details className="execution-evidence">
-              <summary>Changes & verification</summary>
-              <button
-                className="secondary"
-                disabled={working || busy}
-                onClick={() => void act('diff')}
-              >
-                Refresh changes
-              </button>
-              {session.review && (
-                <pre>
-                  {session.review.status || 'No tracked changes'}
-                  {'\n'}
-                  {session.review.diff}
-                </pre>
-              )}
-              {session.review?.truncated && (
-                <p>Diff truncated. Inspect the full worktree before accepting.</p>
-              )}
-              {session.checks.map((c, i) => (
-                <details key={i}>
-                  <summary>
-                    {c.code === 0 ? 'Passed' : 'Failed'} · {c.command}
-                  </summary>
-                  <pre>{c.output}</pre>
-                </details>
-              ))}
-            </details>
-          )}
-          {flow?.status === 'waiting_gate' && !capturedSubmission && (
-            <div className="execution-decision">
-              <strong>Review required</strong>
-              <button
-                className="primary"
-                disabled={working}
-                onClick={() => void act('approveGate', { instance: flow.instance })}
-              >
-                Approve step
-              </button>
-              {canRevise ? (
-                <>
-                  <textarea
-                    aria-label="Revision feedback"
-                    placeholder="What should change?"
-                    value={feedback}
-                    onChange={(e) => setFeedback(e.target.value)}
-                  />
-                  <button
-                    className="secondary"
-                    disabled={working || !feedback.trim()}
-                    onClick={() =>
-                      void act('requestChanges', { instance: flow.instance, feedback })
-                    }
-                  >
-                    Request changes
-                  </button>
-                </>
-              ) : (
-                <p className="execution-note">This gate has no revision route configured.</p>
-              )}
-            </div>
-          )}
-          {!focusedArtifactReview && active && (
-            <div className="execution-actions">
-              <button
-                className="secondary"
-                disabled={working}
-                onClick={() => void act('pauseWorkflow')}
-              >
-                Pause
-              </button>
-              <button
-                className="secondary"
-                disabled={working}
-                onClick={() => {
-                  if (
-                    confirm(
-                      'Cancel this workflow? Its worktree and conversation will be preserved.',
-                    )
-                  )
-                    void act('cancelWorkflow');
-                }}
-              >
-                Cancel run
-              </button>
-              {[
-                'ready',
-                'paused',
-                'interrupted',
-                'failed',
-                'awaiting_submission',
-                'awaiting_continue',
-              ].includes(flow?.status ?? '') && (
+            {session.flow?.instance &&
+              ['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(
+                session.flow.status,
+              ) && (
                 <button
                   className="primary"
-                  disabled={working || busy}
-                  onClick={() => void act('continueWorkflow', { instance: flow!.instance })}
+                  disabled={working || !runtimeAvailable}
+                  onClick={() => void act('continueWorkflow', { instance: session.flow!.instance })}
                 >
-                  Continue
+                  Continue workflow
                 </button>
               )}
-            </div>
-          )}
-          {!focusedArtifactReview && (
-            <details className="execution-evidence">
-              <summary>Activity</summary>
-              {session.events
-                .slice(-30)
-                .reverse()
-                .map((e) => (
-                  <div key={e.seq}>
-                    <small>
-                      {new Date(e.at).toLocaleTimeString()} · {e.type.replaceAll('_', ' ')}
-                    </small>
-                    <p>{e.message ?? e.summary ?? e.text}</p>
-                  </div>
-                ))}
-            </details>
-          )}
-          {!focusedArtifactReview && (
-            <details className="execution-evidence">
-              <summary>Session controls & recovery</summary>
-              <p className="execution-note">
-                {session.workspace
-                  ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
-                  : (session.queueReason ?? 'No worktree provisioned')}
-                {session.assignment && ` · ${session.assignment.state}`}
-              </p>
-              <SessionControls session={session} state={state} />
-            </details>
-          )}
+            <p className="execution-note">
+              {session.workspace
+                ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
+                : (session.queueReason ?? 'No worktree provisioned')}
+              {session.assignment && ` · ${session.assignment.state}`}
+            </p>
+            {runtimeAvailable ? (
+              <SessionControls
+                session={session}
+                state={state}
+                showWorkflowInteraction={false}
+                runtimeAvailable={runtimeAvailable}
+                openRecovery={focusRecovery}
+                onOpenTicketMessages={onOpenTicketMessages}
+              />
+            ) : (
+              <p role="status">Reconnect to refresh before changing this session.</p>
+            )}
+          </details>
         </>
       )}
       {!active && !busy && (
@@ -695,7 +367,9 @@ export function TicketExecution({
           )}
           <button
             className="primary"
-            disabled={working || !workflow || !!profileError || !state.auth.connected}
+            disabled={
+              working || !runtimeAvailable || !workflow || !!profileError || !state.auth.connected
+            }
             onClick={() => void launch()}
           >
             <Play size={14} />

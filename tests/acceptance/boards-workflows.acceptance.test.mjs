@@ -761,3 +761,197 @@ test('acceptance: automatic procurement review pins its workflow profile over th
     await f.restart();
     assert.equal((await f.snapshot()).sessions.find(s => s.id === session.id).capabilityProfile.hash, chosen.hash);
 });
+
+for (const sendOutcome of ['pending', 'uncertain', 'spoofed-pre-dispatch-metadata']) test(`acceptance: approval sends the exact draft with ${sendOutcome} delivery before changing source status`, async (t) => {
+    const approvedBody = '  Which edition?\nPlease include the version.\n';
+    let writes = 0;
+    let sends = 0;
+    let delivered = false;
+    let sourceStatus = 'Open';
+    let remoteRevision = '3';
+    const comments = [];
+    const issue = () => ({ remoteId: 'request-7', remoteKey: 'REQ-7', title: 'Clarify request',
+        status: sourceStatus, rawStatus: sourceStatus === 'Waiting' ? 'waiting' : 'open',
+        remoteVersion: remoteRevision, fieldOwnership: { status: 'external' } });
+    const f = await fixture(t, { persistenceBackend: 'sqlite', generate: async function* () {
+        yield { type: 'result', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'draft', name: 'submit_step', arguments: { summary: 'Reviewed proposal', artifacts: [], outcome: 'success', details: { message: approvedBody }, references: [] } }], stopReason: 'toolUse', timestamp: Date.now() } };
+    }, externalTickets: {
+            listIssuesPage: async () => ({ items: [issue()] }),
+            postReply: async (_source, _id, body) => {
+                sends++; assert.equal(body, approvedBody);
+                comments.push({ remoteId: 'message-7', body: approvedBody, authorRole: 'team',
+                    createdAt: '2026-09-24T13:00:00Z', deliveryStatus: 'pending' });
+                if (sendOutcome === 'spoofed-pre-dispatch-metadata') {
+                    const error = new Error('Connection lost after posting');
+                    error.code = 'TICKET_REPLY_UNRESOLVED';
+                    error.outcome = 'not-dispatched';
+                    error.blockingReplyRequestId = 'fabricated-blocker';
+                    throw error;
+                }
+                if (sendOutcome === 'uncertain') throw new Error('Connection lost after posting');
+                return { remoteId: 'message-7', deliveryStatus: 'pending' };
+            },
+            listComments: async () => comments.map(c => ({ ...c, deliveryStatus: delivered ? 'delivered' : 'pending' })),
+            setStatus: async (_source, _remoteId, input) => {
+                writes++;
+                assert.equal(input.status, 'waiting');
+                assert.equal(input.remoteVersion, '3');
+                assert.equal(input.evidenceMessageId, 'message-7');
+                sourceStatus = 'Waiting';
+                remoteRevision = '4';
+                return { remoteId: 'request-7', rawStatus: 'waiting', status: 'Waiting', remoteVersion: '4' };
+            },
+        } });
+    const project = await f.act('saveProject', { name: 'Editorial desk' });
+    const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+        connection: { baseUrl: 'https://desk.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_READ_TEST' },
+            writeAuthentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_WRITE_TEST' } },
+        operations: { list: { method: 'GET', path: 'requests', response: { items: '$.items' } },
+            thread: { method: 'GET', path: 'requests/${remoteId}/messages', response: { items: '$.items' } },
+            reply: { method: 'POST', path: 'requests/${remoteId}/messages', response: { commentId: '$.id' } },
+            status: { method: 'PATCH', path: 'requests/${remoteId}/status', request: { status: 'status', remoteVersion: 'expectedVersion', evidenceMessageId: 'messageId' }, response: { item: '$.item' } } },
+        mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', status: '$.status', remoteVersion: '$.version' },
+        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' } };
+    const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Desk', manifest });
+    const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Requests', workType: 'request' });
+    const board = await f.act('saveBoard', { name: 'Requests', projectIds: [project.id], grouping: { mode: 'field', field: 'status' },
+        columns: [{ id: 'open', name: 'Open', value: 'Open' }, { id: 'waiting', name: 'Waiting', value: 'Waiting' }] });
+    await f.act('syncTicketImportBinding', { id: binding.id });
+    const ticket = (await f.snapshot()).tickets.find(value => value.projectId === project.id);
+    await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+    await f.act('saveWorkflow', { workflow: { id: 'clarify', name: 'Clarify', nodes: [
+                { id: 'draft', name: 'Draft message', kind: 'agent', permissions: 'none', submissionRequirements: { success: { fields: ['message'], minReferences: 0 } } },
+                { id: 'review', name: 'Review reply', kind: 'human', prompt: 'Send and confirm the reply.' },
+                { id: 'send', name: 'Send approved message', kind: 'action', operation: 'send_external_reply', input: { connectionId: source.id, sourceNodeId: 'draft', field: 'message' } },
+                { id: 'wait', name: 'Wait for requester', kind: 'action', operation: 'set_external_status',
+                    input: { connectionId: source.id, status: 'waiting', evidenceReply: 'latest_delivered' } },
+            ], edges: [{ from: 'draft', to: 'review', outcome: 'success' }, { from: 'review', to: 'send', outcome: 'approved' }, { from: 'send', to: 'wait', outcome: 'success' }] } });
+    await f.act('ensure', { taskId: String(ticket.id), title: ticket.title });
+    await f.act('claim', { taskId: String(ticket.id) });
+    await f.act('configure', { taskId: String(ticket.id), workflow: 'clarify' });
+    await f.act('startWorkflow', { taskId: String(ticket.id) });
+    const session = await until(async () => { const s = (await f.snapshot()).sessions.find(value => value.id === String(ticket.id)); return s?.flow?.status === 'waiting_gate' ? s : null; });
+    assert.equal(session.flow.status, 'waiting_gate');
+    assert.equal(sends, 0);
+    await assert.rejects(f.act('approveGate', { sessionId: session.id, instance: 'stale' }), /changed/);
+    assert.equal(sends, 0);
+    await f.act('approveGate', { sessionId: session.id, instance: session.flow.instance });
+    if (sendOutcome !== 'pending') {
+        const failed = await until(async () => { const s = (await f.snapshot()).sessions.find(value => value.id === session.id); return s?.flow?.status === 'failed' ? s : null; });
+        assert.equal(sends, 1); assert.equal(writes, 0);
+        if (sendOutcome === 'spoofed-pre-dispatch-metadata') {
+            const effect = (await f.snapshot()).workflowEffects.find(value => value.operation === 'send_external_reply');
+            assert.equal(effect.status, 'uncertain');
+            assert.equal(effect.blockingReplyRequestId, undefined);
+        }
+        const requestId = `reply-${failed.flow.id}-${failed.flow.instance}`;
+        const effectKey = `${failed.flow.id}:${failed.flow.instance}:send`;
+        await assert.rejects(f.act('reconcileWorkflowEffect', { sessionId: session.id, instance: failed.flow.instance, effectKey, resolution: 'not_applied' }), /existing external reply/);
+        await f.act('continueWorkflow', { sessionId: session.id, instance: failed.flow.instance });
+        await until(async () => (await f.snapshot()).sessions.find(value => value.id === session.id)?.flow?.status === 'failed');
+        assert.equal(sends, 1);
+        await f.act('reconcileExternalTicketReply', { requestId, remoteId: 'message-7' });
+        await f.act('reconcileWorkflowEffect', { sessionId: session.id, instance: failed.flow.instance, effectKey, resolution: 'applied', result: { id: requestId } });
+    }
+    await until(async () => (await f.snapshot()).sessions.find(value => value.id === session.id)?.flow?.status === 'paused');
+    assert.equal(sends, 1); assert.equal(writes, 0);
+    await f.restart();
+    assert.equal(sends, 1);
+    delivered = true;
+    await f.act('claim', { sessionId: session.id });
+    const held = (await f.snapshot()).sessions.find(value => value.id === session.id);
+    await f.act('continueWorkflow', { sessionId: session.id, instance: held.flow.instance });
+    const state = await until(async () => {
+        const snapshot = await f.snapshot();
+        return snapshot.tickets.find(value => value.id === ticket.id)?.status === 'Waiting' ? snapshot : null;
+    });
+    assert.equal(state.boards.find(value => value.id === board.id).tickets.find(value => value.ticketId === ticket.id).columnId, 'waiting');
+    assert.equal(writes, 1);
+    assert.equal(sends, 1);
+    await f.restart();
+    assert.equal((await f.snapshot()).tickets.find(value => value.id === ticket.id).status, 'Waiting');
+    assert.equal(writes, 1);
+    assert.equal(sends, 1);
+});
+
+test('acceptance: workflow reply waits for an unresolved manual reply, then continues once after reconciliation', async (t) => {
+    const approvedBody = 'Reviewed reply text';
+    const comments = [];
+    let sends = 0;
+    const f = await fixture(t, {
+        generate: async function* () {
+            yield { type: 'result', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'draft', name: 'submit_step', arguments: { summary: 'Draft ready', artifacts: [], outcome: 'success', details: { message: approvedBody }, references: [] } }], stopReason: 'toolUse', timestamp: Date.now() } };
+        },
+        externalTickets: {
+            listIssues: async () => [{ remoteId: 'request-9', remoteKey: 'REQ-9', title: 'Review request', description: '' }],
+            postReply: async (_source, _remoteId, body) => {
+                sends++;
+                if (body === 'Manual reply already in flight') {
+                    comments.push({ remoteId: 'manual-message', body, authorRole: 'team', createdAt: '2026-09-24T13:00:00Z' });
+                    throw new Error('Connection lost after posting manual reply');
+                }
+                assert.equal(body, approvedBody);
+                comments.push({ remoteId: 'workflow-message', body, authorRole: 'team', createdAt: '2026-09-24T13:01:00Z', deliveryStatus: 'delivered' });
+                return { remoteId: 'workflow-message', deliveryStatus: 'delivered' };
+            },
+            listComments: async () => comments.map(message => ({ ...message, deliveryStatus: 'delivered' })),
+        },
+    });
+    const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+        connection: { baseUrl: 'https://desk.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_READ_TEST' },
+            writeAuthentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_WRITE_TEST' } },
+        operations: { list: { method: 'GET', path: 'requests', response: { items: '$.items' } },
+            thread: { method: 'GET', path: 'requests/${remoteId}/messages', response: { items: '$.items' } },
+            reply: { method: 'POST', path: 'requests/${remoteId}/messages', response: { commentId: '$.id' } } },
+        mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', description: '$.description' },
+        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' } };
+    const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Desk', manifest });
+    await f.act('importExternalTickets', { connectionId: source.id, projectId: 'agent-platform' });
+    const ticket = (await f.snapshot()).tickets.find(value => value.externalLinks?.some(link => link.connectionId === source.id));
+    const manualRequestId = 'manual-unknown-9';
+    await assert.rejects(f.act('postExternalTicketReply', { requestId: manualRequestId, ticketId: ticket.id,
+        connectionId: source.id, body: 'Manual reply already in flight' }), /Connection lost after posting/);
+
+    await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: 'agent-platform' } });
+    await f.act('saveWorkflow', { workflow: { id: 'manual-blocked-reply', name: 'Manual blocked reply', nodes: [
+        { id: 'draft', name: 'Draft response', kind: 'agent', permissions: 'none', submissionRequirements: { success: { fields: ['message'], minReferences: 0 } } },
+        { id: 'review', name: 'Review response', kind: 'human', prompt: 'Review the captured response.' },
+        { id: 'send', name: 'Send response', kind: 'action', operation: 'send_external_reply', input: { connectionId: source.id, sourceNodeId: 'draft', field: 'message' } },
+    ], edges: [{ from: 'draft', to: 'review', outcome: 'success' }, { from: 'review', to: 'send', outcome: 'approved' }] } });
+    await f.act('ensure', { taskId: String(ticket.id), title: ticket.title });
+    await f.act('claim', { taskId: String(ticket.id) });
+    await f.act('configure', { taskId: String(ticket.id), workflow: 'manual-blocked-reply' });
+    await f.act('startWorkflow', { taskId: String(ticket.id) });
+    const review = await until(async () => {
+        const session = (await f.snapshot()).sessions.find(value => value.id === String(ticket.id));
+        return session?.flow?.status === 'waiting_gate' ? session : null;
+    });
+    await f.act('approveGate', { sessionId: review.id, instance: review.flow.instance });
+    const blocked = await until(async () => {
+        const snapshot = await f.snapshot();
+        const session = snapshot.sessions.find(value => value.id === review.id);
+        const effect = snapshot.workflowEffects.find(value => value.operation === 'send_external_reply');
+        return session?.flow?.status === 'failed' && effect?.status === 'blocked' ? { snapshot, session, effect } : null;
+    });
+    assert.equal(blocked.effect.blockingReplyRequestId, manualRequestId);
+    assert.equal(sends, 1);
+    assert.equal(blocked.snapshot.ticketReplies.filter(reply => reply.workflowRunId === blocked.session.flow.id).length, 0);
+
+    await f.act('reconcileExternalTicketReply', { requestId: manualRequestId, remoteId: 'manual-message' });
+    await f.act('continueWorkflow', { sessionId: review.id, instance: blocked.session.flow.instance });
+    const completed = await until(async () => {
+        const snapshot = await f.snapshot();
+        const session = snapshot.sessions.find(value => value.id === review.id);
+        return session?.flow?.status === 'completed' ? { snapshot, session } : null;
+    });
+    assert.equal(sends, 2);
+    const workflowReplies = completed.snapshot.ticketReplies.filter(reply => reply.workflowRunId === completed.session.flow.id);
+    assert.equal(workflowReplies.length, 1);
+    assert.equal(workflowReplies[0].body, approvedBody);
+    assert.equal(workflowReplies[0].status, 'queued');
+    assert.equal(workflowReplies[0].remoteId, 'workflow-message');
+    const completedEffect = completed.snapshot.workflowEffects.find(value => value.operation === 'send_external_reply');
+    assert.equal(completedEffect.status, 'succeeded');
+    assert.equal(completedEffect.message, undefined);
+    assert.equal(completedEffect.blockingReplyRequestId, undefined);
+});

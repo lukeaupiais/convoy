@@ -3,7 +3,7 @@ export function createWorkflowRegistry({ state, save, normalize, validateBinding
   return {
     async publish(command) {
       const value = {
-        ...normalize(command.workflow),
+        ...normalize(command.workflow, { publishing: true }),
         organizationId: command.organizationId,
         ...(command.teamId ? { teamId: command.teamId } : {}),
         ...(command.projectId ? { projectId: command.projectId } : {}),

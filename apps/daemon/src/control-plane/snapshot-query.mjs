@@ -128,6 +128,7 @@ export function createSnapshotQuery({
           at: effect.at,
           reconciledAt: effect.reconciledAt,
           message: effect.message,
+          ...(effect.blockingReplyRequestId ? { blockingReplyRequestId: effect.blockingReplyRequestId } : {}),
         })),
       automationFailures: state.automationFailures
         .filter((failure) => {
