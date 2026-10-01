@@ -177,6 +177,7 @@ export type TicketReply = {
   connectionId: string;
   body: string;
   status: 'pending' | 'outcome-unknown' | 'queued' | 'not-posted';
+  createdAt?: string;
   remoteId?: string;
   deliveryStatus?: string;
   message?: string;

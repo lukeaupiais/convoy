@@ -548,7 +548,8 @@ export function createCatalog({ state, save, execution, externalTickets, context
           throw new Error('Ticket source cannot send replies.');
         const link = t.externalLinks?.find(value => value.connectionId === source.id);
         if (!link) throw new Error('Ticket is not linked to this source.');
-        const body = text(c.body, 'Reply body', 12000);
+        text(c.body, 'Reply body', 12000);
+        const body = c.body;
         const existing = state.ticketReplies.find(value => value.id === requestId);
         if (existing) {
           if (existing.ticketId !== t.id || existing.connectionId !== source.id || existing.body !== body)
@@ -556,8 +557,18 @@ export function createCatalog({ state, save, execution, externalTickets, context
           if (existing.status === 'queued') return existing;
           throw new Error('Previous reply outcome needs reconciliation before another send.');
         }
+        const unresolved = state.ticketReplies.find(value => value.ticketId === t.id &&
+          value.connectionId === source.id && ['pending', 'outcome-unknown'].includes(value.status));
+        if (unresolved) {
+          const error = new Error('Another reply for this ticket and connection needs reconciliation before sending.');
+          error.code = 'TICKET_REPLY_UNRESOLVED';
+          error.outcome = 'not-dispatched';
+          error.blockingReplyRequestId = unresolved.id;
+          error.blockingReplyStatus = unresolved.status;
+          throw error;
+        }
         const reply = { id: requestId, ticketId: t.id, connectionId: source.id, body,
-          status: 'pending', createdAt: new Date().toISOString(), ...replyContext(t) };
+          status: 'pending', createdAt: new Date().toISOString(), ...replyContext(t, c) };
         state.ticketReplies.push(reply);
         await save();
         try {
@@ -567,7 +578,11 @@ export function createCatalog({ state, save, execution, externalTickets, context
           await save(); return reply;
         } catch (error) {
           reply.status = 'outcome-unknown'; reply.message = error.message;
-          await save(); throw error;
+          await save();
+          // Adapter errors happen after dispatch has begun. Keep their details
+          // as a cause, but never let adapter metadata masquerade as Work's
+          // pre-dispatch guard result.
+          throw new Error(error.message, { cause: error });
         }
       }
       if (c.action === 'setExternalTicketStatus') {

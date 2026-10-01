@@ -53,3 +53,15 @@ still means `success`, but cannot implicitly terminate a node with custom forwar
 routes. Terminal success/approval remains valid for nodes with no outgoing routes
 or only `failed` / `changes_requested` repair routes. Invalid submissions leave
 review evidence and history untouched.
+
+
+`send_external_reply` sends a configured detail field from an agent's captured
+submission after a human approves that exact package. Its input declares the
+connection, `sourceNodeId`, and `field`; incoming routes must be human `approved`
+edges. The engine preserves the approved submission independently of subsequent
+stage summaries. The control plane uses Work's canonical reply command and a
+stable request identity, then confirms the matching message in the source thread.
+Pending or failed delivery pauses the action; Continue checks delivery without
+posting again. An uncertain send requires reply and effect reconciliation before
+advancement. Sending does not imply an external status change: declare that as a
+separate action after delivery.

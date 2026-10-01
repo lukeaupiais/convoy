@@ -234,9 +234,9 @@ export async function createRuntime({
     referencedBoard: (boardId) =>
       workflowReferences.board(boardId) ||
       Object.values(state.sessions).some((session) => session.boardId === boardId),
-    replyContext: (ticket) => {
+    replyContext: (ticket, command) => {
       const session = workExecution.sessionFor(ticket);
-      return session?.flow?.status === 'waiting_gate'
+      return session?.flow && (session.flow.status === 'waiting_gate' || command?.workflowRunId === session.flow.id)
         ? { workflowRunId: session.flow.id, workflowInstance: session.flow.instance }
         : {};
     },
@@ -1403,7 +1403,8 @@ export async function createRuntime({
           s.review = result;
         } else result = await engine.executeAction(s, instance);
         if (controller.signal.aborted) throw new Error('Stopped.');
-        await engine.finishAutomated(s, instance, 'success', result);
+        if (result?.awaitingDelivery) await engine.holdAction(s, instance, result);
+        else await engine.finishAutomated(s, instance, 'success', result);
         return;
       } else if (step.kind === 'branch') {
         const condition = step.condition;

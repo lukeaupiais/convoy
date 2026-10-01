@@ -44,7 +44,7 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (node.kind === 'check' || node.requiresCheck) node.checkCommand = required(node.checkCommand, `${node.name}: exact check command`, 4000);
   if (node.kind === 'action') {
     const operation = node.operation;
-    if (!['inspect_changes', 'create_ticket', 'create_related_ticket', 'update_ticket', 'move_ticket', 'set_external_status'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
+    if (!['inspect_changes', 'create_ticket', 'create_related_ticket', 'update_ticket', 'move_ticket', 'set_external_status', 'send_external_reply'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
     node.operation = operation;
     if (node.args !== undefined || node.payload !== undefined || node.boardAction !== undefined || node.action !== undefined) throw new Error('Use canonical action input.');
     const input = node.input;
@@ -55,6 +55,8 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (operation === 'move_ticket' && (typeof input.boardId !== 'string' || !input.placement?.columnId || input.columnId !== undefined)) throw new Error(`${node.name}: move_ticket needs boardId and columnId.`);
     if (operation === 'set_external_status' && (typeof input.connectionId !== 'string' || !input.connectionId || typeof input.status !== 'string' || !input.status || input.evidenceReply !== undefined && input.evidenceReply !== 'latest_delivered'))
       throw new Error(`${node.name}: set_external_status needs a connection, source status, and optional latest_delivered reply evidence.`);
+    if (operation === 'send_external_reply' && (typeof input.connectionId !== 'string' || !input.connectionId || !safeId(input.sourceNodeId) || typeof input.field !== 'string' || !/^[a-zA-Z][\w-]{0,63}$/.test(input.field) || ['__proto__', 'constructor', 'prototype'].includes(input.field) || Object.keys(input).some(key => !['connectionId', 'sourceNodeId', 'field'].includes(key))))
+      throw new Error(`${node.name}: send_external_reply needs a connection, sourceNodeId and submitted detail field.`);
     delete node.action;
   }
   if (node.kind === 'branch') {
@@ -94,15 +96,37 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (node.reasoningEffort !== undefined && !['low', 'medium', 'high'].includes(node.reasoningEffort)) throw new Error(`${node.name}: unsupported reasoning effort.`);
     if (node.summaryHeadings !== undefined && (!Array.isArray(node.summaryHeadings) || node.summaryHeadings.length > 12 || new Set(node.summaryHeadings).size !== node.summaryHeadings.length || node.summaryHeadings.some(h => typeof h !== 'string' || !h.trim() || h.length > 80 || /[\r\n]/.test(h)))) throw new Error(`${node.name}: invalid summary headings.`);
     if (node.submissionRequirements !== undefined) node.submissionRequirements = normalizeSubmissionRequirements(node.submissionRequirements);
+    if (node.presentationBindings !== undefined) {
+      const bindings = node.presentationBindings;
+      const validField = value => typeof value === 'string' && /^[a-zA-Z][\w-]{0,63}$/.test(value) && !['__proto__', 'constructor', 'prototype'].includes(value);
+      if (!Array.isArray(bindings) || bindings.length > 12 || bindings.filter(binding => binding?.primary === true).length > 1)
+        throw new Error(`${node.name}: presentation bindings must contain at most 12 items and one primary item.`);
+      const bindingKeys = new Set();
+      node.presentationBindings = bindings.map(binding => {
+        if (!binding || typeof binding !== 'object' || Array.isArray(binding) ||
+            Object.keys(binding).some(key => !['source', 'field', 'label', 'primary'].includes(key)) ||
+            !['summary', 'detail', 'artifact'].includes(binding.source) ||
+            binding.primary !== undefined && typeof binding.primary !== 'boolean' ||
+            binding.label !== undefined && (typeof binding.label !== 'string' || !binding.label.trim() || binding.label.length > 80 || /[\r\n]/.test(binding.label)) ||
+            (binding.source === 'detail' ? !validField(binding.field) : binding.field !== undefined))
+          throw new Error(`${node.name}: invalid presentation binding.`);
+        if (binding.source === 'detail' && !Object.values(node.submissionRequirements ?? {}).some(rule => rule.fields.includes(binding.field)))
+          throw new Error(`${node.name}: presentation detail field must be declared in submission requirements.`);
+        const key = binding.source === 'detail' ? `detail:${binding.field}` : binding.source;
+        if (bindingKeys.has(key)) throw new Error(`${node.name}: duplicate presentation binding for ${key}.`);
+        bindingKeys.add(key);
+        return { source: binding.source, ...(binding.field ? { field: binding.field } : {}), ...(binding.label !== undefined ? { label: binding.label.trim() } : {}), ...(binding.primary ? { primary: true } : {}) };
+      });
+    }
     node.skills ??= [];
     if (!Array.isArray(node.skills) || node.skills.length > 30 || node.skills.some(id => typeof id !== 'string')) throw new Error(`${node.name}: invalid skill selection.`);
     if (node.model && (typeof node.model !== 'string' || node.model.length > 100)) throw new Error(`${node.name}: invalid model.`);
-  }
+  } else if (node.presentationBindings !== undefined) throw new Error(`${node.name}: presentation bindings require an agent submission.`);
   ids.add(node.id); return node;
 }
 
 /** Normalize graph definitions and the historical ordered-step input. */
-export function normalizeWorkflow(input) {
+export function normalizeWorkflow(input, { publishing = false } = {}) {
   if (!input || typeof input !== 'object') throw new Error('Workflow is required.');
   const isLegacy = !Array.isArray(input.nodes); const sourceNodes = isLegacy ? input.steps : input.nodes;
   if (!Array.isArray(sourceNodes) || !sourceNodes.length || sourceNodes.length > 100) throw new Error('Add between 1 and 100 workflow nodes.');
@@ -127,9 +151,14 @@ export function normalizeWorkflow(input) {
   if (input.runtime !== undefined) { value.runtime = normalizeRuntimeSelection(input.runtime);
     if (value.runtime && value.nodes.some(n => n.kind === 'agent' && n.permissions !== 'full')) throw new Error('Verification workflows require explicitly full agent-node tool permissions.');
   }
+  for (const node of value.nodes.filter(node => node.operation === 'send_external_reply')) {
+    const source = value.nodes.find(source => source.id === node.input.sourceNodeId);
+    if (source?.kind !== 'agent' || !Object.values(source.submissionRequirements ?? {}).some(rule => rule.fields.includes(node.input.field)))
+      throw new Error(`${node.name}: reply field must be declared by the source agent's submission requirements.`);
+  }
   const supplied = Array.isArray(input.edges) ? input.edges : [];
   if (supplied.length > 300) throw new Error('A workflow may have at most 300 edges.');
-  const edges = supplied.length ? supplied : isLegacy ? value.nodes.slice(0, -1).map((node, index) => ({ from: node.id, to: value.nodes[index + 1].id, outcome: 'success' })) : [];
+  const edges = supplied.length ? supplied : isLegacy ? value.nodes.slice(0, -1).map((node, index) => ({ from: node.id, to: value.nodes[index + 1].id, outcome: node.kind === 'human' ? 'approved' : 'success' })) : [];
   const edgeIds = new Set();
   for (const [index, original] of edges.entries()) {
     if (!original || typeof original !== 'object') throw new Error(`Edge ${index + 1} is invalid.`);
@@ -152,6 +181,15 @@ export function normalizeWorkflow(input) {
   }
   for (const node of value.nodes) if (node.kind === 'branch') {
     for (const outcome of [node.condition.trueOutcome, node.condition.falseOutcome]) if (!value.edges.some(edge => edge.from === node.id && (edge.outcome === outcome || edge.outcome === '*' || edge.outcome === 'default'))) throw new Error(`${node.name}: missing route for branch outcome ${outcome}.`);
+  }
+  if (publishing) for (const node of value.nodes.filter(node => node.kind === 'human')) {
+    const unsupported = value.edges.find(edge => edge.from === node.id && !['approved', 'changes_requested', '*', 'default'].includes(edge.outcome));
+    if (unsupported) throw new Error(`${node.name}: unsupported human outcome ${unsupported.outcome}. Human decisions support approved and changes_requested.`);
+  }
+  for (const node of value.nodes.filter(node => node.operation === 'send_external_reply')) {
+    const incoming = value.edges.filter(edge => edge.to === node.id);
+    if (value.entryNode === node.id || !incoming.length || incoming.some(edge => edge.outcome !== 'approved' || value.nodes.find(source => source.id === edge.from)?.kind !== 'human'))
+      throw new Error(`${node.name}: sending a reply requires an explicit human approval edge.`);
   }
   const reachable = new Set([value.entryNode]);
   for (let changed = true; changed;) { changed = false; for (const edge of value.edges) if (reachable.has(edge.from) && !reachable.has(edge.to)) { reachable.add(edge.to); changed = true; } }
@@ -198,6 +236,8 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
   function activate(s, nodeId, outcome = 'success') {
     const list = nodes(s); const index = list.findIndex(n => n.id === nodeId); if (index < 0) throw new Error('Workflow transition references an unknown node.');
     s.step = index; s.flow.nodeId = nodeId; s.flow.instance = randomUUID(); s.flow.validation = null; s.flow.submission = null; s.flow.agentSessionId = null; s.flow.lastOutcome = outcome;
+    delete s.flow.decisionSubmissionRef;
+    if (list[index].operation !== 'send_external_reply') delete s.flow.approvedSubmission;
     const node = list[index]; s.flow.status = node.kind === 'human' ? 'waiting_gate' : node.kind === 'wait' ? 'waiting_event' : 'ready'; s.status = s.flow.status;
     event(s, 'step_activated', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance: s.flow.instance, name: node.name, outcome });
   }
@@ -205,9 +245,72 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     assertOutcome(s, outcome);
     const node = current(s); const edge = edgeFor(s, outcome); const latestEvidence = s.flow.evidenceTrail?.at(-1)?.evidence;
     if (latestEvidence) s.flow.previousEvidence = latestEvidence;
-    s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: s.flow.instance, outcome, at: new Date().toISOString(), to: edge?.to ?? null });
+    const completedInstance = s.flow.instance;
+    const submission = node.kind === 'agent' && s.flow.lastSubmission?.nodeId === node.id && s.flow.lastSubmission?.instance === completedInstance
+      ? structuredClone(s.flow.lastSubmission) : undefined;
+    const validation = node.kind === 'agent' ? s.flow.validation : null;
+    const sourceEvidence = validation ? {
+      sourceNodeId: node.id,
+      sourceInstance: completedInstance,
+      ...(validation.artifact ? { artifact: structuredClone(validation.artifact) } : {}),
+      ...(validation.digest ? { digest: validation.digest } : {}),
+      ...(validation.details ? { details: structuredClone(validation.details) } : {}),
+      ...(validation.references ? { references: validation.references.map(({ path, startLine, endLine, sha256 }) => ({ path, startLine, endLine, sha256 })) } : {}),
+    } : undefined;
+    const reviewedSubmissionRef = node.kind === 'human' && s.flow.decisionSubmissionRef ? structuredClone(s.flow.decisionSubmissionRef) : undefined;
+    s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: completedInstance, outcome, at: new Date().toISOString(), to: edge?.to ?? null, ...(submission ? { submission } : {}), ...(sourceEvidence ? { sourceEvidence } : {}), ...(reviewedSubmissionRef ? { decisionSubmissionRef: reviewedSubmissionRef } : {}) });
     if (!edge) { s.flow.status = 'completed'; s.status = 'accepted'; event(s, 'workflow_completed', { runId: s.flow.id }); return; }
     activate(s, edge.to, outcome);
+    if (current(s).kind === 'human') {
+      const source = [...s.flow.history].reverse().find(entry => entry.submission?.nodeId && entry.submission?.instance && entry.submission?.revision === s.flow.revision + 1);
+      if (source) s.flow.decisionSubmissionRef = { nodeId: source.submission.nodeId, instance: source.submission.instance, revision: source.submission.revision ?? 0 };
+    }
+  }
+  function resolveDecisionSubmission(s, gateNode) {
+    const flow = s.flow;
+    const matches = ref => {
+      const entry = flow.history.find(item => item.nodeId === ref.nodeId && item.instance === ref.instance);
+      if (!entry) return null;
+      if (entry.submission?.revision !== undefined && entry.submission.revision !== ref.revision) return null;
+      const submission = entry.submission ?? null;
+      const trailEvidence = flow.evidenceTrail?.findLast(item => item.nodeId === ref.nodeId && item.instance === ref.instance);
+      return submission ? { ref, entry, submission, evidenceEntry: entry.sourceEvidence ? { nodeId: ref.nodeId, instance: ref.instance, evidence: entry.sourceEvidence } : trailEvidence } : null;
+    };
+    if (flow.decisionSubmissionRef) return matches(flow.decisionSubmissionRef);
+
+    // Older active gates persisted lastSubmission and evidence separately. Bind
+    // only when both identify one exact direct source completion for this gate.
+    const legacy = flow.lastSubmission;
+    if (!legacy?.nodeId || flow.previousEvidence?.sourceNodeId && legacy.nodeId !== flow.previousEvidence.sourceNodeId) return null;
+    const evidenceMatches = (left, right) => {
+      if (!left || !right) return false;
+      return JSON.stringify(left.details ?? null) === JSON.stringify(right.details ?? null) &&
+        JSON.stringify(left.references ?? null) === JSON.stringify(right.references ?? null) &&
+        JSON.stringify(left.artifact ?? null) === JSON.stringify(right.artifact ?? null) &&
+        (left.digest ?? null) === (right.digest ?? null);
+    };
+    if (flow.previousEvidence && (JSON.stringify(legacy.details ?? null) !== JSON.stringify(flow.previousEvidence.details ?? null) ||
+        JSON.stringify(legacy.references ?? null) !== JSON.stringify(flow.previousEvidence.references ?? null))) return null;
+    const historyCandidates = flow.history.filter(history => history.nodeId === legacy.nodeId && history.to === gateNode.id);
+    if (historyCandidates.length !== 1) return null;
+    const history = historyCandidates[0];
+    const evidenceCandidates = (flow.evidenceTrail ?? []).filter(item => item.nodeId === legacy.nodeId && item.instance === history.instance);
+    if (flow.previousEvidence && (evidenceCandidates.length !== 1 || !evidenceMatches(evidenceCandidates[0].evidence, flow.previousEvidence))) return null;
+    const source = evidenceCandidates[0] ?? null;
+    if (legacy.revision !== undefined && legacy.revision !== flow.revision + 1) return null;
+    const ref = { nodeId: legacy.nodeId, instance: history.instance, revision: legacy.revision ?? flow.revision + 1 };
+    history.submission = { ...structuredClone(legacy), instance: ref.instance, revision: ref.revision };
+    flow.decisionSubmissionRef = ref;
+    if (flow.previousEvidence) { flow.previousEvidence.sourceNodeId = ref.nodeId; flow.previousEvidence.sourceInstance = ref.instance; }
+    if (source?.evidence) { source.evidence.sourceNodeId = ref.nodeId; source.evidence.sourceInstance = ref.instance; }
+    if (source?.evidence) history.sourceEvidence = {
+      sourceNodeId: ref.nodeId, sourceInstance: ref.instance,
+      ...(source.evidence.artifact ? { artifact: structuredClone(source.evidence.artifact) } : {}),
+      ...(source.evidence.digest ? { digest: source.evidence.digest } : {}),
+      ...(source.evidence.details ? { details: structuredClone(source.evidence.details) } : {}),
+      ...(source.evidence.references ? { references: source.evidence.references.map(({ path, startLine, endLine, sha256 }) => ({ path, startLine, endLine, sha256 })) } : {}),
+    };
+    return { ref, entry: history, submission: history.submission, evidenceEntry: source };
   }
   async function validate(s, outcome = 'success') {
     const node = current(s); let artifact = null; let review = null;
@@ -228,7 +331,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     const instance = s.flow.instance; const status = s.flow.status; const node = current(s); if (node.artifact && !artifacts.includes(node.artifact.path)) throw new Error(`Include ${node.artifact.path} in the submission.`);
     assertOutcome(s, outcome);
     if (['changes_requested', 'failed'].includes(outcome) && s.flow.revision >= s.workflow.maxRevisions) throw new Error('Workflow revision limit reached.');
-    const evidence = { ...await validate(s, outcome), ...(submissionEvidence ? { ...submissionEvidence, sourceNodeId: node.id } : {}) }; if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed during validation. Submission was not accepted.');
+    const evidence = { ...await validate(s, outcome), ...(node.kind === 'agent' ? { ...(submissionEvidence ?? {}), sourceNodeId: node.id, sourceInstance: instance } : {}) }; if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed during validation. Submission was not accepted.');
     const verification = node.kind === 'agent' ? await sealEvidence(s, submissionEvidence, artifacts) : null;
     if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed while sealing evidence.');
     if (verification) { evidence.verification = verification; submissionEvidence = {...submissionEvidence, verification}; }
@@ -237,6 +340,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     const primaryArtifact = capturedArtifacts.find(artifact => artifact?.path === node.artifact?.path) ?? capturedArtifacts.find(artifact => artifact?.id);
     s.flow.validation = evidence; s.flow.submission = { summary, artifacts, ...(submissionEvidence ?? {}) }; s.flow.lastSubmission = {
       nodeId: node.id,
+      instance,
       step: node.name,
       summary,
       ...(submissionEvidence ?? {}),
@@ -244,7 +348,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       ...(primaryArtifact?.id ? { primaryArtifactId: primaryArtifact.id } : {}),
       artifacts: capturedArtifacts,
     };
-    if (evidence.artifact || evidence.digest || evidence.details) { s.flow.evidenceTrail ??= []; s.flow.evidenceTrail.push({ nodeId: node.id, instance, evidence }); s.flow.evidenceTrail = s.flow.evidenceTrail.slice(-50); }
+    if (node.kind === 'agent' || evidence.artifact || evidence.digest || evidence.details) { s.flow.evidenceTrail ??= []; s.flow.evidenceTrail.push({ nodeId: node.id, instance, evidence }); s.flow.evidenceTrail = s.flow.evidenceTrail.slice(-50); }
     event(s, 'step_submitted', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance, summary, evidence, outcome });
     if (['changes_requested', 'failed'].includes(outcome)) { s.flow.revision++; s.flow.evidenceTrail = []; event(s, 'evidence_invalidated', { fromNode: node.id, revision: s.flow.revision, outcome }); }
     if (node.advance === 'manual' && outcome === 'success') { s.flow.status = 'awaiting_continue'; s.status = 'awaiting_continue'; }
@@ -306,6 +410,13 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       return await finish(s, summary, args.artifacts, outcome, structured); } catch (e) { event(s, 'submission_rejected', { instance, message: e.message }); await save(); throw e; }
     },
     async finishAutomated(s, instance, outcome = 'success', result = null) { requireInstance(s, instance); if (s.flow.status !== 'running') throw new Error('Workflow is no longer running.'); const node = current(s); if (result) s.flow.actionResult = result; return finish(s, `${node.name} completed`, node.artifact ? [node.artifact.path] : [], outcome); },
+    async holdAction(s, instance, result) {
+      requireInstance(s, instance);
+      if (current(s).kind !== 'action' || s.flow.status !== 'running') throw new Error('Only a running action can await delivery.');
+      s.flow.resumeStatus = 'ready'; s.flow.status = 'paused'; s.status = 'paused'; s.flow.actionResult = result;
+      event(s, 'workflow_action_waiting', { nodeId: current(s).id, instance, message: result.message });
+      await save();
+    },
     async decide(s, command) {
       requireInstance(s, command.instance);
       // A submitted agent has already yielded control when the gate/evidence is
@@ -315,22 +426,46 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       const node = current(s);
       if (command.action === 'reviseSubmission' && s.flow.status === 'awaiting_continue') { event(s, 'evidence_invalidated', { instance: s.flow.instance }); activate(s, node.id, 'revision'); await save(); return; }
       if (s.flow.status === 'waiting_gate') {
-        if (command.action === 'requestChanges') { const feedback = required(command.feedback, 'Review feedback'); if (!edgeFor(s, 'changes_requested')) throw new Error('This gate has no revision path. Configure an outcome edge for changes_requested.'); s.flow.feedback = feedback; await finish(s, `Changes requested: ${feedback}`, [], 'changes_requested'); return; }
+        if (command.action === 'requestChanges') { delete s.flow.approvedSubmission; const feedback = required(command.feedback, 'Review feedback'); if (!edgeFor(s, 'changes_requested')) throw new Error('This gate has no revision path. Configure an outcome edge for changes_requested.'); s.flow.feedback = feedback; await finish(s, `Changes requested: ${feedback}`, [], 'changes_requested'); return; }
         if (command.action !== 'approveGate') throw new Error('This step needs a human workflow decision.');
-        if (s.flow.previousEvidence?.artifact?.hash) {
-          const file = await inspectArtifact(s, s.flow.previousEvidence.artifact.path);
-          if (!file || file.sha256 !== s.flow.previousEvidence.artifact.hash) throw new Error('Submitted evidence changed. Request a fresh submission before approving.');
-        }
-        for (const ref of s.flow.previousEvidence?.references ?? []) {
-          const origin = (s.workflow.nodes ?? s.workflow.steps).find(n => n.id === s.flow.previousEvidence.sourceNodeId);
-          if (!origin || origin.kind !== 'agent') throw new Error('Source evidence has no originating agent step. Request a fresh submission.');
-          const file = await readReference(s, ref, origin);
-          requireInstance(s, command.instance);
-          if (s.flow.status !== 'waiting_gate' || !file || file.sha256 !== ref.sha256) throw new Error('Submitted source evidence changed. Request a fresh submission before approving.');
-        }
-        if (s.flow.previousEvidence?.digest && s.workspace) {
-          const review = await inspectChanges(s, s.flow.previousEvidence.artifact?.path);
-          if (!review || review.digest !== s.flow.previousEvidence.digest) throw new Error('Submitted evidence changed. Request a fresh submission before approving.');
+        const decisionSource = resolveDecisionSubmission(s, node);
+        if (s.flow.decisionSubmissionRef && !decisionSource)
+          throw new Error('The exact decision submission is unavailable. Request a fresh submission before approving.');
+        if (decisionSource && !decisionSource.evidenceEntry && (decisionSource.submission.references?.length || decisionSource.submission.artifacts?.length))
+          throw new Error('The decision source evidence is unavailable. Request a fresh submission before approving.');
+        const validateEvidence = async (evidence, expectedRef) => {
+          if (!evidence) return;
+          if (expectedRef && (evidence.sourceNodeId !== expectedRef.nodeId || evidence.sourceInstance !== expectedRef.instance))
+            throw new Error('The decision source no longer matches its captured submission. Request a fresh submission before approving.');
+          if (evidence.artifact?.hash) {
+            const file = await inspectArtifact(s, evidence.artifact.path);
+            requireInstance(s, command.instance);
+            if (s.flow.status !== 'waiting_gate' || !file || file.sha256 !== evidence.artifact.hash) throw new Error('Submitted evidence changed. Request a fresh submission before approving.');
+          }
+          for (const ref of evidence.references ?? []) {
+            const origin = (s.workflow.nodes ?? s.workflow.steps).find(n => n.id === evidence.sourceNodeId);
+            if (!origin || origin.kind !== 'agent') throw new Error('Source evidence has no originating agent step. Request a fresh submission.');
+            const file = await readReference(s, ref, origin);
+            requireInstance(s, command.instance);
+            if (s.flow.status !== 'waiting_gate' || !file || file.sha256 !== ref.sha256) throw new Error('Submitted source evidence changed. Request a fresh submission before approving.');
+          }
+          if (evidence.digest && s.workspace) {
+            const review = await inspectChanges(s, evidence.artifact?.path);
+            requireInstance(s, command.instance);
+            if (s.flow.status !== 'waiting_gate' || !review || review.digest !== evidence.digest) throw new Error('Submitted evidence changed. Request a fresh submission before approving.');
+          }
+        };
+        await validateEvidence(s.flow.previousEvidence, null);
+        const sourceEvidence = decisionSource?.evidenceEntry?.evidence;
+        if (decisionSource && sourceEvidence !== s.flow.previousEvidence) await validateEvidence(sourceEvidence, decisionSource.ref);
+        const next = nodes(s).find(candidate => candidate.id === edgeFor(s, 'approved')?.to);
+        if (next?.operation === 'send_external_reply') {
+          const sourceRef = decisionSource?.ref;
+          const submission = decisionSource?.submission;
+          const body = submission?.details?.[next.input.field];
+          if (submission?.nodeId !== next.input.sourceNodeId || s.flow.previousEvidence?.sourceNodeId !== sourceRef?.nodeId || s.flow.previousEvidence?.sourceInstance !== sourceRef?.instance || typeof body !== 'string' || !body.trim())
+            throw new Error('The reply needs a captured draft from the configured source step. Request changes before approving.');
+          s.flow.approvedSubmission = { reviewNodeId: node.id, reviewInstance: command.instance, sourceSubmissionRef: structuredClone(sourceRef), submission: structuredClone(submission) };
         }
         await finish(s, 'Human approved', [], 'approved'); event(s, 'gate_approved', { instance: command.instance, actor: command.actor ?? s.lease?.label }); await save(); return;
       }

@@ -2,14 +2,31 @@ import { useEffect, useRef, useState } from 'react';
 import { FileText, Paperclip, X } from 'lucide-react';
 import {
   command,
+  owns,
   type ContextFile,
   type RuntimeState,
+  type RuntimeAction,
   type Ticket,
   type TicketScalar,
 } from '../../shared/api/runtime';
 import { Select } from '../../shared/ui/Select';
 import { ExecutionProfileEditor, PlacementEditor } from '../projects';
-import { MarkdownDocument } from './ArtifactReview';
+import { WorkflowArtifactContent as MarkdownDocument } from '../workflows';
+import { WorkflowActivityHistory, WorkflowRunInteraction } from '../workflows';
+import { ticketReplyDestination, ticketWorkflowActions } from './workflow-actions';
+import {
+  clearSubmittedTicketReplyDraft,
+  forgetTicketReplyRequestId,
+  getTicketThreadConnectionSelection,
+  selectTicketReplies,
+  selectTicketThread,
+  setTicketReplyDraft,
+  setTicketThreadConnectionSelection,
+  ticketReplyDraftKey,
+  ticketReplyRequestId,
+  ticketThreadScopeKey,
+  useTicketReplyDraft,
+} from './ticket-thread-state';
 import './ticket-details.css';
 
 const fileUrl = (ticketId: number, file: ContextFile) =>
@@ -173,12 +190,14 @@ export function TicketDetails({
   ticket,
   runLabel,
   onRun,
+  runtimeAvailable = true,
   onSelectTicket,
 }: {
   state: RuntimeState;
   ticket: Ticket;
   runLabel: string;
   onRun: () => void;
+  runtimeAvailable?: boolean;
   onSelectTicket: (id: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -200,9 +219,30 @@ export function TicketDetails({
   const [relatedTitle, setRelatedTitle] = useState('');
   const [relatedBoardId, setRelatedBoardId] = useState('');
   const [linkBusy, setLinkBusy] = useState(false);
-  const [replyDraft, setReplyDraft] = useState('');
-  const [replyBusy, setReplyBusy] = useState(false);
+  const [replyBusyScopes, setReplyBusyScopes] = useState<Set<string>>(() => new Set());
+  const replyAttempts = useRef(new Map<string, number>());
   const [showReplyComposer, setShowReplyComposer] = useState(false);
+  const initialThreadConnectionId =
+    ticket.externalLinks?.find((link) => {
+      const connection = state.ticketConnections?.find((source) => source.id === link.connectionId);
+      return (
+        connection?.enabled &&
+        (connection.capabilities?.threadRead || connection.capabilities?.reply)
+      );
+    })?.connectionId ?? '';
+  const ticketScopeKey = ticketThreadScopeKey(state.deployment?.id, state.activeContext, ticket.id);
+  const [, forceThreadSelectionRender] = useState(0);
+  const selectedThreadConnectionId = getTicketThreadConnectionSelection(
+    ticketScopeKey,
+    initialThreadConnectionId,
+  );
+  const chooseThreadConnection = (connectionId: string) => {
+    setTicketThreadConnectionSelection(ticketScopeKey, connectionId);
+    forceThreadSelectionRender((version) => version + 1);
+  };
+  const ticketScopeRef = useRef(ticketScopeKey);
+  ticketScopeRef.current = ticketScopeKey;
+  const [workflowWorking, setWorkflowWorking] = useState(false);
   const related = (state.ticketRelations ?? []).flatMap((relation) => {
     const otherId =
       relation.sourceTicketId === ticket.id
@@ -227,20 +267,38 @@ export function TicketDetails({
       (!board.filters.workTypes?.length ||
         board.filters.workTypes.includes(board.creationWorkType ?? 'task')),
   );
-  const thread = (state.ticketThreads ?? []).find((value) => value.ticketId === ticket.id);
-  const replies = (state.ticketReplies ?? []).filter((value) => value.ticketId === ticket.id);
+  const threadSources = (ticket.externalLinks ?? []).flatMap((link) => {
+    const connection = state.ticketConnections?.find((source) => source.id === link.connectionId);
+    return connection?.enabled &&
+      (connection.capabilities?.threadRead || connection.capabilities?.reply)
+      ? [{ link, connection }]
+      : [];
+  });
+  const selectedThreadConnectionIdForView = selectedThreadConnectionId;
+  const selectedThreadSource = (ticket.externalLinks ?? []).find(
+    (link) => link.connectionId === selectedThreadConnectionIdForView,
+  );
+  const selectedThreadConnection = state.ticketConnections?.find(
+    (source) => source.id === selectedThreadConnectionIdForView,
+  );
+  const thread = selectedThreadConnectionIdForView
+    ? selectTicketThread(state.ticketThreads ?? [], ticket.id, selectedThreadConnectionIdForView)
+    : undefined;
+  const replies = selectedThreadConnectionIdForView
+    ? selectTicketReplies(state.ticketReplies ?? [], ticket.id, selectedThreadConnectionIdForView)
+    : [];
   const uncertainReply = replies.find((value) =>
     ['pending', 'outcome-unknown'].includes(value.status),
   );
-  const replyConnection = ticket.externalLinks?.find(
-    (link) =>
-      state.ticketConnections?.find((source) => source.id === link.connectionId)?.capabilities
-        ?.reply,
+  const canReadThread = Boolean(
+    selectedThreadSource &&
+    selectedThreadConnection?.enabled &&
+    selectedThreadConnection.capabilities?.threadRead,
   );
-  const threadConnection = ticket.externalLinks?.find(
-    (link) =>
-      state.ticketConnections?.find((source) => source.id === link.connectionId)?.capabilities
-        ?.threadRead,
+  const canReply = Boolean(
+    selectedThreadSource &&
+    selectedThreadConnection?.enabled &&
+    selectedThreadConnection.capabilities?.reply,
   );
   const sourceLink = ticket.externalLinks?.[0];
   const sourceName = sourceLink
@@ -248,8 +306,21 @@ export function TicketDetails({
       sourceLink.provider)
     : undefined;
   const hasActivity = Boolean(
-    threadConnection || replyConnection || thread?.messages.length || replies.length,
+    threadSources.length ||
+    selectedThreadConnectionIdForView ||
+    thread?.messages.length ||
+    replies.length,
   );
+  const draftKey = ticketReplyDraftKey(
+    state.deployment?.id,
+    state.activeContext,
+    ticket.id,
+    selectedThreadConnectionIdForView,
+  );
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  const replyDraft = useTicketReplyDraft(draftKey);
+  const replyBusy = replyBusyScopes.has(draftKey);
   const descriptionIsLong =
     ticket.description.length > 480 || ticket.description.split(/\r?\n/).length > 8;
   const statusBoards = state.boards.filter(
@@ -301,6 +372,62 @@ export function TicketDetails({
     }
   }, [ticket.revision, ticket.description, editing]);
   useEffect(() => setDescriptionExpanded(false), [ticket.id, ticket.description]);
+  useEffect(() => {
+    if (!getTicketThreadConnectionSelection(ticketScopeKey) && threadSources.length)
+      setTicketThreadConnectionSelection(
+        ticketScopeKey,
+        selectedThreadConnectionId || threadSources[0].link.connectionId,
+      );
+  }, [
+    ticketScopeKey,
+    selectedThreadConnectionId,
+    threadSources.map(({ link }) => link.connectionId).join('|'),
+  ]);
+  useEffect(() => {
+    if (!session || !owns(session)) return;
+    const timer = setInterval(
+      () => void command('heartbeat', { sessionId: session.id }).catch(() => {}),
+      25000,
+    );
+    return () => clearInterval(timer);
+  }, [session?.id, session?.lease?.client]);
+  async function actWorkflow(action: RuntimeAction, input: object = {}) {
+    if (!session || workflowWorking) return;
+    setWorkflowWorking(true);
+    try {
+      if (!owns(session))
+        await command('claim', { sessionId: session.id, label: 'Ticket workflow' });
+      await command(action, { sessionId: session.id, ...input });
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setWorkflowWorking(false);
+    }
+  }
+  async function reconcileReply(
+    input: { requestId: string; remoteId?: string; confirmNotPosted?: true },
+    successMessage: string,
+  ) {
+    const scopedKey = draftKey;
+    const attempt = (replyAttempts.current.get(scopedKey) ?? 0) + 1;
+    replyAttempts.current.set(scopedKey, attempt);
+    setReplyBusyScopes((scopes) => new Set(scopes).add(scopedKey));
+    try {
+      await command('reconcileExternalTicketReply', input);
+      if (draftKeyRef.current === scopedKey) setMessage(successMessage);
+    } catch (error) {
+      if (draftKeyRef.current === scopedKey) setMessage((error as Error).message);
+    } finally {
+      if (replyAttempts.current.get(scopedKey) === attempt) {
+        replyAttempts.current.delete(scopedKey);
+        setReplyBusyScopes((scopes) => {
+          const next = new Set(scopes);
+          next.delete(scopedKey);
+          return next;
+        });
+      }
+    }
+  }
   const patchField = (key: string, value: TicketScalar) =>
     setCustomFields((fields) => ({ ...fields, [key]: value }));
   function removeField(key: string) {
@@ -374,19 +501,72 @@ export function TicketDetails({
                 <p className="ticket-empty">No description.</p>
               )}
             </section>
+            {session?.flow && (
+              <section className="ticket-agent-activity" aria-label="Agent work">
+                <WorkflowRunInteraction
+                  key={session.id}
+                  session={session}
+                  working={workflowWorking || !runtimeAvailable}
+                  onRecovery={onRun}
+                  resolveReplyDestination={(connectionId) =>
+                    ticketReplyDestination(state, ticket, connectionId)
+                  }
+                  actions={ticketWorkflowActions(
+                    session,
+                    (action, input) => void actWorkflow(action, input),
+                  )}
+                />
+              </section>
+            )}
             {hasActivity && (
-              <section className="ticket-activity" aria-label="Ticket messages">
+              <section
+                id={`ticket-messages-${ticket.id}`}
+                className="ticket-activity"
+                aria-label="Ticket messages"
+                tabIndex={-1}
+              >
                 <div className="ticket-section-heading">
                   <h3>Messages</h3>
                   <div className="ticket-activity-actions">
-                    {threadConnection && (
+                    {(threadSources.length > 1 ||
+                      (selectedThreadConnectionIdForView &&
+                        !threadSources.some(
+                          ({ link }) => link.connectionId === selectedThreadConnectionIdForView,
+                        ))) && (
+                      <label className="ticket-thread-selector">
+                        <span>Connection</span>
+                        <Select
+                          value={selectedThreadConnectionIdForView}
+                          onChange={(event) => chooseThreadConnection(event.target.value)}
+                        >
+                          {selectedThreadConnectionIdForView &&
+                            !threadSources.some(
+                              ({ link }) => link.connectionId === selectedThreadConnectionIdForView,
+                            ) && (
+                              <option value={selectedThreadConnectionIdForView}>
+                                {selectedThreadConnection?.name ??
+                                  selectedThreadSource?.provider ??
+                                  selectedThreadConnectionIdForView}{' '}
+                                · unavailable
+                              </option>
+                            )}
+                          {threadSources.map(({ link, connection }) => (
+                            <option key={link.connectionId} value={link.connectionId}>
+                              {connection.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                    )}
+                    {canReadThread && (
                       <button
                         className="secondary"
+                        disabled={replyBusy || !runtimeAvailable}
                         onClick={async () => {
                           try {
                             await command('syncExternalTicketThread', {
                               ticketId: ticket.id,
-                              connectionId: threadConnection.connectionId,
+                              connectionId: selectedThreadConnectionIdForView,
                             });
                             setMessage('Messages refreshed.');
                           } catch (error) {
@@ -397,9 +577,10 @@ export function TicketDetails({
                         Refresh
                       </button>
                     )}
-                    {replyConnection && (
+                    {canReply && (
                       <button
                         className="secondary"
+                        disabled={!runtimeAvailable}
                         onClick={() => setShowReplyComposer((value) => !value)}
                       >
                         {showReplyComposer ? 'Cancel' : 'Reply'}
@@ -407,16 +588,13 @@ export function TicketDetails({
                     )}
                   </div>
                 </div>
+                {!canReadThread && thread?.messages.length ? (
+                  <p role="status">Connection unavailable. Showing saved messages.</p>
+                ) : null}
                 {thread?.messages.map((entry) => (
                   <article className="ticket-message" key={entry.remoteId}>
                     <div>
-                      <strong>
-                        {['user', 'customer'].includes(entry.authorRole.toLowerCase())
-                          ? 'Requester'
-                          : entry.authorRole.toLowerCase() === 'system'
-                            ? 'System'
-                            : 'Team'}
-                      </strong>
+                      <strong>{entry.authorRole}</strong>
                       <time dateTime={entry.createdAt}>
                         {new Date(entry.createdAt).toLocaleString()}
                       </time>
@@ -436,7 +614,12 @@ export function TicketDetails({
                   .map((reply) => (
                     <article className="ticket-message" key={reply.id}>
                       <div>
-                        <strong>Team</strong>
+                        <strong>Reply</strong>
+                        {reply.createdAt && (
+                          <time dateTime={reply.createdAt}>
+                            {new Date(reply.createdAt).toLocaleString()}
+                          </time>
+                        )}
                         <span>{reply.deliveryStatus ?? reply.status}</span>
                       </div>
                       <p>{reply.body}</p>
@@ -447,42 +630,77 @@ export function TicketDetails({
                     {thread ? 'No messages yet.' : 'Messages not loaded.'}
                   </p>
                 )}
-                {replyConnection && showReplyComposer && (
-                  <div className="ticket-reply-composer">
-                    <textarea
-                      aria-label="Reply"
-                      placeholder="Write a reply…"
-                      value={replyDraft}
-                      onChange={(event) => setReplyDraft(event.target.value)}
-                      maxLength={12000}
-                      rows={4}
-                    />
-                    <button
-                      className="secondary"
-                      disabled={replyBusy || !replyDraft.trim() || Boolean(uncertainReply)}
-                      onClick={async () => {
-                        setReplyBusy(true);
-                        try {
-                          await command('postExternalTicketReply', {
-                            requestId: crypto.randomUUID(),
-                            ticketId: ticket.id,
-                            connectionId: replyConnection.connectionId,
-                            body: replyDraft.trim(),
-                          });
-                          setReplyDraft('');
-                          setShowReplyComposer(false);
-                          setMessage('Reply queued. Check delivery status in the source.');
-                        } catch (error) {
-                          setMessage((error as Error).message);
-                        } finally {
-                          setReplyBusy(false);
+                {selectedThreadConnectionIdForView &&
+                  (canReply || replyDraft.text) &&
+                  (showReplyComposer || replyDraft.text) && (
+                    <div className="ticket-reply-composer">
+                      <p className="ticket-reply-destination">
+                        {canReply
+                          ? `Sending through ${selectedThreadConnection?.name ?? selectedThreadConnectionIdForView}${(selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId) ? ` · ${selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId}` : ''}`
+                          : `Connection unavailable · ${selectedThreadConnection?.name ?? selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId ?? selectedThreadConnectionIdForView}`}
+                      </p>
+                      <textarea
+                        aria-label="Reply"
+                        placeholder="Write a reply…"
+                        value={replyDraft.text}
+                        disabled={!canReply}
+                        onChange={(event) => setTicketReplyDraft(draftKey, event.target.value)}
+                        maxLength={12000}
+                        rows={4}
+                      />
+                      <button
+                        className="secondary"
+                        disabled={
+                          !runtimeAvailable ||
+                          !canReply ||
+                          replyBusy ||
+                          !replyDraft.text.trim() ||
+                          Boolean(uncertainReply)
                         }
-                      }}
-                    >
-                      Send reply
-                    </button>
-                  </div>
-                )}
+                        onClick={async () => {
+                          const submitted = replyDraft;
+                          const submittedText = submitted.text.trim();
+                          const submittedKey = draftKey;
+                          const connectionId = selectedThreadConnectionIdForView;
+                          const attempt = (replyAttempts.current.get(submittedKey) ?? 0) + 1;
+                          replyAttempts.current.set(submittedKey, attempt);
+                          setReplyBusyScopes((scopes) => new Set(scopes).add(submittedKey));
+                          try {
+                            await command('postExternalTicketReply', {
+                              requestId: ticketReplyRequestId(submittedKey, submitted.version),
+                              ticketId: ticket.id,
+                              connectionId,
+                              body: submittedText,
+                            });
+                            forgetTicketReplyRequestId(submittedKey, submitted.version);
+                            clearSubmittedTicketReplyDraft(submittedKey, submitted.version);
+                            if (
+                              ticketScopeRef.current === ticketScopeKey &&
+                              draftKeyRef.current === submittedKey
+                            )
+                              setMessage('Reply queued. Check delivery status in the source.');
+                          } catch (error) {
+                            if (
+                              ticketScopeRef.current === ticketScopeKey &&
+                              draftKeyRef.current === submittedKey
+                            )
+                              setMessage((error as Error).message);
+                          } finally {
+                            if (replyAttempts.current.get(submittedKey) === attempt) {
+                              replyAttempts.current.delete(submittedKey);
+                              setReplyBusyScopes((scopes) => {
+                                const next = new Set(scopes);
+                                next.delete(submittedKey);
+                                return next;
+                              });
+                            }
+                          }
+                        }}
+                      >
+                        Send reply
+                      </button>
+                    </div>
+                  )}
                 {uncertainReply && (
                   <div role="alert">
                     <p>Reply outcome needs review in the source before another send.</p>
@@ -497,42 +715,26 @@ export function TicketDetails({
                         <button
                           key={entry.remoteId}
                           className="secondary"
-                          disabled={replyBusy}
-                          onClick={async () => {
-                            setReplyBusy(true);
-                            try {
-                              await command('reconcileExternalTicketReply', {
-                                requestId: uncertainReply.id,
-                                remoteId: entry.remoteId,
-                              });
-                              setMessage('Reply matched to the source conversation.');
-                            } catch (error) {
-                              setMessage((error as Error).message);
-                            } finally {
-                              setReplyBusy(false);
-                            }
-                          }}
+                          disabled={replyBusy || !runtimeAvailable}
+                          onClick={() =>
+                            void reconcileReply(
+                              { requestId: uncertainReply.id, remoteId: entry.remoteId },
+                              'Reply matched to the source conversation.',
+                            )
+                          }
                         >
                           Confirm source message {entry.remoteId}
                         </button>
                       ))}
                     <button
                       className="secondary"
-                      disabled={replyBusy}
-                      onClick={async () => {
-                        setReplyBusy(true);
-                        try {
-                          await command('reconcileExternalTicketReply', {
-                            requestId: uncertainReply.id,
-                            confirmNotPosted: true,
-                          });
-                          setMessage('Marked not posted after review.');
-                        } catch (error) {
-                          setMessage((error as Error).message);
-                        } finally {
-                          setReplyBusy(false);
-                        }
-                      }}
+                      disabled={replyBusy || !runtimeAvailable}
+                      onClick={() =>
+                        void reconcileReply(
+                          { requestId: uncertainReply.id, confirmNotPosted: true },
+                          'Marked not posted after review.',
+                        )
+                      }
                     >
                       Confirm no reply was posted
                     </button>
@@ -540,28 +742,11 @@ export function TicketDetails({
                 )}
               </section>
             )}
-            {session?.flow?.status === 'waiting_gate' && (
-              <section className="ticket-review-preview" aria-label="Submission to review">
-                <div className="ticket-section-heading">
-                  <h3>Review</h3>
-                  <span>Decision required</span>
-                </div>
-                <div className="ticket-review-card">
-                  <strong>{session.flow.lastSubmission?.step ?? 'Workflow submission'}</strong>
-                  {session.flow.lastSubmission?.summary && (
-                    <p>{session.flow.lastSubmission.summary}</p>
-                  )}
-                  <button className="primary" onClick={onRun}>
-                    Review submission
-                  </button>
-                </div>
-              </section>
-            )}
             <TicketFiles ticket={ticket} editing={false} revisionChanged={setRevision} />
+            {session?.flow && <WorkflowActivityHistory session={session} />}
           </div>
           <aside className="ticket-context" aria-label="Ticket context">
             <section className="ticket-context-group">
-              <h3>Context</h3>
               <dl className="ticket-context-facts">
                 <div>
                   <dt>Project</dt>
@@ -579,8 +764,8 @@ export function TicketDetails({
                 </div>
               </dl>
             </section>
-            <section className="ticket-context-group">
-              <h3>Related tickets</h3>
+            <details className="ticket-context-more ticket-context-related">
+              <summary>Related tickets{related.length > 0 ? ` · ${related.length}` : ''}</summary>
               <div className="ticket-related-content">
                 {related.map(({ relation, other }) => (
                   <div className="ticket-related-row" key={relation.id}>
@@ -715,31 +900,15 @@ export function TicketDetails({
                   </button>
                 </details>
               </div>
-            </section>
-            <section className="ticket-context-group">
-              <h3>Agent work</h3>
-              {session?.flow && (
-                <p className="ticket-workflow-state">
-                  {session?.flow?.status === 'waiting_gate'
-                    ? 'Submission ready for review'
-                    : session?.flow?.status === 'completed'
-                      ? 'Workflow completed'
-                      : session?.flow?.status === 'failed'
-                        ? 'Workflow failed'
-                        : `Workflow ${session.flow.status.replaceAll('_', ' ')}`}
-                </p>
-              )}
-              {(ticket.workflow?.name || session?.workflow?.name) && (
-                <p className="ticket-workflow-name">
-                  {ticket.workflow?.name ?? session?.workflow?.name}
-                </p>
-              )}
-              {session?.flow?.status !== 'waiting_gate' && (
+            </details>
+            {!session?.flow && (
+              <section className="ticket-context-group">
+                <h3>Agent work</h3>
                 <button className="ticket-context-action" onClick={onRun}>
                   {runLabel} →
                 </button>
-              )}
-            </section>
+              </section>
+            )}
             {(sourceLink || hasDetails) && (
               <details className="ticket-context-more" open={syncNeedsReview || undefined}>
                 <summary>Source and details</summary>

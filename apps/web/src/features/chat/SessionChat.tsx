@@ -28,7 +28,13 @@ function tokenCount(value?: number) {
   if (value < 1000) return String(value);
   return `${(value / 1000).toFixed(value < 10000 ? 1 : 0).replace(/\.0$/, '')}k`;
 }
-function ChatUsage({ usage, context }: { usage?: Session['modelUsage']; context?: Session['contextUsage'] }) {
+function ChatUsage({
+  usage,
+  context,
+}: {
+  usage?: Session['modelUsage'];
+  context?: Session['contextUsage'];
+}) {
   if (!usage) return <span className="chat-usage-empty">No usage reported yet</span>;
   const metrics: [string, number | undefined][] = [
     ['Total in', usage.inputTokens],
@@ -39,8 +45,16 @@ function ChatUsage({ usage, context }: { usage?: Session['modelUsage']; context?
   return (
     <div className="chat-usage" aria-label={`Chat model usage across ${usage.requests} responses`}>
       {context && (
-        <span title={`Last request: ${context.inputTokens.toLocaleString()} input tokens, provider measured.${context.compactAtTokens ? ` Compacts at ${context.compactAtTokens.toLocaleString()} tokens.` : ' Model capacity unknown.'}`}>
-          Last input <strong>{tokenCount(context.inputTokens)}{context.contextWindow ? ` / ${tokenCount(context.contextWindow)} (${Math.round(context.inputTokens / context.contextWindow * 100)}%)` : ''}</strong>
+        <span
+          title={`Last request: ${context.inputTokens.toLocaleString()} input tokens, provider measured.${context.compactAtTokens ? ` Compacts at ${context.compactAtTokens.toLocaleString()} tokens.` : ' Model capacity unknown.'}`}
+        >
+          Last input{' '}
+          <strong>
+            {tokenCount(context.inputTokens)}
+            {context.contextWindow
+              ? ` / ${tokenCount(context.contextWindow)} (${Math.round((context.inputTokens / context.contextWindow) * 100)}%)`
+              : ''}
+          </strong>
         </span>
       )}
       {metrics.map(([label, value]) => (
@@ -323,7 +337,17 @@ export function SessionChat({
             </span>
           </div>
         )}
-        {session && state && <SessionControls session={session} state={state} inlineChat />}
+        {session && state && (
+          <SessionControls
+            session={session}
+            state={state}
+            inlineChat
+            runtimeAvailable={!connectionError}
+            onOpenTicketMessages={
+              session.activeTicketId ? () => openTicket(session.activeTicketId!) : undefined
+            }
+          />
+        )}
         {!!session?.agentSessions?.length && (
           <label className="runtime-toolbar">
             Inspect session
@@ -637,7 +661,15 @@ export function SessionChat({
               />
               <div className="composer-bottom">
                 {toolbar}
-                <ChatUsage usage={session?.modelUsage} context={session?.contextUsage?.model === session?.model && session?.contextUsage?.agentSessionId === session?.currentAgentSessionId ? session?.contextUsage : undefined} />
+                <ChatUsage
+                  usage={session?.modelUsage}
+                  context={
+                    session?.contextUsage?.model === session?.model &&
+                    session?.contextUsage?.agentSessionId === session?.currentAgentSessionId
+                      ? session?.contextUsage
+                      : undefined
+                  }
+                />
                 <Select
                   className="chat-model-picker"
                   aria-label="Chat model"

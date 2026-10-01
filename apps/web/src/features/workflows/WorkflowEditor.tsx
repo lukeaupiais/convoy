@@ -17,6 +17,7 @@ import { ProfilePicker, profileRef } from '../library';
 import { newId } from '../../shared/lib/browser';
 import {
   actionInputDefaults,
+  canAddPresentationBinding,
   displayValue,
   fresh,
   fromWorkflow,
@@ -38,6 +39,7 @@ import {
   type GraphNode,
   type GraphWorkflow,
   type NodeKind,
+  type PresentationBinding,
   type SessionMode,
 } from './workflow-codec';
 import { WorkflowCanvas } from './WorkflowCanvas';
@@ -879,6 +881,32 @@ function NodeInspector({
     onPatch(node.id, {
       artifact: path || nextHeadings ? { path, headings: nextHeadings.split('\n') } : undefined,
     });
+  const patchPresentationBindings = (bindings: PresentationBinding[]) =>
+    onPatch(node.id, { presentationBindings: bindings.length ? bindings : undefined });
+  const presentationBindings = node.presentationBindings ?? [];
+  const declaredDetailFields = [
+    ...new Set(Object.values(node.submissionRequirements ?? {}).flatMap((rule) => rule.fields)),
+  ];
+  const usedDetailFields = new Set(
+    presentationBindings
+      .filter((binding) => binding.source === 'detail')
+      .map((binding) => binding.field),
+  );
+  const availableDetailFields = declaredDetailFields.filter(
+    (field) => !usedDetailFields.has(field),
+  );
+  const addPresentationBinding = () => {
+    if (presentationBindings.length >= 12) return;
+    if (!presentationBindings.some((binding) => binding.source === 'summary'))
+      patchPresentationBindings([...presentationBindings, { source: 'summary' }]);
+    else if (availableDetailFields.length)
+      patchPresentationBindings([
+        ...presentationBindings,
+        { source: 'detail', field: availableDetailFields[0] },
+      ]);
+    else if (!presentationBindings.some((binding) => binding.source === 'artifact'))
+      patchPresentationBindings([...presentationBindings, { source: 'artifact' }]);
+  };
   return (
     <InspectorPanel label="Node inspector" onClose={onClose}>
       <div className="inspector-heading">
@@ -1234,6 +1262,139 @@ function NodeInspector({
           </label>
         </details>
       )}
+      {node.type === 'agent' && (
+        <details open={presentationBindings.length > 0}>
+          <summary>Material presentation</summary>
+          <p className="field-hint">
+            Optionally label this node’s summary, a declared detail field, or captured artifacts.
+          </p>
+          {presentationBindings.map((binding, index) => (
+            <div className="workflow-presentation-binding" key={`${binding.source}-${index}`}>
+              <label>
+                Material
+                <select
+                  value={binding.source}
+                  onChange={(event) => {
+                    const source = event.target.value as PresentationBinding['source'];
+                    patchPresentationBindings(
+                      presentationBindings.map((item, itemIndex) =>
+                        itemIndex === index
+                          ? {
+                              ...item,
+                              source,
+                              ...(source === 'detail'
+                                ? { field: availableDetailFields[0] ?? '' }
+                                : { field: undefined }),
+                            }
+                          : item,
+                      ),
+                    );
+                  }}
+                >
+                  <option
+                    value="summary"
+                    disabled={presentationBindings.some(
+                      (item, itemIndex) => itemIndex !== index && item.source === 'summary',
+                    )}
+                  >
+                    Summary
+                  </option>
+                  <option
+                    value="detail"
+                    disabled={binding.source !== 'detail' && availableDetailFields.length === 0}
+                  >
+                    Detail field
+                  </option>
+                  <option
+                    value="artifact"
+                    disabled={presentationBindings.some(
+                      (item, itemIndex) => itemIndex !== index && item.source === 'artifact',
+                    )}
+                  >
+                    Captured artifacts
+                  </option>
+                </select>
+              </label>
+              {binding.source === 'detail' && (
+                <label>
+                  Declared field
+                  <select
+                    value={binding.field ?? ''}
+                    aria-label="Declared detail field"
+                    onChange={(event) =>
+                      patchPresentationBindings(
+                        presentationBindings.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, field: event.target.value } : item,
+                        ),
+                      )
+                    }
+                  >
+                    <option value="">Choose a field</option>
+                    {declaredDetailFields
+                      .filter((field) => !usedDetailFields.has(field) || field === binding.field)
+                      .map((field) => (
+                        <option key={field} value={field}>
+                          {field}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+              <label>
+                Display label <span className="field-hint">optional</span>
+                <input
+                  value={binding.label ?? ''}
+                  maxLength={80}
+                  placeholder={binding.source === 'summary' ? 'Summary' : 'Result'}
+                  onChange={(event) =>
+                    patchPresentationBindings(
+                      presentationBindings.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, label: event.target.value } : item,
+                      ),
+                    )
+                  }
+                />
+              </label>
+              <label className="workflow-primary-binding">
+                <input
+                  type="checkbox"
+                  checked={Boolean(binding.primary)}
+                  onChange={(event) =>
+                    patchPresentationBindings(
+                      presentationBindings.map((item, itemIndex) => ({
+                        ...item,
+                        primary:
+                          itemIndex === index ? event.target.checked || undefined : undefined,
+                      })),
+                    )
+                  }
+                />
+                Primary material
+              </label>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Remove material binding"
+                onClick={() =>
+                  patchPresentationBindings(
+                    presentationBindings.filter((_, itemIndex) => itemIndex !== index),
+                  )
+                }
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="secondary"
+            disabled={!canAddPresentationBinding(presentationBindings, availableDetailFields)}
+            onClick={addPresentationBinding}
+          >
+            <Plus size={14} /> Add material binding
+          </button>
+        </details>
+      )}
       {node.type === 'check' && (
         <label>
           Exact check command
@@ -1427,12 +1588,14 @@ function ActionFields({
             'update_ticket',
             'move_ticket',
             'set_external_status',
+            'send_external_reply',
           ].includes(operation) && <option value={operation}>Unsupported: {operation}</option>}
           <option value="inspect_changes">Inspect changes</option>
           <option value="create_ticket">Create ticket</option>
           <option value="create_related_ticket">Create related ticket</option>
           <option value="update_ticket">Update ticket</option>
           <option value="move_ticket">Move ticket</option>
+          <option value="send_external_reply">Send approved external reply</option>
           <option value="set_external_status">Set external status</option>
         </select>
       </label>
@@ -1467,6 +1630,13 @@ function ActionFields({
             </select>
           </label>
           {field('status', 'Status (optional)')}
+        </>
+      )}
+      {operation === 'send_external_reply' && (
+        <>
+          {field('connectionId', 'Connection')}
+          {field('sourceNodeId', 'Draft step')}
+          {field('field', 'Submitted draft field')}
         </>
       )}
       {operation === 'set_external_status' && (

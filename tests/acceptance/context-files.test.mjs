@@ -27,6 +27,12 @@ async function fixture(t,generate,runners){
 test('immutable attachment storage validates formats, ownership, limits, integrity and permissions',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'convoy-files-test-'));const files=createContextFiles(directory);const s={id:'one'};
   const meta=await files.add(s,file('scope.md','# Scope\nBuild search'));
+  const json=await files.add(s,file('result.json','{"count":2}'));
+  const text=await files.add(s,file('notes.txt','Notes'));
+  assert.equal(meta.mime,'text/markdown');assert.equal(json.mime,'application/json');assert.equal(text.mime,'text/plain');
+  const hydrated=await files.hydrate(s,[{role:'user',content:[],attachments:[meta,json]}]);
+  assert.ok(hydrated[0].content.some(item=>item.type==='text'&&item.text.includes('# Scope')));
+  assert.ok(hydrated[0].content.some(item=>item.type==='text'&&item.text.includes('{"count":2}')));
   assert.deepEqual(await files.add(s,file('scope.md','# Scope\nBuild search')),meta);
   assert.equal((await stat(join(directory,'context-files',meta.id))).mode&0o777,0o600);
   await assert.rejects(files.read({id:'other'},meta.id),/not found/);
@@ -34,6 +40,10 @@ test('immutable attachment storage validates formats, ownership, limits, integri
   await assert.rejects(files.add(s,file('document.pdf','%PDF')),/not supported/);
   await assert.rejects(files.add(s,file('binary.txt','\0bad')),/Binary/);
   await assert.rejects(files.add(s,file('large.txt','x'.repeat(64001))),/64 KB/);
+  const bigMarkdown=await files.add(s,file('big.md','m'.repeat(45000)));
+  const bigJson=await files.add(s,file('big.json','j'.repeat(45000)));
+  const bigText=await files.add(s,file('big.txt','t'.repeat(45000)));
+  await assert.rejects(files.select(s,[bigMarkdown.id,bigJson.id,bigText.id]),/128 KB/);
   await assert.rejects(files.add(s,{...image,data:Buffer.from('not an image').toString('base64')}),/Invalid/);
   const img=await files.add(s,image);await assert.rejects(files.select(s,[img.id],{input:['text']}),/does not support/);
   await assert.rejects(files.select(s,[meta.id,meta.id]),/distinct/);

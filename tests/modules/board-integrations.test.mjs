@@ -34,12 +34,22 @@ test('a mixed board creates a local ticket without calling Linear', async () => 
 
 test('an external reply has durable identity and uncertain outcomes require reconciliation', async () => {
   let sends = 0;
+  let releaseConcurrentSend;
+  let signalConcurrentStart;
+  const concurrentStarted = new Promise(resolve => { signalConcurrentStart = resolve; });
+  const concurrentRelease = new Promise(resolve => { releaseConcurrentSend = resolve; });
   const comments = [{ remoteId: 'reply-2', body: 'A second reply', authorRole: 'dev', createdAt: '2026-09-23T12:00:00Z' }];
   const { catalog, state } = fixture({
     listIssues: async () => [{ remoteId: 'case-9', remoteKey: 'CASE-9', title: 'Question', description: 'Need help', remoteVersion: 'v1' }],
     postReply: async (_source, _remoteId, body, requestId) => {
       sends++;
       if (requestId === 'uncertain') throw new Error('transport lost');
+      if (requestId === 'concurrent-first') {
+        signalConcurrentStart();
+        await concurrentRelease;
+        comments.push({ remoteId: 'reply-concurrent', body, authorRole: 'dev', createdAt: '2026-09-23T12:02:00Z' });
+        return { remoteId: 'reply-concurrent', deliveryStatus: 'pending' };
+      }
       assert.equal(body, 'We are checking.');
       comments.push({ remoteId: 'reply-1', body, authorRole: 'dev', createdAt: '2026-09-23T12:01:00Z', deliveryStatus: 'delivered' });
       return { remoteId: 'reply-1', deliveryStatus: 'pending' };
@@ -71,6 +81,20 @@ test('an external reply has durable identity and uncertain outcomes require reco
   const reconciled = await catalog.command({ action: 'reconcileExternalTicketReply', requestId: 'uncertain', remoteId: 'reply-2' });
   assert.equal(reconciled.status, 'queued');
   assert.equal(reconciled.remoteId, 'reply-2');
+
+  const firstConcurrentSend = send('concurrent-first', 'We are checking.');
+  await concurrentStarted;
+  await assert.rejects(send('concurrent-second', 'We are checking.'), error => {
+    assert.equal(error.code, 'TICKET_REPLY_UNRESOLVED');
+    assert.equal(error.outcome, 'not-dispatched');
+    assert.equal(error.blockingReplyRequestId, 'concurrent-first');
+    assert.equal(error.blockingReplyStatus, 'pending');
+    return true;
+  });
+  assert.equal(sends, 3);
+  releaseConcurrentSend();
+  assert.equal((await firstConcurrentSend).status, 'queued');
+  assert.equal(sends, 3);
 });
 
 test('source status follows a delivered reply and is idempotent on the ticket projection', async () => {
