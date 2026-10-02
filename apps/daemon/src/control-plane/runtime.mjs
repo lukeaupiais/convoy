@@ -1401,7 +1401,10 @@ export async function createRuntime({
         const activityDescriptor = step?.activity ? activityCatalog.get(step.activity) : null;
         const activityNeedsRunner = activityDescriptor?.resources.location === 'runner' ||
           activityDescriptor?.resources.workspace === true;
-        const runnerRequired = Boolean(step?.kind === 'check' || step?.requiresCheck || step?.artifact || activityNeedsRunner);
+        const agentUsesConfiguredPlacement = !step?.activity && (!step || step.kind === 'agent') &&
+          placement.effective(s).mode !== 'none';
+        const runnerRequired = Boolean(agentUsesConfiguredPlacement || step?.kind === 'check' ||
+          step?.requiresCheck || step?.artifact || activityNeedsRunner);
         const providerOnlyActivity = step?.activity && activityDescriptor?.resources.location === 'agent' &&
           activityDescriptor.resources.workspace !== true;
         const acquirePlacement = !providerOnlyActivity;

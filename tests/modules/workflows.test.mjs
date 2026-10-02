@@ -4,6 +4,7 @@ import { createWorkflowEngine, normalizeWorkflow } from '../../apps/daemon/src/m
 import { createWorkflowRegistry } from '../../apps/daemon/src/modules/workflows/workflow-registry.mjs';
 import { defaultWorkflowDefinition } from '../../apps/daemon/src/modules/workflows/default-workflow.mjs';
 import { createAutomations, initializeAutomations } from '../../apps/daemon/src/modules/workflows/index.mjs';
+import { createWorkflows } from '../../apps/daemon/src/modules/workflows/workflow-module.mjs';
 
 test('legacy automation state requires explicit offline migration', () => {
   assert.throws(() => initializeAutomations({ workflowStartRules: [] }), /offline migration/);
@@ -36,6 +37,39 @@ test('the delivery template models plan, implementation, verification, review, a
   assert.match(workflow.nodes.find((node) => node.id === 'verify').checkCommand, /fs\.readdirSync/);
   assert.match(workflow.nodes.find((node) => node.id === 'plan').prompt, /canonical success outcome/i);
   assert.match(workflow.nodes.find((node) => node.id === 'implement').prompt, /Do not push, merge or deploy/i);
+});
+
+test('legacy workflow selection and revision publication interpret missing owner/version without rewriting the pin', async () => {
+  const legacy = { id: 'delivery', name: 'Legacy delivery', steps: [{ name: 'Work', kind: 'agent', prompt: 'Work' }] };
+  const state = {
+    workflows: [structuredClone(legacy)],
+    workflowDrafts: {},
+    projects: [{ id: 'agent-platform', organizationId: 'personal' }],
+  };
+  const before = JSON.stringify(state.workflows[0]);
+  const workflows = createWorkflows({
+    state, save: async () => {}, defaultWorkflow: { id: 'other', name: 'Other', version: 1, steps: [] },
+    normalize: normalizeWorkflow, validateBindings: () => {}, engine: {}, effects: {}, requestStop: async () => {},
+    automations: { snapshot: () => ({}) },
+  });
+
+  const selected = workflows.selection('delivery', { projectId: 'agent-platform' });
+  assert.equal(selected.organizationId, 'personal');
+  assert.equal(selected.version, 1);
+  assert.equal(JSON.stringify(state.workflows[0]), before);
+
+  const published = await workflows.registry.publish({
+    organizationId: 'personal',
+    baseVersion: 1,
+    workflow: { ...structuredClone(legacy), name: 'Legacy delivery revision' },
+  });
+  assert.equal(published.version, 2);
+  assert.equal(published.organizationId, 'personal');
+  assert.equal(
+    JSON.stringify(state.workflows[0]),
+    before,
+    'publishing a new revision does not rewrite the historical pin',
+  );
 });
 
 test('the delivery template completes a plan, check failure repair, and human review loop end to end', async () => {

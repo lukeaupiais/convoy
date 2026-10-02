@@ -34,7 +34,9 @@ node becomes active, using the stored run principal. Its exact node model, curre
 provider grant, and declared tools are checked before each adapter prepare/dispatch,
 including when a run already has a linked session. Provider-only activities do not
 acquire a runner just because the project has a runner placement. Legacy agent nodes
-still create their session when activated. Each effect attempt pins its activity
+still create their session when activated and use the project's configured runner
+placement for that active turn, queuing when capacity is occupied; later nodes do
+not reserve resources early. Each effect attempt pins its activity
 revision, resolved input digest, idempotency identity, and prepared intent before
 invoking its adapter. Workflows remains the sole owner of attempts and compatibility
 effect evidence. Completed receipts are immutable; waiting effects can be confirmed

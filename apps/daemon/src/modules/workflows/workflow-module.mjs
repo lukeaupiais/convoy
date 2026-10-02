@@ -198,10 +198,13 @@ export function createWorkflows({
       if (!chosen) throw new Error('Workflow not found.');
       return {
         ...normalize(chosen),
-        organizationId: chosen.organizationId,
+        // Older published definitions omit owner/version fields. Interpret
+        // them at selection time so fresh runtimes preserve the personal v1
+        // pin without rewriting the immutable stored definition.
+        organizationId: chosen.organizationId ?? 'personal',
         ...(chosen.teamId ? { teamId: chosen.teamId } : {}),
         ...(chosen.projectId ? { projectId: chosen.projectId } : {}),
-        version: chosen.version,
+        version: chosen.version ?? 1,
       };
     },
     command(command, { validateClient, principal }) {
