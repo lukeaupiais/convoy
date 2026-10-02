@@ -446,7 +446,10 @@ export function safeNode(raw: unknown, index: number): GraphNode {
         ? (value.submissionRequirements as WorkflowStep['submissionRequirements'])
         : undefined,
     summaryHeadings: type === 'agent' ? (value.summaryHeadings as string[] | undefined) : undefined,
-    model: type === 'agent' && value.model ? String(value.model) : undefined,
+    model:
+      (type === 'agent' || Boolean(value.activity)) && value.model
+        ? String(value.model)
+        : undefined,
     condition:
       type === 'branch'
         ? {

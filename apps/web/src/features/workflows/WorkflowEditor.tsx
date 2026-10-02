@@ -1597,6 +1597,7 @@ function NodeInspector({
           node={node}
           workflow={workflow}
           activities={state.workflowActivities ?? []}
+          models={state.models}
           activityJsonDrafts={activityJsonDrafts}
           activityJsonErrors={activityJsonErrors}
           onActivityJsonEdit={onActivityJsonEdit}
@@ -1636,6 +1637,7 @@ function ActionFields({
   node,
   workflow,
   activities,
+  models,
   activityJsonDrafts,
   activityJsonErrors,
   onActivityJsonEdit,
@@ -1648,6 +1650,7 @@ function ActionFields({
   node: GraphNode;
   workflow: GraphWorkflow;
   activities: NonNullable<RuntimeState['workflowActivities']>;
+  models: RuntimeState['models'];
   activityJsonDrafts: Record<string, string>;
   activityJsonErrors: Record<string, string>;
   onActivityJsonEdit: (key: string, text: string, error?: string) => void;
@@ -1688,6 +1691,14 @@ function ActionFields({
         </select>
       </label>
       {activityPinStale && <p role="status">Pinned activity metadata changed. Select another revision before publishing.</p>}
+      {activity && !activityPinStale && activity.resources.location === 'agent' && <label>
+        Model
+        <select value={node.model ?? ''} onChange={event => onPatch(node.id, { model: event.target.value || undefined })}>
+          <option value="">Session default</option>
+          {node.model && !models.some(model => model.id === node.model) && <option value={node.model} disabled>{node.model} · unavailable</option>}
+          {models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}
+        </select>
+      </label>}
       {activity && !activityPinStale && <RegisteredActivityFields node={node} workflow={workflow} descriptor={activity} activities={activities}
         activityJsonDrafts={activityJsonDrafts} activityJsonErrors={activityJsonErrors}
         onActivityJsonEdit={onActivityJsonEdit} onClearActivityJsonEdit={onClearActivityJsonEdit} onPatch={onPatch} />}

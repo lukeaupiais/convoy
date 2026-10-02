@@ -1,5 +1,27 @@
 import type { Session, WorkflowActivityDescriptor, WorkflowEdge, WorkflowStep } from '../../shared/api/runtime';
 
+export type WorkflowApprovalControlState = {
+  gateKey: string;
+  canPrepare: boolean;
+  canShow: boolean;
+  controlKey?: string;
+  contextKey?: string;
+};
+
+/** A first explicit claim may make control visible while preparation is in flight. */
+export function approvalControlInvalidated(
+  previous: WorkflowApprovalControlState,
+  current: WorkflowApprovalControlState,
+) {
+  return (
+    previous.gateKey !== current.gateKey ||
+    previous.contextKey !== current.contextKey ||
+    (previous.canPrepare && !current.canPrepare) ||
+    (previous.canShow && !current.canShow) ||
+    (previous.canShow && current.canShow && previous.controlKey !== current.controlKey)
+  );
+}
+
 export function requiredGateActivityTarget(session: Session, activities: WorkflowActivityDescriptor[] = []) {
   const flow = session.flow;
   if (!flow || flow.status !== 'waiting_gate') return undefined;

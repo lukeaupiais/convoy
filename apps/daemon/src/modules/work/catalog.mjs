@@ -48,6 +48,137 @@ export function createCatalog({ state, save, execution, externalTickets, context
       workflowInstance: command.workflowInstance, idempotencyKey: command.idempotencyKey,
       commandDigest: commandDigest(command), result: structuredClone(result), at: new Date().toISOString() };
   }
+  const workflowMutationReceiptFor = command => {
+    const key = workflowMutationKey(command);
+    const receipt = key && state.workflowMutationReceipts[key];
+    return receipt && receipt.commandDigest === commandDigest(command) ? structuredClone(receipt) : null;
+  };
+  const replyEvidence = value => value && Object.fromEntries([
+    'id', 'ticketId', 'connectionId', 'body', 'status', 'deliveryStatus', 'remoteId',
+    'workflowRunId', 'workflowInstance', 'createdAt', 'message',
+  ].filter(key => value[key] !== undefined).map(key => [key, structuredClone(value[key])]));
+  const statusEvidence = value => value && Object.fromEntries([
+    'id', 'ticketId', 'connectionId', 'status', 'evidenceReplyRequestId', 'remoteVersion',
+    'state', 'resultRemoteVersion', 'message',
+  ].filter(key => value[key] !== undefined).map(key => [key, structuredClone(value[key])]));
+  const ticketEvidence = value => value && ({
+    id: value.id, projectId: value.projectId, title: value.title, status: value.status, revision: value.revision,
+    ...(value.externalPublish ? { externalPublish: Object.fromEntries(['connectionId', 'state', 'message']
+      .filter(key => value.externalPublish[key] !== undefined).map(key => [key, value.externalPublish[key]])) } : {}),
+    ...(value.externalLinks ? { externalLinks: value.externalLinks.map(link => Object.fromEntries([
+      'connectionId', 'remoteId', 'syncState', 'fieldOwnership', 'remoteTitle', 'remoteDescription',
+    ].filter(key => link[key] !== undefined).map(key => [key, structuredClone(link[key])]))) } : {}),
+  });
+  function exactWorkflowReply(command) {
+    const value = state.ticketReplies.find(reply => reply.id === command?.requestId);
+    if (!value || value.ticketId !== command.ticketId || value.connectionId !== command.connectionId ||
+        value.body !== command.body || value.workflowRunId !== command.workflowRunId ||
+        value.workflowInstance !== command.workflowInstance) return null;
+    return value;
+  }
+  function workflowActivityEvidence(command, projectId) {
+    if (!command || typeof command !== 'object') return null;
+    if (command.action === 'workflowReplyEvidence') {
+      const value = state.ticketReplies.find(reply => reply.id === command.requestId &&
+        reply.ticketId === command.ticketId && reply.connectionId === command.connectionId &&
+        ticket(reply.ticketId)?.projectId === projectId);
+      return { outcome: !value ? 'unresolved' : ['queued', 'not-posted'].includes(value.status) ? 'resolved' : 'blocked',
+        reply: replyEvidence(value) };
+    }
+    if (command.action === 'postExternalTicketReply') {
+      const value = ticket(command.ticketId)?.projectId === projectId ? exactWorkflowReply(command) : null;
+      const outcome = !value ? 'absent' : value.status === 'not-posted' ? 'not_applied' :
+        value.status === 'queued' ? 'posted' : 'unknown';
+      return { outcome, reply: replyEvidence(value) };
+    }
+    if (command.action === 'setExternalTicketStatus') {
+      const value = state.ticketStatusChanges.find(change => change.id === command.requestId &&
+        change.ticketId === command.ticketId && change.connectionId === command.connectionId &&
+        change.status === command.status && change.evidenceReplyRequestId === command.evidenceReplyRequestId &&
+        ticket(change.ticketId)?.projectId === projectId);
+      const outcome = value?.state === 'applied' ? 'applied' : value?.state === 'rejected' ? 'rejected' :
+        value?.state === 'outcome-unknown' ? 'unknown' : value?.state === 'pending' ? 'pending' : 'absent';
+      return { outcome, statusChange: statusEvidence(value) };
+    }
+    if (command.action === 'createTicket') {
+      if (command.projectId !== projectId) return { result: null, ticket: null };
+      const receipt = workflowMutationReceiptFor(command);
+      const ticketId = state.ticketRequests[command.requestId];
+      const value = ticketId === undefined ? null : ticket(ticketId);
+      const matchesRequest = value && value.projectId === command.projectId && value.title === command.title &&
+        (command.description === undefined || value.description === command.description);
+      const original = receipt?.result && receipt.result.projectId === projectId ? receipt.result : null;
+      const target = original?.externalLinks?.some(link => link.connectionId === command.destination);
+      const legacyTarget = matchesRequest && value.externalLinks?.some(link => link.connectionId === command.destination);
+      const externalOutcome = original
+        ? (!command.destination || command.destination === 'convoy' ? 'confirmed' :
+          original.externalPublish?.state === 'outcome-unknown' ? 'unknown' : target ? 'confirmed' : 'unknown')
+        : !matchesRequest ? 'absent' : !command.destination || command.destination === 'convoy' ? 'confirmed' :
+          value.externalPublish?.state === 'outcome-unknown' ? 'unknown' : legacyTarget ? 'confirmed' : 'pending';
+      return { result: original ? structuredClone(original) : null, hasReceipt: Boolean(original),
+        ticket: matchesRequest ? ticketEvidence(value) : null, externalOutcome };
+    }
+    if (command.action === 'createRelatedTicket') {
+      const receipt = workflowMutationReceiptFor(command);
+      const ticketId = state.ticketRequests[command.requestId];
+      const current = ticketId === undefined ? null : ticket(ticketId);
+      const result = receipt?.result ?? current;
+      const relation = result && state.ticketRelations.find(value => value.sourceTicketId === command.sourceTicketId &&
+        value.targetTicketId === result.id && value.kind === command.kind &&
+        ticket(value.sourceTicketId)?.projectId === projectId && ticket(value.targetTicketId)?.projectId === projectId);
+      if (ticket(command.sourceTicketId)?.projectId !== projectId) return { result: null, relation: null };
+      return { result: result ? structuredClone(result) : null, hasReceipt: Boolean(receipt?.result),
+        relationOutcome: relation ? 'applied' : 'unknown' };
+    }
+    if (command.action === 'updateTicket' || command.action === 'setBoardPlacement') {
+      const receipt = workflowMutationReceiptFor(command);
+      const result = receipt?.result;
+      const current = result?.id === undefined ? null : ticket(result.id);
+      if (current?.projectId !== projectId) return { result: null, externalSyncConfirmed: false };
+      let externalSyncConfirmed = false;
+      if (command.action === 'updateTicket' && result?.externalLinks?.some(link => link.syncState === 'error')) {
+        const failedLink = result.externalLinks.find(link => link.syncState === 'error');
+        const currentLink = current?.externalLinks?.find(link => link.connectionId === failedLink.connectionId && link.remoteId === failedLink.remoteId);
+        externalSyncConfirmed = Boolean(current && current.title === result.title && current.description === result.description &&
+          currentLink?.syncState === 'linked' &&
+          (currentLink.fieldOwnership?.title !== 'convoy' || currentLink.remoteTitle === result.title) &&
+          (currentLink.fieldOwnership?.description !== 'convoy' || currentLink.remoteDescription === result.description));
+      }
+      return { result: result ? structuredClone(result) : null,
+        externalSyncOutcome: !result?.externalLinks?.some(link => link.syncState === 'error') ? 'not-required' :
+          externalSyncConfirmed ? 'confirmed' : 'pending' };
+    }
+    return null;
+  }
+  function latestDeliveredWorkflowReply({ ticketId, connectionId, workflowRunId, projectId }) {
+    if (ticket(ticketId)?.projectId !== projectId) return null;
+    const value = state.ticketReplies.filter(reply => reply.ticketId === ticketId && reply.connectionId === connectionId &&
+      reply.workflowRunId === workflowRunId && reply.status === 'queued')
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    return value ? { requestId: value.id, ticketId: value.ticketId, connectionId: value.connectionId,
+      workflowRunId: value.workflowRunId, deliveryStatus: value.deliveryStatus } : null;
+  }
+  function workflowReplyConfirmation(command, projectId) {
+    if (ticket(command.ticketId)?.projectId !== projectId) return null;
+    const reply = exactWorkflowReply(command);
+    if (!reply) return { state: 'unknown' };
+    if (reply.status === 'not-posted') return { state: 'not_applied' };
+    if (reply.status !== 'queued') return { state: 'waiting', effectApplied: false,
+      output: { awaitingDelivery: true, replyRequestId: command.requestId,
+        deliveryStatus: reply.deliveryStatus ?? 'pending', message: 'Reply delivery is not confirmed by Work.' } };
+    const thread = state.ticketThreads.find(value => value.ticketId === command.ticketId && value.connectionId === command.connectionId);
+    const message = thread?.messages?.find(value => value.remoteId === reply.remoteId && value.body === command.body && value.direction === 'outbound');
+    if (message?.deliveryStatus === 'delivered') return { state: 'completed', output: structuredClone(reply) };
+    return { state: 'waiting', effectApplied: Boolean(message), output: { awaitingDelivery: true,
+      replyRequestId: command.requestId, deliveryStatus: reply.deliveryStatus ?? message?.deliveryStatus ?? 'pending',
+      message: 'Approved reply sent; delivery is not confirmed. Continue to check delivery without resending.' },
+      ...(message ? { evidence: { matchingOutbound: true, remoteId: reply.remoteId } } : {}) };
+  }
+  function workflowTargetTicket(ticketId, projectId) {
+    const value = ticket(ticketId);
+    return value && (projectId === undefined || value.projectId === projectId)
+      ? { id: value.id, projectId: value.projectId, revision: value.revision } : null;
+  }
   const relationKind = value => {
     const kind = text(value ?? 'related', 'Relation kind', 80);
     if (!/^[\w-]+$/.test(kind)) throw new Error('Relation kind must use letters, numbers, hyphens or underscores.');
@@ -389,7 +520,12 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (c.action === 'createTicket') {
         const cached = existingWorkflowMutation(c); if (cached) return cached;
         const request = text(c.requestId, 'Request ID', 100); if (!/^[\w-]+$/.test(request)) throw new Error('Invalid request ID.');
-        if (Object.hasOwn(state.ticketRequests, request)) return ticket(state.ticketRequests[request]);
+        if (Object.hasOwn(state.ticketRequests, request)) {
+          const existing = ticket(state.ticketRequests[request]);
+          if (!existing || existing.projectId !== c.projectId)
+            throw new Error('Request ID belongs to a ticket outside this project.');
+          return existing;
+        }
         const owner = project(c.projectId); const values = fields(c);
         const board = c.boardId ? boards.board(c.boardId) : null;
         if (board && !board.projectIds.includes(c.projectId)) throw new Error('Project is not available on this board.');
@@ -804,11 +940,12 @@ export function createCatalog({ state, save, execution, externalTickets, context
       throw new Error('Unknown catalog command.');
     },
     workflowMutationReceipt(command) {
-      const key = workflowMutationKey(command);
-      const receipt = key && state.workflowMutationReceipts[key];
-      if (!receipt || receipt.commandDigest !== commandDigest(command)) return null;
-      return structuredClone(receipt);
+      return workflowMutationReceiptFor(command);
     },
+    workflowActivityEvidence,
+    latestDeliveredWorkflowReply,
+    workflowReplyConfirmation,
+    workflowTargetTicket,
     snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketStatusChanges: state.ticketStatusChanges, ticketRelations: state.ticketRelations, ...boards.snapshot() }; },
   };
 }

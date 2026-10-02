@@ -281,6 +281,9 @@ export function SessionControls({
           actions={{
             requiresActivityReservation: !!approvalTargetNodeId,
             canPrepareActivityApproval: owned && runtimeAvailable,
+            canShowPreparedActivityApproval: owned && runtimeAvailable,
+            approvalControlKey: owned ? s.lease?.id : undefined,
+            approvalContextKey: JSON.stringify([state.currentUser?.id, state.activeContext?.id, state.activeContext?.projectId, state.activeContext?.principal]),
             prepareActivityApproval: approvalTargetNodeId ? async () => (await command('prepareWorkflowActivity', {
               workflowRunId: s.flow!.id, gateInstance: s.flow!.instance, targetNodeId: approvalTargetNodeId,
             })).result : undefined,

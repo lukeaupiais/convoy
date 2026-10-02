@@ -12,9 +12,13 @@ export function migrateWorkflowEffectState(state) {
  * written before mutation so restarts fail closed instead of replaying an
  * uncertain create/update/move.
  */
-export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, workCommand, workReceipt, inspectChanges, makeSession, pinInstructions, normalizeWorkflow, event, save, now, getEngine, requireText, automations, authorizeStart, activityCatalog, injectedActivities = [], getWorkflowOwner = () => null, authorizeActivity = async () => {} }) {
+export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, workCommand, workEvidence,
+  latestDeliveredReply, workReplyConfirmation, inspectChanges, makeSession, pinInstructions, normalizeWorkflow,
+  event, save, now, getEngine, requireText, automations, authorizeStart, activityCatalog, injectedActivities = [],
+  getWorkflowOwner = () => null, authorizeActivity = async () => {} }) {
   migrateWorkflowEffectState(state);
-  const activityImplementations = createWorkflowActivityImplementationMap({ workCommand, workReceipt, catalog, state, inspectChanges, injected: injectedActivities });
+  const activityImplementations = createWorkflowActivityImplementationMap({ workCommand, workEvidence,
+    latestDeliveredReply, workReplyConfirmation, catalog, state, inspectChanges, injected: injectedActivities });
   const effectRecord = key => getWorkflowOwner()?.effectRecord(key) ?? null;
   const saveEffect = (key, value) => getWorkflowOwner()?.saveEffectRecord(key, value);
   const deleteEffect = key => getWorkflowOwner()?.deleteEffectRecord(key);

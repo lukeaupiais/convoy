@@ -15,6 +15,12 @@ const sessionCommands = [
   'requestChanges',
   'reviseSubmission',
 ];
+const activityIntentSchema = { type: 'object', properties: {}, additionalProperties: true };
+function checkedActivityIntent(value) {
+  const intent = validateActivityValue(value ?? {}, activityIntentSchema);
+  if (Buffer.byteLength(JSON.stringify(intent)) > 16_000) throw new Error('Activity intent is too large.');
+  return intent;
+}
 
 export function migrateWorkflowState(state, { defaultWorkflow, normalize }) {
   state.workflowRuns ??= {};
@@ -393,16 +399,22 @@ export function createWorkflows({
         throw new Error('Workflow has too many outstanding activity reservations.');
       const targetInstance = randomUUID();
       const prepared = await prepareActivityIntent(run, target, targetInstance, { gateNodeId, gateInstance });
+      const intent = checkedActivityIntent(prepared.intent);
+      const intentDigest = activityDigest(intent);
+      if (prepared.intentDigest !== intentDigest) throw new Error('Prepared activity intent digest is invalid.');
+      const preview = validateActivityValue(prepared.preview, activityIntentSchema);
+      if (Buffer.byteLength(JSON.stringify(preview)) > 24_000 || activityDigest(preview.intent) !== intentDigest)
+        throw new Error('Prepared activity approval material is invalid or too large.');
       if (activityDigest(prepared.ref) !== activityDigest(target.activity)) throw new Error('Prepared activity revision changed.');
       const reservation = {
         id: randomUUID(), runId, gateNodeId, gateInstance, targetNodeId, targetInstance,
         activityRef: structuredClone(prepared.ref), inputDigest: prepared.inputDigest,
         activityDescriptorDigest: target.activityDescriptorDigest ?? activityDigest(descriptor),
-        intentDigest: prepared.intentDigest, idempotencyKey: prepared.idempotencyKey,
-        intent: structuredClone(prepared.intent), preview: structuredClone(prepared.preview),
+        intentDigest, idempotencyKey: prepared.idempotencyKey,
+        intent, preview,
         digest: activityDigest({ runId, gateNodeId, gateInstance, targetNodeId, targetInstance,
           activityRef: prepared.ref, activityDescriptorDigest: target.activityDescriptorDigest ?? activityDigest(descriptor),
-          inputDigest: prepared.inputDigest, intentDigest: prepared.intentDigest }),
+          inputDigest: prepared.inputDigest, intentDigest }),
         createdAt: new Date().toISOString(),
       };
       run.activityReservations.push(reservation);
@@ -489,8 +501,7 @@ export function createWorkflows({
           run.attempt.activityRef && run.attempt.activityDescriptorDigest && run.attempt.activityDescriptorDigest !== descriptorDigest)
         throw new Error('Pinned activity metadata changed; execution is blocked.');
       const checkedInput = legacy ? structuredClone(input) : validateActivityValue(input, descriptor.inputSchema);
-      if (Buffer.byteLength(JSON.stringify(intent ?? null)) > 16_000) throw new Error('Activity intent is too large.');
-      const intentValue = structuredClone(intent ?? {});
+      const intentValue = checkedActivityIntent(intent);
       const inputDigest = activityDigest(checkedInput);
       const intentDigest = activityDigest(intentValue);
       const effectKey = `${run.id}:${instance}:${nodeId}`;

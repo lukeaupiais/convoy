@@ -1,7 +1,7 @@
 import { submissionContract, validateSubmissionContract } from './submission-contract.mjs';
 import { normalizeRuntimeSelection } from '../execution/index.mjs';
 import { normalizeSubmissionRequirements, validateSubmissionRequirements } from './submission-requirements.mjs';
-import { validateActivitySchema } from './activity-data.mjs';
+import { activityDigest, validateActivitySchema } from './activity-data.mjs';
 import { randomUUID } from 'node:crypto';
 
 const required = (value, label, limit = 6000) => {
@@ -470,7 +470,21 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     },
     async pump() {
       if (pumping) { pumpAgain = true; return; } pumping = true;
-      try { do { pumpAgain = false; const contexts = [...Object.values(state.sessions), ...Object.values(state.workflowRuns ?? {}).filter(run => run.independentRun && !run.sessionId)]; for (let s of contexts) { if (s.flow?.status !== 'ready' || busy(s)) continue; let node = current(s); try { if (node.kind === 'agent') { if (s.independentRun) s = await attachAgent(s); resolveSession(s); node = current(s); } s.flow.status = 'running'; s.status = 'running'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance) { if (['ready', 'running'].includes(owner.attempt.status)) { owner.attempt.status = 'running'; owner.attempt.startedAt = new Date().toISOString(); } } await save(); if (s.flow.status !== 'running') continue; if (!launch(s, node, s.flow.instance)) { s.flow.status = 'ready'; s.status = 'queued'; if (owner?.attempt && owner.attempt.instance === s.flow.instance && owner.attempt.status === 'running') owner.attempt.status = 'ready'; await save(); } } catch (e) { s.flow.status = 'failed'; s.status = 'failed'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance && !['uncertain', 'completed', 'cancelled'].includes(owner.attempt.status)) owner.attempt.status = 'failed'; event(s, 'workflow_failed', { message: e.message }); await save(); } } } while (pumpAgain); } finally { pumping = false; }
+      try { do { pumpAgain = false; const contexts = [...Object.values(state.sessions), ...Object.values(state.workflowRuns ?? {}).filter(run => run.independentRun && !run.sessionId)]; for (let s of contexts) { if (s.flow?.status !== 'ready' || busy(s)) continue; let node = current(s); try {
+        const owner = runOwner(s);
+        const workflowOwner = getWorkflowOwner();
+        const activityRef = node.activity ? workflowOwner?.getActivityRef(node) : null;
+        const descriptor = activityRef ? workflowOwner?.activityDescriptor(activityRef) : null;
+        if (activityRef && (!descriptor || node.activityDescriptorDigest && node.activityDescriptorDigest !== activityDigest(descriptor)))
+          throw new Error('Pinned activity metadata is unavailable or changed; resource acquisition is blocked.');
+        const needsProviderSession = node.kind === 'agent' || Boolean(s.independentRun && descriptor?.resources.location === 'agent');
+        if (needsProviderSession) {
+          if (s.independentRun) s = await attachAgent(s);
+          if (node.kind === 'agent') resolveSession(s);
+          node = current(s);
+        }
+        s.flow.status = 'running'; s.status = 'running'; const activeOwner = runOwner(s); if (activeOwner?.attempt && activeOwner.attempt.instance === s.flow.instance) { if (['ready', 'running'].includes(activeOwner.attempt.status)) { activeOwner.attempt.status = 'running'; activeOwner.attempt.startedAt = new Date().toISOString(); } } await save(); if (s.flow.status !== 'running') continue; if (!launch(s, node, s.flow.instance)) { s.flow.status = 'ready'; s.status = 'queued'; if (activeOwner?.attempt && activeOwner.attempt.instance === s.flow.instance && activeOwner.attempt.status === 'running') activeOwner.attempt.status = 'ready'; await save(); }
+      } catch (e) { s.flow.status = 'failed'; s.status = 'failed'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance && !['uncertain', 'completed', 'cancelled'].includes(owner.attempt.status)) owner.attempt.status = 'failed'; event(s, 'workflow_failed', { message: e.message }); await save(); } } } while (pumpAgain); } finally { pumping = false; }
     },
     async submit(s, instance, args) {
       requireInstance(s, instance); const node = current(s); if (s.flow.status !== 'running' || node.kind !== 'agent') throw new Error('This agent cannot submit the current step.'); const summary = required(args.summary, 'Completion summary', 4000);

@@ -63,6 +63,68 @@ test('workflow mutation receipts bind update and placement identity and deduplic
   assert.ok(catalog.workflowMutationReceipt(placement));
 });
 
+test('Work workflow evidence is project scoped, exact to its command, and retains the original mutation receipt', async () => {
+  const { catalog, state } = fixture();
+  const command = { action: 'createTicket', requestId: 'workflow-create-1', projectId: 'alpha',
+    title: 'Prepared title', description: 'Prepared description', workflowRunId: 'run-a',
+    workflowInstance: 'instance-a', idempotencyKey: 'run-a:instance-a' };
+  const created = await catalog.command(command);
+  const evidence = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(evidence.result.id, created.id);
+  assert.equal(evidence.result.title, 'Prepared title');
+  assert.equal(evidence.ticket.projectId, 'alpha');
+  assert.equal(catalog.workflowActivityEvidence(command, 'beta').ticket, null);
+  assert.equal(catalog.workflowActivityEvidence({ ...command, title: 'Different request' }, 'alpha').result, null);
+
+  const ticket = state.tickets.find(value => value.id === created.id);
+  ticket.title = 'Later mutable title';
+  ticket.revision += 1;
+  const afterLaterEdit = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(afterLaterEdit.result.title, 'Prepared title', 'the exact original Work receipt remains immutable');
+  assert.equal(afterLaterEdit.ticket, null, 'a later ticket state is not substituted for the prepared result');
+});
+
+test('related-ticket evidence distinguishes an immutable receipt from a mutable request projection', async () => {
+  const { catalog, state } = fixture();
+  const command = { action: 'createRelatedTicket', sourceTicketId: 1, sourceRevision: 1,
+    requestId: 'workflow-related-1', kind: 'related', title: 'Original related title',
+    workflowRunId: 'run-a', workflowInstance: 'instance-a', idempotencyKey: 'run-a:instance-a' };
+  const created = await catalog.command(command);
+  const key = 'run-a:instance-a:createRelatedTicket';
+  const beforeEdit = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(beforeEdit.hasReceipt, true);
+  assert.equal(beforeEdit.result.title, created.title);
+  const target = state.tickets.find(value => value.id === created.id);
+  target.title = 'Later title';
+  target.revision += 1;
+  assert.equal(catalog.workflowActivityEvidence(command, 'alpha').result.title, 'Original related title');
+  delete state.workflowMutationReceipts[key];
+  const noReceipt = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(noReceipt.hasReceipt, false);
+  assert.equal(noReceipt.result.title, 'Later title', 'legacy projection may be available but is not an exact typed receipt');
+});
+
+test('Work reply evidence checks exact identity and scopes latest delivered selection to its project and run', () => {
+  const { catalog, state } = fixture();
+  state.ticketReplies = [
+    { id: 'reply-alpha', ticketId: 1, connectionId: 'source-a', body: 'Exact body', status: 'queued', deliveryStatus: 'delivered',
+      workflowRunId: 'run-a', workflowInstance: 'instance-a', remoteId: 'remote-a', createdAt: '2026-09-01T00:00:00Z' },
+    { id: 'reply-beta', ticketId: 2, connectionId: 'source-a', body: 'Foreign body', status: 'queued', deliveryStatus: 'delivered',
+      workflowRunId: 'run-a', workflowInstance: 'instance-a', remoteId: 'remote-b', createdAt: '2026-09-02T00:00:00Z' },
+  ];
+  state.ticketThreads = [{ id: 'source-a:1', ticketId: 1, connectionId: 'source-a', messages: [
+    { remoteId: 'remote-a', body: 'Exact body', direction: 'outbound', deliveryStatus: 'delivered' },
+  ] }];
+  const command = { action: 'postExternalTicketReply', requestId: 'reply-alpha', ticketId: 1,
+    connectionId: 'source-a', body: 'Exact body', workflowRunId: 'run-a', workflowInstance: 'instance-a' };
+  assert.equal(catalog.workflowActivityEvidence(command, 'alpha').reply.status, 'queued');
+  assert.equal(catalog.workflowActivityEvidence({ ...command, body: 'Spoofed body' }, 'alpha').reply, null);
+  assert.equal(catalog.workflowReplyConfirmation(command, 'alpha').state, 'completed');
+  assert.equal(catalog.workflowReplyConfirmation(command, 'beta'), null);
+  assert.equal(catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' }).requestId, 'reply-alpha');
+  assert.equal(catalog.latestDeliveredWorkflowReply({ ticketId: 2, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' }), null);
+});
+
 test('boards can be created from editable templates and show multiple projects', async () => {
   const { catalog } = fixture();
   const template = await catalog.command({ action: 'saveBoardTemplate', name: 'Research', description: 'Editable', columns: [{ id: 'idea', name: 'Ideas', value: 'idea' }, { id: 'done', name: 'Done', value: 'done' }], grouping: { mode: 'field', field: 'custom.stage' } });

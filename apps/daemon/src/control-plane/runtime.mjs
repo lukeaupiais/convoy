@@ -1053,7 +1053,7 @@ export async function createRuntime({
       const principal = owner ? owner.principal : runContext?.executionPrincipal ?? localPrincipal;
       const hasRunIdentity = Boolean(owner || runContext?.workflowRunId || runContext?.independentRun);
       const projectId = owner?.projectId ?? runContext?.projectId ??
-        (runContext?.activeTicketId != null ? catalog.ticket(runContext.activeTicketId)?.projectId : null) ??
+        (runContext?.activeTicketId != null ? catalog.workflowTargetTicket(runContext.activeTicketId)?.projectId : null) ??
         (!hasRunIdentity ? command.projectId : null);
       if (!projectId) throw new Error('Workflow run has no authorized project.');
       if (command.projectId !== undefined && command.projectId !== projectId)
@@ -1061,22 +1061,19 @@ export async function createRuntime({
       await identity.assertPrincipalActive(principal);
       await requireProjectPermission(projectId, 'project.write', principal);
       for (const id of [command.ticketId, command.taskId, command.sourceTicketId].filter((value) => value !== undefined)) {
-        const ticket = catalog.ticket(id);
+        const ticket = catalog.workflowTargetTicket(id, projectId);
         if (!ticket || ticket.projectId !== projectId) throw new Error('Workflow action ticket is not available in the run project.');
       }
       if (command.boardId && !catalog.boards?.board(command.boardId)?.projectIds.includes(projectId))
         throw new Error('Workflow action board is not available in the run project.');
-      if (command.action === 'createTicket' && command.requestId && Object.hasOwn(state.ticketRequests ?? {}, command.requestId)) {
-        const existing = catalog.ticket(state.ticketRequests[command.requestId]);
-        if (!existing || existing.projectId !== projectId)
-          throw new Error('Workflow action request is not available in the run project.');
-      }
       const governedCommand = command.action === 'createTicket' && command.projectId === undefined
         ? { ...command, projectId }
         : command;
       return work.command(governedCommand, { principal, projectId });
     },
-    workReceipt: command => work.catalog.workflowMutationReceipt(command),
+    workEvidence: (command, projectId) => work.catalog.workflowActivityEvidence(command, projectId),
+    latestDeliveredReply: query => work.catalog.latestDeliveredWorkflowReply(query),
+    workReplyConfirmation: (command, projectId) => work.catalog.workflowReplyConfirmation(command, projectId),
     makeSession,
     pinInstructions,
     normalizeWorkflow,
@@ -1119,7 +1116,12 @@ export async function createRuntime({
           throw error;
         }
         if (session && needsAgent) {
-          await authorizeSessionModel(session, session.model);
+          // A registered activity's pinned model is an active resource, even when
+          // this run already has a provider session from an earlier node. Check
+          // that exact choice on every dispatch rather than inheriting whichever
+          // model happened to be on the linked session.
+          const activeModel = node?.model ?? run.flow?.model ?? session.model;
+          await authorizeSessionModel(session, activeModel);
           const nodeCapabilities = new Set(capabilities.modelTools(session, node).map(tool => tool.name));
           if ((resources.tools ?? []).some(name => !nodeCapabilities.has(name)))
             throw new Error('The pinned activity requires tools outside this node’s current Library capability profile.');
@@ -1176,6 +1178,9 @@ export async function createRuntime({
       const session = state.sessions[created.sessionId];
       ensureAgentSessions(session);
       workflows.attachAgentSession(run, session);
+      const project = state.projects.find(value => value.id === run.projectId);
+      session.placement ??= structuredClone(project?.placement ?? { mode: 'none' });
+      session.executionProfile ??= project?.executionProfile ?? 'inherit';
       const node = (run.workflow.nodes ?? run.workflow.steps).find((candidate) => candidate.id === run.flow.nodeId);
       if (node.model) session.model = node.model;
       if (run.activeTicketId) conversations.bindForWorkflow(session, run.activeTicketId);
@@ -1365,6 +1370,8 @@ export async function createRuntime({
     jobs.set(s.id, job);
     s.pendingTurnInput = input;
     let blocked = false;
+    let placementAttempted = false;
+    let verificationAttempted = false;
     job.promise = (async () => {
       try {
         const executionPrincipal = runOwner?.principal ?? s.executionPrincipal ?? localPrincipal;
@@ -1376,12 +1383,19 @@ export async function createRuntime({
         const activityNeedsRunner = activityDescriptor?.resources.location === 'runner' ||
           activityDescriptor?.resources.workspace === true;
         const runnerRequired = Boolean(step?.kind === 'check' || step?.requiresCheck || step?.artifact || activityNeedsRunner);
+        const providerOnlyActivity = step?.activity && activityDescriptor?.resources.location === 'agent' &&
+          activityDescriptor.resources.workspace !== true;
+        const acquirePlacement = !providerOnlyActivity;
         const required = [
           ...(activityDescriptor?.resources.tools ?? []),
           ...(step?.artifact ? ['read_file'] : []),
           ...(step?.kind === 'check' || step?.requiresCheck ? ['shell'] : []),
         ];
-        const result = await placement.prepare(s, required, controller.signal);
+        let result = { textOnly: true };
+        if (acquirePlacement) {
+          placementAttempted = true;
+          result = await placement.prepare(s, required, controller.signal);
+        }
         if (controller.signal.aborted) throw new Error('Stopped');
         if (runnerRequired && (result.reason || result.textOnly)) {
           if (step?.operation) throw new Error(result.reason ?? 'This legacy workflow operation requires a configured runner.');
@@ -1396,7 +1410,10 @@ export async function createRuntime({
           if (!instance) await store.save();
           return;
         }
-        await verification.prepare(s, controller.signal);
+        if (acquirePlacement) {
+          verificationAttempted = true;
+          await verification.prepare(s, controller.signal);
+        }
         delete s.queueReason;
         delete s.queuedInput;
         if (s.runnerId && !s.environmentInstructionsPinned) {
@@ -1418,7 +1435,9 @@ export async function createRuntime({
     })().finally(async () => {
       // Do not expose an idle slot until the old runner's assignment is released.
       try {
-        try { await verification.release(s); } finally { await placement.release(s); }
+        if (placementAttempted) {
+          try { if (verificationAttempted) await verification.release(s); } finally { await placement.release(s); }
+        }
       } finally {
         jobs.delete(s.id);
       }

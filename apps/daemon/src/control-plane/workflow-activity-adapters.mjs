@@ -55,7 +55,7 @@ function replyBody(context, input, node) {
   return body;
 }
 
-function workCommandFor(refId, input, identity, context, catalog, state) {
+function workCommandFor(refId, input, identity, context, catalog, latestDeliveredReply) {
   const operation = operationIds[refId];
   if (!operation) throw new Error(`No Work activity is registered for ${refId}.`);
   const legacy = context?.node?.operation ? context.node : null;
@@ -68,7 +68,7 @@ function workCommandFor(refId, input, identity, context, catalog, state) {
     command.projectId = identity.projectId;
     command.requestId ??= command.requestKey ?? `${identity.runId}-${identity.instance}`;
   } else if (operation === 'create_related_ticket') {
-    const source = catalog.ticket(command.sourceTicketId ?? context.session?.activeTicketId ?? context.run?.activeTicketId);
+    const source = catalog.workflowTargetTicket(command.sourceTicketId ?? context.session?.activeTicketId ?? context.run?.activeTicketId, identity.projectId);
     if (!source || source.projectId !== identity.projectId) throw new Error('Active ticket is unavailable.');
     command.sourceTicketId = source.id;
     command.sourceRevision = command.sourceRevision ?? source.revision;
@@ -83,12 +83,10 @@ function workCommandFor(refId, input, identity, context, catalog, state) {
     command.ticketId ??= context.session?.activeTicketId ?? context.run?.activeTicketId;
     command.requestId ??= command.requestKey ?? `${identity.runId}-${identity.instance}`;
     if (command.evidenceReply === 'latest_delivered') {
-      const candidates = (state.ticketReplies ?? []).filter(reply => reply.ticketId === command.ticketId &&
-        reply.connectionId === command.connectionId && reply.status === 'queued' &&
-        reply.workflowRunId === identity.runId)
-        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-      if (!candidates.length) throw new Error('No delivered reply from this workflow run was found.');
-      command.evidenceReplyRequestId = candidates[0].id;
+      const evidence = latestDeliveredReply?.({ ticketId: command.ticketId,
+        connectionId: command.connectionId, workflowRunId: identity.runId, projectId: identity.projectId });
+      if (!evidence?.requestId) throw new Error('No delivered reply from this workflow run was found.');
+      command.evidenceReplyRequestId = evidence.requestId;
     }
     delete command.evidenceReply;
   } else if (operation === 'send_external_reply') {
@@ -97,93 +95,74 @@ function workCommandFor(refId, input, identity, context, catalog, state) {
     command.requestId = `reply-${identity.runId}-${identity.instance}`;
   }
   const ticketId = command.ticketId ?? command.taskId;
-  if (ticketId !== undefined && command.revision === undefined) command.revision = catalog.ticket(ticketId)?.revision;
-  return command;
+  if (ticketId !== undefined) {
+    const target = catalog.workflowTargetTicket(ticketId, identity.projectId);
+    if (!target || target.projectId !== identity.projectId)
+      throw new Error('Workflow action ticket is not available in the run project.');
+    if (command.revision === undefined) command.revision = target.revision;
+  }
+  return jsonValue(command);
 }
 
-async function confirmReply({ intent, context, workCommand, state }) {
+async function confirmReply({ intent, context, workCommand, workReplyConfirmation }) {
   const command = intent.command;
-  const thread = await workCommand({ action: 'syncExternalTicketThread', ticketId: command.ticketId, connectionId: command.connectionId }, context.session ?? context.run);
-  const reply = state.ticketReplies?.find(value => value.id === command.requestId && value.ticketId === command.ticketId &&
-    value.connectionId === command.connectionId && value.body === command.body && value.workflowRunId === command.workflowRunId &&
-    value.workflowInstance === command.workflowInstance);
-  const matchingOutbound = thread.messages?.some(message => message.remoteId === reply?.remoteId && message.body === command.body &&
-    message.direction === 'outbound');
-  const delivered = thread.messages?.some(message => message.remoteId === reply?.remoteId && message.body === command.body &&
-    message.direction === 'outbound' && message.deliveryStatus === 'delivered');
-  if (reply?.status !== 'queued' || !matchingOutbound || !delivered) return {
-    state: 'waiting', output: { awaitingDelivery: true, replyRequestId: command.requestId,
-      deliveryStatus: reply?.deliveryStatus ?? 'pending',
-      message: 'Approved reply sent; delivery is not confirmed. Continue to check delivery without resending.' },
-    ...(reply?.status === 'queued' && matchingOutbound ? { evidence: { matchingOutbound: true, remoteId: reply.remoteId } } : {}),
-  };
-  return { state: 'completed', output: jsonValue(reply) };
+  await workCommand({ action: 'syncExternalTicketThread', ticketId: command.ticketId, connectionId: command.connectionId }, context.session ?? context.run);
+  return workReplyConfirmation?.(command, context.run?.projectId) ?? { state: 'unknown', message: 'Work has no exact reply confirmation.' };
 }
 
-function clearedReplyBlock(context, command, state) {
+function clearedReplyBlock(context, command, workEvidence) {
   const effect = context?.owner?.effectForAttempt?.(context.run?.id, context.instance, context.node?.id);
   const requestId = effect?.blockingReplyRequestId;
   if (!requestId) return null;
-  const blocker = state.ticketReplies?.find(value => value.id === requestId && value.ticketId === command.ticketId &&
-    value.connectionId === command.connectionId);
-  if (blocker?.status === 'queued' || blocker?.status === 'not-posted')
+  const blocker = workEvidence?.({ action: 'workflowReplyEvidence', requestId, ticketId: command.ticketId,
+    connectionId: command.connectionId }, context.run?.projectId);
+  if (blocker?.outcome === 'resolved')
     return { state: 'not_applied', message: 'Work confirms the blocking reply is resolved; this workflow reply was not dispatched.' };
-  return { state: 'waiting', message: 'The exact blocking reply remains unresolved in Work.' };
+  return { state: 'waiting', message: blocker?.outcome === 'blocked'
+    ? 'The exact blocking reply remains unresolved in Work.' : 'Work has no exact blocker confirmation.' };
 }
 
-async function confirmWorkMutation({ refId, intent, state, catalog, workReceipt, context }) {
+async function confirmWorkMutation({ refId, intent, workEvidence, context }) {
   const command = intent.command;
   if (refId === 'work.create-ticket') {
-    const exactReceipt = await workReceipt?.(command);
+    const evidence = workEvidence?.(command, context.run?.projectId);
     // New typed activities require the exact owner receipt. The state projection
     // fallback exists only for already-published legacy operations.
-    if (!exactReceipt?.result && !context?.node?.operation) return { state: 'unknown' };
-    const ticketId = state.ticketRequests?.[command.requestId];
-    const ticket = ticketId === undefined ? null : catalog.ticket(ticketId);
-    if (!ticket || ticket.projectId !== command.projectId) return { state: 'unknown' };
-    if (ticket.externalPublish?.state === 'outcome-unknown') return { state: 'waiting', output: {
+    if ((!evidence?.hasReceipt && !context?.node?.operation) || (!evidence?.result && !evidence?.ticket)) return { state: 'unknown' };
+    const ticket = evidence.result ?? evidence.ticket;
+    if (evidence.externalOutcome === 'unknown') return { state: 'waiting', output: {
       id: ticket.id, projectId: ticket.projectId, revision: ticket.revision,
-      externalPublish: { connectionId: ticket.externalPublish.connectionId, state: ticket.externalPublish.state },
+      ...(ticket.externalPublish ? { externalPublish: { connectionId: ticket.externalPublish.connectionId, state: ticket.externalPublish.state } } : {}),
       message: 'External creation outcome is unknown. Reconcile it in Work before continuing.',
     } };
-    if (command.destination && command.destination !== 'convoy' &&
-        !ticket.externalLinks?.some(link => link.connectionId === command.destination))
+    if (evidence.externalOutcome === 'pending')
       return { state: 'waiting', output: { id: ticket.id, projectId: ticket.projectId, revision: ticket.revision,
         message: 'The local ticket exists, but the requested external creation is not confirmed.' } };
-    return { state: 'completed', output: receipt(exactReceipt?.result ?? ticket) };
+    return { state: 'completed', output: receipt(ticket) };
   }
   if (refId === 'work.create-related-ticket') {
-    const exactReceipt = await workReceipt?.(command);
-    if (!exactReceipt?.result && !context?.node?.operation) return { state: 'unknown' };
-    const result = exactReceipt?.result;
-    if (!result?.id || !state.ticketRelations?.some(value => value.sourceTicketId === command.sourceTicketId &&
-        value.targetTicketId === result.id && value.kind === command.kind)) return { state: 'unknown' };
+    const evidence = workEvidence?.(command, context.run?.projectId);
+    const result = evidence?.result;
+    if (!result?.id || (!evidence?.hasReceipt && !context?.node?.operation) || evidence?.relationOutcome !== 'applied') return { state: 'unknown' };
     return { state: 'completed', output: jsonValue(result) };
   }
   if (refId === 'work.set-external-status') {
-    const change = state.ticketStatusChanges?.find(value => value.id === command.requestId);
-    if (change?.state === 'applied') return { state: 'completed', output: jsonValue(change) };
-    if (change?.state === 'rejected') return { state: 'failed', message: 'Work recorded that the external status change was rejected.' };
-    if (change?.state === 'outcome-unknown') return { state: 'waiting', output: {
+    const evidence = workEvidence?.(command, context.run?.projectId);
+    const change = evidence?.statusChange;
+    if (evidence?.outcome === 'applied') return { state: 'completed', output: jsonValue(change) };
+    if (evidence?.outcome === 'rejected') return { state: 'failed', message: 'Work recorded that the external status change was rejected.' };
+    if (['unknown', 'pending'].includes(evidence?.outcome)) return { state: 'waiting', output: {
       ticketId: change.ticketId, status: change.state, requestId: change.id,
       message: 'External status outcome is unknown. Reconcile it in Work before continuing.',
     } };
     return { state: 'unknown' };
   }
   if (['work.update-ticket', 'work.set-board-placement'].includes(refId)) {
-    const workReceiptRow = await workReceipt?.(command);
-    if (!workReceiptRow?.result) return { state: 'unknown' };
-    const result = workReceiptRow.result;
+    const evidence = workEvidence?.(command, context.run?.projectId);
+    const result = evidence?.result;
+    if (!result) return { state: 'unknown' };
     if (refId === 'work.update-ticket' && result.externalLinks?.some(link => link.syncState === 'error')) {
-      const current = catalog.ticket(result.id);
-      const failedLink = result.externalLinks.find(link => link.syncState === 'error');
-      const currentLink = current?.externalLinks?.find(link => link.connectionId === failedLink?.connectionId &&
-        link.remoteId === failedLink?.remoteId);
-      const synced = current && current.title === result.title && current.description === result.description &&
-        currentLink?.syncState === 'linked' &&
-        (currentLink.fieldOwnership?.title !== 'convoy' || currentLink.remoteTitle === result.title) &&
-        (currentLink.fieldOwnership?.description !== 'convoy' || currentLink.remoteDescription === result.description);
-      if (!synced) return { state: 'waiting', output: receipt(result) };
+      if (evidence.externalSyncOutcome !== 'confirmed') return { state: 'waiting', output: receipt(result) };
       return { state: 'completed', output: receipt(result) };
     }
     return { state: 'completed', output: jsonValue(result) };
@@ -196,7 +175,8 @@ function receipt(ticket) {
     .filter(key => ticket?.[key] !== undefined).map(key => [key, ticket[key]]));
 }
 
-export function createBuiltinWorkflowActivityImplementations({ workCommand, workReceipt, catalog, state, inspectChanges }) {
+export function createBuiltinWorkflowActivityImplementations({ workCommand, workEvidence, latestDeliveredReply,
+  workReplyConfirmation, catalog, state, inspectChanges }) {
   const implementations = new Map();
   implementations.set('data.multiply@1', {
     async prepare(input) { return { inputDigest: JSON.stringify(input) }; },
@@ -231,7 +211,7 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
   for (const refId of Object.keys(operationIds)) {
     implementations.set(`${refId}@1`, {
       async prepare(input, identity, context) {
-        const command = workCommandFor(refId, input, identity, context, catalog, state);
+        const command = workCommandFor(refId, input, identity, context, catalog, latestDeliveredReply);
         return { command };
       },
       async dispatch(context, _input, intent, signal) {
@@ -239,27 +219,28 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
         if (refId === 'work.post-external-reply') {
           const prior = context.owner?.effectForAttempt(context.run.id, context.instance, context.node.id);
           if (prior?.blockingReplyRequestId) {
-            const blocker = state.ticketReplies?.find(value => value.id === prior.blockingReplyRequestId &&
-              value.ticketId === intent.command.ticketId && value.connectionId === intent.command.connectionId);
-            if (!['queued', 'not-posted'].includes(blocker?.status)) return { state: 'failed', message: 'The exact blocking reply must be reconciled in Work before this reply can be sent.', output: {
+            const blocker = workEvidence?.({ action: 'workflowReplyEvidence', requestId: prior.blockingReplyRequestId,
+              ticketId: intent.command.ticketId, connectionId: intent.command.connectionId }, context.run.projectId);
+            if (blocker?.outcome !== 'resolved') return { state: 'failed', message: 'The exact blocking reply must be reconciled in Work before this reply can be sent.', output: {
               awaitingDelivery: true, blockingReplyRequestId: prior.blockingReplyRequestId,
-              deliveryStatus: blocker?.status ?? prior.blockingReplyStatus ?? 'unknown',
+              deliveryStatus: blocker?.reply?.deliveryStatus ?? prior.blockingReplyStatus ?? 'unknown',
               message: 'The exact blocking reply must be reconciled in Work before this reply can be sent.',
-            }, evidence: { workPreDispatch: true, blockingReplyRequestId: prior.blockingReplyRequestId, blockingReplyStatus: blocker?.status ?? prior.blockingReplyStatus } };
+            }, evidence: { workPreDispatch: true, blockingReplyRequestId: prior.blockingReplyRequestId, blockingReplyStatus: blocker?.reply?.deliveryStatus ?? prior.blockingReplyStatus } };
           }
-          if (prior?.status === 'succeeded') return confirmReply({ intent, context, workCommand, state });
+          if (prior?.status === 'succeeded') return confirmReply({ intent, context, workCommand, workReplyConfirmation });
         }
         try {
           const result = await workCommand(intent.command, context.session ?? context.run);
-          if (refId === 'work.post-external-reply') return confirmReply({ intent, context, workCommand, state });
+          if (refId === 'work.post-external-reply') return confirmReply({ intent, context, workCommand, workReplyConfirmation });
           if (refId === 'work.create-ticket' && result?.externalPublish?.state === 'outcome-unknown')
             return { state: 'waiting', output: { id: result.id, projectId: result.projectId, revision: result.revision,
               externalPublish: { connectionId: result.externalPublish.connectionId, state: 'outcome-unknown' },
               message: 'External creation outcome is unknown. Reconcile it in Work before continuing.' } };
           if (refId === 'work.set-external-status') {
-            const receipt = state.ticketStatusChanges?.find(value => value.id === intent.command.requestId);
-            if (receipt?.state === 'outcome-unknown') return { state: 'waiting', output: { ticketId: receipt.ticketId,
-              status: receipt.state, requestId: receipt.id, message: 'External status outcome is unknown. Reconcile it in Work before continuing.' } };
+            const statusEvidence = workEvidence?.(intent.command, context.run?.projectId);
+            const receipt = statusEvidence?.statusChange;
+            if (['unknown', 'pending'].includes(statusEvidence?.outcome)) return { state: 'waiting', output: { ticketId: receipt?.ticketId,
+              status: 'outcome-unknown', requestId: receipt?.id, message: 'External status outcome is unknown. Reconcile it in Work before continuing.' } };
           }
           if (refId === 'work.update-ticket' && result?.externalLinks?.some(link => link.syncState === 'error'))
             return { state: 'waiting', output: { id: result.id, projectId: result.projectId, revision: result.revision,
@@ -276,46 +257,34 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
       async reconcile(_context, _input, intent, resolution) {
         const command = intent.command;
         if (operationIds[refId] === 'create_ticket') {
-          const exactReceipt = await workReceipt?.(command);
-          if (!exactReceipt?.result && !_context?.node?.operation)
+          const evidence = workEvidence?.(command, _context.run?.projectId);
+          if (!evidence?.hasReceipt && !_context?.node?.operation)
             return { state: 'unknown', message: 'Work has no exact creation receipt for this workflow attempt.' };
-          if (exactReceipt?.result) {
-            const result = exactReceipt.result;
-            if (result.externalPublish?.state === 'outcome-unknown') return { state: 'unknown', message: 'Work still records an unknown external creation outcome.' };
-            if (command.destination && command.destination !== 'convoy' &&
-                !result.externalLinks?.some(link => link.connectionId === command.destination))
-              return { state: 'unknown', message: 'The exact creation receipt has no confirmation for the requested destination.' };
+          if (evidence?.result) {
+            const result = evidence.result;
+            if (evidence.externalOutcome !== 'confirmed') return { state: 'unknown', message: 'Work has not confirmed the exact creation destination.' };
             return { state: 'applied', output: receipt(result), message: 'Applied reconciliation requires the existing ticket result in canonical Work.' };
           }
-          const ticketId = state.ticketRequests?.[command.requestId];
-          const ticket = ticketId === undefined ? null : catalog.ticket(ticketId);
-          if (ticket?.projectId === command.projectId && command.destination && command.destination !== 'convoy') {
-            if (ticket.externalPublish?.state === 'outcome-unknown') return { state: 'unknown', message: 'Work still records an unknown external creation outcome.' };
-            if (ticket.externalLinks?.some(link => link.connectionId === command.destination)) return { state: 'applied', output: receipt(ticket) };
-            return { state: 'unknown', message: 'The requested external creation has no canonical confirmation.' };
-          }
-          if (ticket?.projectId === command.projectId) return { state: 'applied', output: receipt(ticket), message: 'Applied reconciliation requires the existing ticket result in canonical Work.' };
+          const ticket = evidence?.ticket;
+          if (ticket && evidence.externalOutcome === 'confirmed') return { state: 'applied', output: receipt(ticket), message: 'Applied reconciliation requires the existing ticket result in canonical Work.' };
+          if (ticket && evidence.externalOutcome === 'pending') return { state: 'unknown', message: 'The requested external creation has no canonical confirmation.' };
           if (!ticket) return { state: 'not_applied' };
           return { state: 'unknown' };
         }
         if (refId === 'work.set-external-status') {
-          const change = state.ticketStatusChanges?.find(value => value.id === command.requestId);
-          if (change?.state === 'applied') return { state: 'applied', output: jsonValue(change) };
-          if (change?.state === 'rejected') return { state: 'not_applied', message: 'Work confirms the external status change was rejected.' };
-          if (change?.state === 'outcome-unknown') return { state: 'unknown', message: 'Work still records an unknown external status outcome.' };
+          const evidence = workEvidence?.(command, _context.run?.projectId);
+          if (evidence?.outcome === 'applied') return { state: 'applied', output: jsonValue(evidence.statusChange) };
+          if (evidence?.outcome === 'rejected') return { state: 'not_applied', message: 'Work confirms the external status change was rejected.' };
+          if (evidence?.outcome === 'unknown' || evidence?.outcome === 'pending') return { state: 'unknown', message: 'Work still has an unresolved external status outcome.' };
           return { state: 'not_applied' };
         }
         if (refId === 'work.post-external-reply') {
-          const reply = state.ticketReplies?.find(value => value.id === command.requestId && value.ticketId === command.ticketId &&
-            value.connectionId === command.connectionId && value.body === command.body && value.workflowRunId === command.workflowRunId &&
-            value.workflowInstance === command.workflowInstance);
-          const block = clearedReplyBlock(_context, command, state);
+          const evidence = workEvidence?.(command, _context.run?.projectId);
+          const block = clearedReplyBlock(_context, command, workEvidence);
           if (block) return block;
-          if (reply?.status === 'not-posted') return { state: 'not_applied', message: 'Work confirms the exact external reply was not posted.' };
-          if (reply) {
-            if (!['pending', 'outcome-unknown', 'queued'].includes(reply.status))
-              return { state: 'unknown', message: 'Work reply state does not prove delivery or non-delivery.' };
-            const confirmed = await confirmReply({ intent, context: _context, workCommand, state });
+          if (evidence?.outcome === 'not_applied') return { state: 'not_applied', message: 'Work confirms the exact external reply was not posted.' };
+          if (evidence?.outcome === 'posted' || evidence?.outcome === 'unknown') {
+            const confirmed = await confirmReply({ intent, context: _context, workCommand, workReplyConfirmation });
             if (confirmed.state === 'completed') return { state: 'applied', output: confirmed.output };
             if (confirmed.evidence?.matchingOutbound === true) return { state: 'waiting', effectApplied: true,
               output: confirmed.output, message: 'The exact reply is recorded outbound; delivery confirmation is still pending.' };
@@ -326,8 +295,11 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
           return { state: 'unknown', message: 'Work has no canonical reply receipt proving the external send was not applied.' };
         }
         if (['work.update-ticket', 'work.set-board-placement', 'work.create-related-ticket'].includes(refId)) {
-          const receipt = await workReceipt?.(command);
-          return receipt?.result ? { state: 'applied', output: jsonValue(receipt.result) }
+          const evidence = workEvidence?.(command, _context.run?.projectId);
+          const result = evidence?.result;
+          if (refId === 'work.create-related-ticket' && ((!evidence?.hasReceipt && !_context?.node?.operation) || evidence?.relationOutcome !== 'applied'))
+            return { state: 'unknown', message: 'Work has no canonical relation proving this request was applied.' };
+          return result ? { state: 'applied', output: jsonValue(result) }
             : { state: 'unknown', message: 'Work has no exact mutation receipt for this workflow attempt.' };
         }
         // Other Work mutations require the Work owner to provide a durable
@@ -336,12 +308,12 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
       },
       async confirm(context, input, intent) {
         if (refId === 'work.post-external-reply') {
-          const blocker = clearedReplyBlock(context, intent.command, state);
+          const blocker = clearedReplyBlock(context, intent.command, workEvidence);
           if (blocker?.state === 'not_applied') return { state: 'retry' };
           if (blocker) return { state: 'waiting', output: context.run.attempt.waitingOutput };
-          return confirmReply({ intent, context, workCommand, state });
+          return confirmReply({ intent, context, workCommand, workReplyConfirmation });
         }
-        const confirmation = await confirmWorkMutation({ refId, intent, state, catalog, workReceipt, context });
+        const confirmation = await confirmWorkMutation({ refId, intent, workEvidence, context });
         if (confirmation.state === 'completed') return confirmation;
         if (confirmation.state === 'waiting') return confirmation;
         if (confirmation.state === 'failed') return confirmation;
@@ -352,8 +324,10 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
   return implementations;
 }
 
-export function createWorkflowActivityImplementationMap({ workCommand, workReceipt, catalog, state, inspectChanges, injected = [] }) {
-  const map = createBuiltinWorkflowActivityImplementations({ workCommand, workReceipt, catalog, state, inspectChanges });
+export function createWorkflowActivityImplementationMap({ workCommand, workEvidence, latestDeliveredReply,
+  workReplyConfirmation, catalog, state, inspectChanges, injected = [] }) {
+  const map = createBuiltinWorkflowActivityImplementations({ workCommand, workEvidence,
+    latestDeliveredReply, workReplyConfirmation, catalog, state, inspectChanges });
   for (const registration of injected) {
     const key = `${registration?.descriptor?.ref?.id}@${registration?.descriptor?.ref?.revision}`;
     if (!registration?.implementation || map.has(key)) throw new Error(`Activity implementation ${key} is invalid or duplicated.`);

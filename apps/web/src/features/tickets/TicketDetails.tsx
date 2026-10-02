@@ -517,6 +517,8 @@ export function TicketDetails({
                     requiresActivityReservation: !!approvalTargetNodeId,
                     canPrepareActivityApproval: !!session && runtimeAvailable,
                     canShowPreparedActivityApproval: !!session && owns(session) && runtimeAvailable,
+                    approvalControlKey: session && owns(session) ? session.lease?.id : undefined,
+                    approvalContextKey: JSON.stringify([state.currentUser?.id, state.activeContext?.id, state.activeContext?.projectId, state.activeContext?.principal]),
                     prepareActivityApproval: approvalTargetNodeId ? async () => {
                       if (!session) throw new Error('Workflow session is unavailable.');
                       if (!owns(session)) await command('claim', { sessionId: session.id, label: 'Ticket workflow' });

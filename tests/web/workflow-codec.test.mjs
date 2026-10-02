@@ -100,6 +100,17 @@ test('fresh generic actions have no tutorial prompt and legacy action prompts su
   assert.equal(roundTrip.nodes[0].prompt, 'Configured legacy context.');
 });
 
+test('registered action model pins survive codec round trips even when unavailable locally', () => {
+  const workflow = {
+    id: 'agent-activity-model', name: 'Agent activity model', entryNode: 'action', maxRevisions: 2,
+    nodes: [{ id: 'action', kind: 'action', name: 'Summarize', activity: { id: 'data.summarize', revision: 3 }, activityDescriptorDigest: 'a'.repeat(64), model: 'provider/model-retired', bindings: {} }],
+    edges: [],
+  };
+  const roundTrip = toWorkflow(fromWorkflow(workflow));
+  assert.equal(roundTrip.nodes[0].model, 'provider/model-retired');
+  assert.equal(roundTrip.nodes[0].activityDescriptorDigest, 'a'.repeat(64));
+});
+
 test('workflow run schemas and result bindings survive editor round trips', () => {
   const source = {
     id: 'typed-run', name: 'Typed run', entryNode: 'input', maxRevisions: 2,

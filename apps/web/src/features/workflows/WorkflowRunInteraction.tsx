@@ -8,6 +8,7 @@ import type {
 import { artifactMarkdownBlocks } from './artifact-markdown';
 import {
   workflowActivityHistory,
+  approvalControlInvalidated,
   workflowDecisionLabel,
   workflowDecisionCapabilities,
   workflowNeedsRecovery,
@@ -22,6 +23,8 @@ export type WorkflowInteractionActions = {
   requiresActivityReservation?: boolean;
   canPrepareActivityApproval?: boolean;
   canShowPreparedActivityApproval?: boolean;
+  approvalControlKey?: string;
+  approvalContextKey?: string;
   requestChanges?: (feedback: string) => void;
   continueRun?: () => void;
   pause?: () => void | Promise<void>;
@@ -410,6 +413,7 @@ export function WorkflowRunInteraction({
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [preparedReservation, setPreparedReservation] = useState<WorkflowActivityReservation>();
   const [preparedReservationGate, setPreparedReservationGate] = useState('');
+  const [preparedReservationContext, setPreparedReservationContext] = useState('');
   const [reservationError, setReservationError] = useState('');
   const reservationRequest = useRef(0);
   const details = submission?.details ?? {};
@@ -482,31 +486,57 @@ export function WorkflowRunInteraction({
   const canShowPreparedApproval = actions.canShowPreparedActivityApproval ?? canPrepareApproval;
   const currentApprovalGate = useRef(approvalGateKey);
   const currentCanPrepareApproval = useRef(canPrepareApproval);
+  const currentApprovalContext = useRef(actions.approvalContextKey ?? '');
+  const approvalControlState = useRef({
+    gateKey: approvalGateKey,
+    canPrepare: canPrepareApproval,
+    canShow: canShowPreparedApproval,
+    controlKey: actions.approvalControlKey,
+    contextKey: actions.approvalContextKey,
+  });
+  const nextApprovalControlState = {
+    gateKey: approvalGateKey,
+    canPrepare: canPrepareApproval,
+    canShow: canShowPreparedApproval,
+    controlKey: actions.approvalControlKey,
+    contextKey: actions.approvalContextKey,
+  };
+  const approvalControlWasInvalidated = approvalControlInvalidated(
+    approvalControlState.current,
+    nextApprovalControlState,
+  );
+  if (approvalControlWasInvalidated) reservationRequest.current += 1;
   currentApprovalGate.current = approvalGateKey;
   currentCanPrepareApproval.current = canPrepareApproval;
+  currentApprovalContext.current = actions.approvalContextKey ?? '';
   useEffect(() => {
-    reservationRequest.current += 1;
-    setPreparedReservation(undefined);
-    setPreparedReservationGate('');
-    setReservationError('');
-  }, [approvalGateKey, canPrepareApproval, canShowPreparedApproval]);
-  const activeReservation = canPrepareApproval
-    ? (preparedReservationGate === approvalGateKey ? preparedReservation : undefined) ??
+    if (approvalControlWasInvalidated) {
+      setPreparedReservation(undefined);
+      setPreparedReservationGate('');
+      setPreparedReservationContext('');
+      setReservationError('');
+    }
+    approvalControlState.current = nextApprovalControlState;
+  }, [approvalGateKey, canPrepareApproval, canShowPreparedApproval, actions.approvalControlKey, actions.approvalContextKey]);
+  const activeReservation = canShowPreparedApproval && !approvalControlWasInvalidated
+    ? (preparedReservationGate === approvalGateKey && preparedReservationContext === (actions.approvalContextKey ?? '') ? preparedReservation : undefined) ??
       (canShowPreparedApproval && activityReservation?.preview ? activityReservation : undefined)
     : undefined;
   async function prepareActivityApproval() {
     if (!actions.prepareActivityApproval) return;
     const request = ++reservationRequest.current;
     const gateKey = approvalGateKey;
+    const contextKey = actions.approvalContextKey ?? '';
     setReservationError('');
     try {
       const reservation = await actions.prepareActivityApproval();
-      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && currentCanPrepareApproval.current) {
+      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && contextKey === currentApprovalContext.current && currentCanPrepareApproval.current) {
         setPreparedReservationGate(gateKey);
+        setPreparedReservationContext(contextKey);
         setPreparedReservation(reservation);
       }
     } catch (error) {
-      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && currentCanPrepareApproval.current)
+      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && contextKey === currentApprovalContext.current && currentCanPrepareApproval.current)
         setReservationError((error as Error).message);
     }
   }
