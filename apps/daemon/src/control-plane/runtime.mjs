@@ -1405,9 +1405,9 @@ export async function createRuntime({
           placement.effective(s).mode !== 'none';
         const runnerRequired = Boolean(agentUsesConfiguredPlacement || step?.kind === 'check' ||
           step?.requiresCheck || step?.artifact || activityNeedsRunner);
-        const providerOnlyActivity = step?.activity && activityDescriptor?.resources.location === 'agent' &&
-          activityDescriptor.resources.workspace !== true;
-        const acquirePlacement = !providerOnlyActivity;
+        // Registered activities acquire only the active resources they declare.
+        // Legacy workflow steps retain their existing configured-placement path.
+        const acquirePlacement = step?.activity ? activityNeedsRunner : true;
         const required = [
           ...(activityDescriptor?.resources.tools ?? []),
           ...(step?.artifact ? ['read_file'] : []),

@@ -45,6 +45,8 @@ function registration(counters) {
       },
       async dispatch(context) {
         counters.agentDispatch += 1;
+        counters.agentEntered?.();
+        await counters.agentBarrier;
         assert.ok(context.session);
         assert.ok(context.session.currentAgentSessionId);
         return { state: 'completed', output: { accepted: true } };
@@ -158,6 +160,61 @@ test('a standalone provider-only activity lazily attaches a real session without
   assert.equal(snapshot.sessions[0].flow?.workflowId, workflow.id);
   assert.deepEqual(f.runnerCalls, [], 'provider-only resources must not acquire the configured runner');
   assert.equal(run.activityAttempts.find(value => value.nodeId === 'assess')?.status, 'completed');
+});
+
+test('a daemon activity after a real agent session does not acquire configured runner placement', { timeout: 20000 }, async t => {
+  let agentEntered;
+  const agentEnteredPromise = new Promise(resolve => { agentEntered = resolve; });
+  let releaseAgent;
+  const agentBarrier = new Promise(resolve => { releaseAgent = resolve; });
+  const counters = {
+    normalizePrepare: 0, normalizeDispatch: 0, agentPrepare: 0, agentDispatch: 0,
+    signalEntered() {}, barrier: Promise.resolve(), agentEntered, agentBarrier,
+  };
+  const f = await fixture(t, { workflowActivities: registration(counters) });
+  const project = await f.act('saveProject', { name: 'Daemon follow-up' });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  await f.act('registerRunner', {
+    name: 'Configured but unused runner', kind: 'local', repository: '/fixture', projectIds: [project.id],
+  });
+  const runner = (await f.snapshot()).runners[0];
+  const conversation = await f.act('createConversation', {
+    requestId: 'agent-then-daemon-session', projectId: project.id,
+    placement: { mode: 'pinned', runnerId: runner.id },
+  });
+  await f.act('claim', { sessionId: conversation.sessionId });
+  const workflow = {
+    id: 'agent-then-daemon', name: 'Agent then daemon transform',
+    nodes: [
+      { id: 'assess', name: 'Assess record', kind: 'action', model: 'fixture', activity: { id: 'records.assess', revision: 1 }, bindings: {} },
+      { id: 'normalize', name: 'Normalize result', kind: 'action', activity: { id: 'records.normalize', revision: 1 }, bindings: {} },
+    ],
+    edges: [{ from: 'assess', to: 'normalize', outcome: 'success' }],
+  };
+  await f.act('saveWorkflow', { projectId: project.id, workflow });
+  await f.act('configure', { sessionId: conversation.sessionId, workflow: workflow.id });
+  await f.act('startWorkflow', { sessionId: conversation.sessionId });
+  let session;
+  try {
+    await waitBounded(agentEnteredPromise, 'The real agent activity did not reach dispatch.');
+    const callsBeforeDaemon = f.runnerCalls.length;
+    releaseAgent();
+    for (let i = 0; i < 500; i++) {
+      session = (await f.runtime.snapshot(conversation.sessionId, 'agent-resource-acceptance')).sessions.find(value => value.id === conversation.sessionId);
+      if (['completed', 'failed'].includes(session?.flow?.status)) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(session.flow.status, 'completed', JSON.stringify(session.flow));
+    assert.equal(session.placement?.mode, 'pinned', 'the mixed run must carry its configured placement into the real session');
+    assert.equal(counters.agentPrepare, 1);
+    assert.equal(counters.agentDispatch, 1);
+    assert.equal(counters.normalizePrepare, 1);
+    assert.equal(counters.normalizeDispatch, 1);
+    assert.equal(f.runnerCalls.length, callsBeforeDaemon,
+      'the daemon activity must not probe or allocate a configured runner');
+  } finally {
+    releaseAgent();
+  }
 });
 
 test('an unavailable model on a registered agent activity fails before adapter preparation or dispatch', { timeout: 20000 }, async t => {
