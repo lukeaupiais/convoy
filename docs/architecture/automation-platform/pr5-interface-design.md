@@ -1,6 +1,6 @@
 # PR 5 implementation proposal — registered events and correlated waits
 
-PR 5 adds event sources around the PR 3 durable WorkflowRun and PR 4 registered activity-attempt engine. Workflow definitions and rules remain owned by Workflows. Work retains ticket and board facts. Source-specific integrations translate their protocols into validated event envelopes. The control plane authorizes, durably journals, deduplicates, and routes envelopes to automation subscriptions and active waits. Event delivery starts or resumes the existing WorkflowRun engine; it does not add another executor.
+PR 5 adds event sources around the PR 3 durable WorkflowRun and PR 4 registered activity-attempt engine. Workflow definitions, subscriptions, schedules, accepted event journal, dedupe, and wait transitions remain owned by Workflows. Work retains ticket and board facts in its outbox. Source-specific integrations translate their protocols into validated event envelopes. The control plane authenticates and authorizes sources, coordinates owner calls, and routes accepted events to the existing WorkflowRun engine; it does not own a second journal or add another executor.
 
 ## Event descriptor and envelope
 
@@ -50,7 +50,7 @@ Every subscriber sees the same accepted envelope independently. Consuming an eve
 
 Manual submission is a canonical `submitWorkflowEvent` command. Organization/project context comes from the authenticated active context; the control plane checks the caller's current membership, project access, and permission to submit that descriptor. The caller may supply a bounded idempotency key, scoped by the server to the authenticated source principal and descriptor, so retried commands resolve to the original event; the caller cannot choose the principal or source scope. Workflows validates only the declared payload and records the authenticated principal as `origin`. The client cannot choose another tenant, workload principal, descriptor revision, source identity, or correlation value. A manual event can start configured subscriptions and wake an explicitly matching wait, but it cannot bypass workflow/activity authorization.
 
-Webhook ingress is an adapter binding to one registered descriptor and one fixed organization/project/resource scope. The adapter authenticates the configured connection credential, validates request size and replay/idempotency key, maps only declared source fields, and strips/rejects reserved routing fields. The control plane resolves the workload identity and scope from the binding and rechecks it is active before calling `acceptEvent`. A body field named `organizationId`, `projectId`, `principal`, `correlation`, or `causation` is never authoritative. Secrets remain in the adapter credential store and never enter event payloads, snapshots, or error text. Failed authentication, revoked binding, invalid payload, cross-tenant scope, and stale credentials fail closed before journal mutation.
+Webhook ingress uses a Workflows-owned binding to one registered descriptor and one fixed organization/project/resource scope. The binding names a service principal and stores only its identity reference, never another credential. A callback sends the existing `Authorization: Bearer svc_…` credential: HTTP authenticates it through the existing Identity session port (`runtime.identitySessions.authenticate` → `identity.authenticateCredential`), then invokes a dedicated ingress runtime command with that authenticated principal. The control plane requires the principal to be a service principal whose ID matches the binding, rechecks it is active, and authorizes the bound project through the current Organizations membership/permission path before calling `acceptEvent`. Service-principal credential digest, expiry, rotation, and revocation remain Identity-owned; membership and project authority remain Organizations-owned. Reject cookie-only authentication on the webhook route. A body field named `organizationId`, `projectId`, `principal`, `correlation`, or `causation` is never authoritative. The field map reads only declared source fields, and Convoy assigns source identity/correlation/causation from the binding and validated mapping. Failed authentication, principal mismatch, revoked binding/principal, invalid payload, cross-tenant scope, and stale credentials fail closed before journal mutation.
 
 ## Durable schedules
 
@@ -109,3 +109,125 @@ Also run an existing ticket event workflow using a legacy `ticket_updated` rule 
 ## Integration order
 
 After reviewed PR 3 and PR 4 heads are available, reconcile the event source/attempt identities with their contracts. Add descriptor/envelope and subscription/wait/schedule contracts first; add Workflow-owned journal, subscription decision, and wait transition ports next; wire Work facts, manual/webhook adapters, and durable scheduler through the control plane; then exercise both examples and compatibility through the actual runtime. Keep HTTP as translation, source authentication in the appropriate adapter, and all graph transitions in Workflows.
+
+## Integration seams verified against PR 3
+
+The current durable-run baseline is `ebca318c8f330176fa21d1780a06960e3aec9986` on
+`pr/automation-independent-runs`. PR 4 is not present in this checkout yet, so activity
+attempt and resource-output names below remain provisional until that head is reviewed.
+
+- `apps/daemon/src/modules/workflows/workflow-module.mjs` is the owner seam. Public
+  `createWorkflows()` currently exposes `startRun({ projectId, organizationId, principal,
+  workflow, activeTicketId })`, exact run lookup/DTO through `run()`/`readRun()`, and
+  governed run controls. Extend that owner API with `acceptEvent` and subscription/schedule
+  lifecycle policy; do not create runs by editing `state.workflowRuns` in the control plane.
+  A matched start should call the same pinned run/engine path and persist event/rule identity
+  as run provenance. `createWorkflowEngine.signal(context, instance, fact)` is the narrow
+  transition seam, but it currently checks only the legacy event name and callers iterate
+  sessions; PR 5 must make registration, correlation, scope, predicate, cursor, and attempt
+  identity Workflow-owned and support independent runs without creating a session.
+- `runtime.mjs` currently owns `startWorkflowRun`, `getWorkflowRun`, claim, decision,
+  continue, cancel, and reconcile dispatch. `runtime-command-validation.mjs`,
+  `packages/contracts/src/commands.ts`, `modules/workflows/index.mjs`, and
+  `module-command-registry.mjs` are the required public command/owner parity seams.
+  Add manual event submission and schedule/subscription commands only after deciding which
+  are public user operations. HTTP must pass the authenticated principal into these commands;
+  event delivery then rechecks the stored rule principal before it starts any activity.
+  `workflow-module.snapshot()` already scopes the bounded run DTO; new decisions and event
+  inspection must follow that stored organization/project scope and must not publish secrets
+  or unbounded envelopes.
+- Work's current durable fact queues are `state.workFacts` and `state.ticketImportFacts`,
+  initialized by `modules/work/catalog.mjs`. Column changes key facts by ticket revision and
+  board; import/source/thread facts have stable binding/remote-version or thread/message
+  identities. Import facts can remain `awaiting_thread` until the source thread establishes
+  a complete baseline. `workflow-effects.mjs` drains these queues, calls Workflows, saves,
+  and removes observed records. Preserve these as Work-owned outbox facts; acknowledge/remove
+  only after Workflow `acceptEvent` durably accepts the stable source identity. A crash between
+  acceptance and Work acknowledgement must be a harmless deduplicated redelivery.
+- `workflow-effects.mjs` also synthesizes ticket create/update/placement facts after canonical
+  Work commands and currently owns automation candidate matching, `automationDecisionLedger`,
+  retry identity, and failure records. Move matching and durable start decisions into
+  Workflows; leave this coordinator responsible for authorizing the saved rule principal,
+  delivering owner calls, and draining Work outbox facts. There is a global `consumedByWait`
+  early return that suppresses automation matching when a wait receives a fact. Remove that
+  behavior: event subscribers are independent. Also replace the `workflowRunId` suppression
+  of action-generated events (including `recordColumnFacts` in Work) with bounded causation
+  metadata and loop protection, otherwise a workflow action cannot trigger another declared
+  subscription and violates the shared-envelope rule.
+- Wait delivery currently scans only `state.sessions`, while PR 3 permits independent runs
+  without `sessionId`. The run's pinned flow is authoritative and may have a compatibility
+  session projection after an agent node. Route to canonical run ID/version/node/instance and
+  then use the engine transition; never enumerate or mutate a second session-owned wait copy.
+- The only daemon scheduling loop is the serialized 3-second `dispatchTimer` in
+  `control-plane/runtime.mjs`, which polls ticket imports then dispatches ready activities.
+  No durable workflow timer, schedule cursor, event journal, or due-fire record exists yet.
+  Extend this serialized tick to call a bounded Workflows due processor and persist each
+  schedule/timer firing identity before delivery. Derive missed-fire recovery from durable
+  UTC cursors, not an in-memory timeout. Tests should reopen the runtime with the same state
+  and advance the injected clock/tick seam.
+- `http/app.mjs` currently accepts authenticated JSON at `/api/runtime`; its global host,
+  origin, content-type, and Convoy-identity gates run before body dispatch. It has no webhook
+  route or webhook credential binding. A provider callback therefore needs a dedicated
+  explicit route/adapter path that authenticates its configured binding credential and fixed
+  scope without treating callback JSON as a Convoy user command. Keep ordinary runtime routes
+  and their authentication/CSRF policy unchanged. No generic inbound webhook binding or
+  credential lifecycle exists in the adapters today.
+
+## Decisions to settle against PR 4 before implementation
+
+1. **Journal ownership:** settled with root. Workflows owns the accepted journal, dedupe,
+   subscription decisions, and wait state through `acceptEvent`; control plane authenticates,
+   authorizes, and coordinates source/outbox delivery. Work's pending fact outbox remains
+   separately owned by Work.
+2. **Subscription compatibility:** `AutomationRule` currently pins one of seven string event
+   IDs, equality-only `if` conditions, and a `start_workflow` target. New descriptor revision,
+   typed predicates, start action selection, and concurrency policy need an additive schema
+   revision/migration path that preserves old rule IDs/revisions and `automationDecisionLedger`
+   retry keys. Keep each legacy event string as a resolver alias, not as a second event path.
+3. **Webhook source configuration:** resolved direction from root: Workflow owns a binding
+   that pins descriptor revision, organization/project/resource, service-principal ID, and
+   bounded declared-field map. Use the existing Identity service-principal bearer credential
+   lifecycle and current Organizations authority; do not create a secret store or reuse
+   outbound ticket-source connections. Public binding save/revoke commands still need to be
+   defined, with secret-free projections and current principal/project authorization.
+4. **Event-start authorization and provenance:** current public `startWorkflowRun` authorizes
+   `project.execute`; current automated starts use the rule's saved principal and an
+   authorization callback. Specify the permission required to submit manual events and how
+   event-started runs retain `eventId`, rule ID/revision, exact workflow/activity pin, and
+   original principal. Caller-supplied tenant, actor, source ID, revision, correlation, and
+   causation must remain ignored or rejected.
+5. **PR 4 activity output contract:** waits may correlate from a start event or typed activity
+   output. Reconcile the exact event eligibility cursor and output reference with PR 4's
+   durable attempt/effect receipt before defining wait persistence; do not infer cursor from
+   wait activation time. Keep schedule/event routing independent of session/runner allocation.
+
+There is no need to change PR 3 code to prepare these seams. These notes should be reconciled
+with the reviewed PR 4 public interfaces before contracts are frozen or implementation begins.
+
+## Existing authentication/authority port audit
+
+The PR 3 composition already supplies the needed principal and tenant checks for this direction:
+
+- `Identity.authenticateCredential()` accepts existing `svc_` service-principal credentials,
+  verifies the stored digest, active state, and expiry, and returns the normalized
+  `{ kind: 'service-principal', servicePrincipalId }`. Rotation replaces the digest; revocation
+  and expiry make bearer authentication fail. `runtime.identitySessions.authenticate()` is the
+  public HTTP port to this logic. Do not compare or persist raw bearer values.
+- `http/identity-session.mjs` already extracts `Authorization: Bearer ...` and marks its source.
+  The webhook route can use that current authentication before parsing/dispatching the event,
+  but must require `source === 'bearer'` and a service-principal principal for the binding; do
+  not let the existing cookie fallback authenticate callbacks.
+- Organizations exports `resolveContext()` and `authorize()` through its public module index;
+  runtime's current `requireProjectPermission(projectId, permission, principal)` resolves the
+  project's stored organization/team context and recomputes membership and project authority.
+  Keep that authorization inside the control-plane ingress command, not HTTP or adapter code.
+  Require the authenticated service-principal ID to exactly equal the binding's principal ID,
+  then check `project.execute` (or a descriptor-declared narrower permission if PR4 review
+  establishes one) for the binding's fixed project. Service-principal roles are already limited
+  to organization member and named-project contributor/maintainer; no org admin/team grant.
+- Therefore there is no blocker in the existing Identity/Organizations authority path and no
+  new secret store is needed. The missing seam is a Workflow-owned binding schema/lifecycle plus
+  a dedicated HTTP route and runtime ingress command. Existing `http/app.mjs` applies host and
+  optional-origin checks, JSON framing, and a bounded body read before `/api/runtime`; preserve
+  those checks, use a descriptor-bound smaller payload limit, and do not let the webhook route
+  bypass authenticated runtime principal propagation.

@@ -2,7 +2,13 @@
 
 ## Dependencies
 
-Depends on PR 1, PR 3 and PR 4.
+Depends on PR 1, PR 3 and PR 4 for the complete implementation.
+
+A separable UI preparation phase may start on reviewed PR 3: add the minimal workflow-owned
+run list/detail/start/control surface using its existing commands. Expose explicit run control
+eligibility in the read shape instead of inferring it from missing sessions. This phase may not
+invent activity, human-form, material, or effect contracts before reviewed PR 4. Integrate the
+reviewed activity layer before completing PR 6 or publishing its draft.
 
 ## Implementation and acceptance
 

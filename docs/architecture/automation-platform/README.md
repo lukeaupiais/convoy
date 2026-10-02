@@ -22,8 +22,9 @@ events/timers, child workflows, and agents without requiring a development/suppo
 | 7 | [Composition](07-composition.md) | 3–6 |
 
 Run 1/2/3 in isolated checkouts concurrently. Integrate reviewed prerequisites before starting
-4. Start 5/6 only on reviewed 4 with nonoverlapping ownership or isolated commits reconciled by
-root. Start 7 on the reviewed integrated stack. Never implement on unknown dependent interfaces.
+4. Start 5 and the activity-dependent part of 6 only on reviewed 4 with nonoverlapping ownership
+or isolated commits reconciled by root. The separable run UI preparation in spec 6 may start on
+reviewed 3 using its existing commands; it cannot invent activity/evidence interfaces. Start 7 on the reviewed integrated stack. Never implement on unknown dependent interfaces.
 Each implementation is assigned to a Luna agent at high reasoning effort with its saved spec.
 
 ## Reviewed implementation proposals

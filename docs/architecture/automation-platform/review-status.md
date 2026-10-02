@@ -78,8 +78,10 @@ fails on occupied port 4317; the unchanged built plan baseline reproduces that s
 (baseline-electron-entry.log). Neither service was stopped. Local command-supervisor comparison
 on unchanged baseline and PR 3 both times out at 50s, with nine passing subtests and one explicit
 packaged-worker skip followed by pending-harness cancellation. Docker race tests require an
-unavailable immutable image. These are pending evidence; exact published-head remote checks,
-system and desktop CI must pass before delivery acceptance.
+unavailable immutable image. Remote checks, full system and desktop CI now pass at exact published head
+ebca318c8f330176fa21d1780a06960e3aec9986 (both push and pull-request runs).
+Full system: 536 tests, 524 pass, 12 explicit skips, zero failures. It covers runner/process
+tests and PostgreSQL in its provisioned environment; desktop has its own passing job.
 
 ## Remaining PRs
 
