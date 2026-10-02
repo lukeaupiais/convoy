@@ -177,9 +177,16 @@ export function validateCustomTicketSourceManifest(input) {
   }
   if (operations.thread) {
     const message = object(manifest.threadMapping, 'Thread mapping is required.');
-    keys(message, ['id', 'body', 'authorRole', 'createdAt', 'deliveryStatus'], 'Unknown thread mapping field');
+    keys(message, ['id', 'body', 'authorRole', 'createdAt', 'deliveryStatus', 'direction', 'directionByAuthorRole'], 'Unknown thread mapping field');
     for (const name of ['id', 'body', 'authorRole', 'createdAt']) selector(message[name], `${name} thread selector`);
     if (message.deliveryStatus !== undefined) selector(message.deliveryStatus, 'Delivery status thread selector');
+    if (message.direction !== undefined) selector(message.direction, 'Message direction thread selector');
+    if (message.directionByAuthorRole !== undefined) {
+      const directions = object(message.directionByAuthorRole, 'Message directions by author role must be an object.');
+      if (Object.keys(directions).length > 100 || Object.entries(directions).some(([role, direction]) =>
+        !role || role.length > 80 || !['inbound', 'outbound'].includes(direction)))
+        throw new Error('Message directions by author role are invalid.');
+    }
   } else if (manifest.threadMapping !== undefined) throw new Error('Thread mapping requires a thread operation.');
   if (operations.reply) {
     if (!connection.writeAuthentication) throw new Error('Reply operation needs separate write authentication.');
@@ -364,13 +371,22 @@ export function createCustomTicketSource({ fetcher = fetch, resolver = lookup, a
       const items = readSelector(body, operation.response.items);
       if (!Array.isArray(items) || items.length > 500) throw new Error('Ticket source thread must contain at most 500 messages.');
       const mapping = manifest.threadMapping;
-      return items.map((item) => ({
-        remoteId: mappedString(item, mapping.id, 'Message ID', 200),
-        body: mappedString(item, mapping.body, 'Message body', 12000),
-        authorRole: mappedString(item, mapping.authorRole, 'Message author role', 80),
-        createdAt: mappedString(item, mapping.createdAt, 'Message time', 100),
-        ...(mapping.deliveryStatus ? { deliveryStatus: mappedString(item, mapping.deliveryStatus, 'Message delivery status', 80, true) } : {}),
-      }));
+      return items.map((item) => {
+        const authorRole = mappedString(item, mapping.authorRole, 'Message author role', 80);
+        const rawDirection = mapping.direction ? mappedString(item, mapping.direction, 'Message direction', 80, true) : undefined;
+        const roleDirections = mapping.directionByAuthorRole;
+        const roleDirection = roleDirections && Object.hasOwn(roleDirections, authorRole) ? roleDirections[authorRole] : undefined;
+        const direction = rawDirection === 'inbound' || rawDirection === 'outbound' ? rawDirection
+          : roleDirection ?? 'unknown';
+        return {
+          remoteId: mappedString(item, mapping.id, 'Message ID', 200),
+          body: mappedString(item, mapping.body, 'Message body', 12000),
+          authorRole,
+          direction,
+          createdAt: mappedString(item, mapping.createdAt, 'Message time', 100),
+          ...(mapping.deliveryStatus ? { deliveryStatus: mappedString(item, mapping.deliveryStatus, 'Message delivery status', 80, true) } : {}),
+        };
+      });
     },
     async postReply(connection, remoteId, body, requestId) {
       const manifest = validateCustomTicketSourceManifest(connection.manifest);

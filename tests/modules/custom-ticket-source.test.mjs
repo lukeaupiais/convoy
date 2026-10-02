@@ -4,6 +4,7 @@ import {
   createCustomTicketSource,
   validateCustomTicketSourceManifest,
 } from '../../apps/daemon/src/adapters/custom-ticket-source.mjs';
+import { createTicketSources } from '../../apps/daemon/src/adapters/ticket-sources.mjs';
 
 function manifest(overrides = {}) {
   return {
@@ -53,15 +54,48 @@ test('custom source reads a mapped ticket thread without exposing provider field
   credential(t, 'secret');
   const configured = manifest();
   configured.operations.thread = { method: 'GET', path: 'tickets/${remoteId}/comments', response: { items: '$.items' } };
-  configured.threadMapping = { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' };
+  configured.threadMapping = { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery',
+    directionByAuthorRole: { requester: 'inbound' } };
   const adapter = createCustomTicketSource({ resolver, fetcher: async (url) => {
     assert.equal(new URL(url).pathname, '/api/tickets/41/comments');
-    return new Response(JSON.stringify({ items: [{ id: 8, body: 'Please check', role: 'user', createdAt: '2026-09-23T12:00:00Z', delivery: 'delivered', privateId: 'hidden' }] }), { headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ items: [{ id: 8, body: 'Please check', role: 'requester', createdAt: '2026-09-23T12:00:00Z', delivery: 'delivered', privateId: 'hidden' }] }), { headers: { 'content-type': 'application/json' } });
   } });
   assert.deepEqual(await adapter.listComments({ manifest: configured }, '41'), [{
-    remoteId: '8', body: 'Please check', authorRole: 'user', createdAt: '2026-09-23T12:00:00Z', deliveryStatus: 'delivered',
+    remoteId: '8', body: 'Please check', authorRole: 'requester', direction: 'inbound', createdAt: '2026-09-23T12:00:00Z', deliveryStatus: 'delivered',
   }]);
   assert.throws(() => validateCustomTicketSourceManifest(manifest({ threadMapping: configured.threadMapping })), /requires a thread operation/);
+});
+
+test('custom source leaves unmapped roles unknown and validates explicit participant mappings', async t => {
+  credential(t, 'secret');
+  const configured = manifest();
+  configured.operations.thread = { method: 'GET', path: 'tickets/${remoteId}/comments', response: { items: '$.items' } };
+  configured.threadMapping = { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt' };
+  const adapter = createCustomTicketSource({ resolver, fetcher: async () => new Response(JSON.stringify({ items: [
+    { id: '1', body: 'Need purchase order', role: 'procurement-contact', createdAt: '2026-09-23T12:00:00Z' },
+    { id: '2', body: 'Published internally', role: 'bulletin-editor', createdAt: '2026-09-23T12:01:00Z' },
+    { id: '3', body: 'Prototype key', role: 'constructor', createdAt: '2026-09-23T12:02:00Z' },
+    { id: '4', body: 'Prototype key', role: '__proto__', createdAt: '2026-09-23T12:03:00Z' },
+  ] }), { headers: { 'content-type': 'application/json' } }) });
+  const messages = await adapter.listComments({ manifest: configured }, '41');
+  assert.deepEqual(messages.map(message => message.direction), ['unknown', 'unknown', 'unknown', 'unknown']);
+  configured.threadMapping.directionByAuthorRole = {
+    'procurement-contact': 'inbound', 'bulletin-editor': 'outbound',
+  };
+  assert.deepEqual((await adapter.listComments({ manifest: configured }, '41')).map(message => message.direction),
+    ['inbound', 'outbound', 'unknown', 'unknown']);
+  assert.throws(() => validateCustomTicketSourceManifest(manifest({
+    operations: configured.operations,
+    threadMapping: { ...configured.threadMapping, directionByAuthorRole: { client: 'customer' } },
+  })), /directions by author role are invalid/);
+});
+
+test('ticket source boundary rejects malformed threads and normalizes legacy provider messages to unknown', async () => {
+  let messages = null;
+  const sources = createTicketSources({ linear: { listComments: async () => messages } });
+  await assert.rejects(sources.listComments({ provider: 'linear' }, 'issue-1'), /invalid thread/);
+  messages = [{ remoteId: 'legacy-1', body: 'Old provider message', authorRole: 'constructor', createdAt: '2026-09-23T12:00:00Z' }];
+  assert.deepEqual(await sources.listComments({ provider: 'linear' }, 'issue-1'), [{ ...messages[0], direction: 'unknown' }]);
 });
 
 test('custom source replies with a separate credential and stable request ID', async t => {

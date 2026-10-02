@@ -10,6 +10,8 @@ export function createCatalog({ state, save, execution, externalTickets, context
   state.ticketImportFacts ??= [];
   state.workFacts ??= [];
   state.ticketThreads ??= [];
+  for (const thread of state.ticketThreads) for (const message of thread.messages ?? [])
+    message.direction ??= 'unknown';
   state.ticketReplies ??= [];
   state.ticketStatusChanges ??= [];
   state.ticketConnections ??= [];
@@ -202,27 +204,33 @@ export function createCatalog({ state, save, execution, externalTickets, context
     if (!link) throw new Error('Ticket is not linked to this source.');
     if (!source.capabilities?.threadRead) throw new Error('This ticket source does not provide a thread.');
     const messages = await externalTickets.listComments(source, link.remoteId);
-    if (!Array.isArray(messages) || messages.length > 500 || messages.some(value => !value.remoteId || !value.body || !value.authorRole || !value.createdAt))
+    if (!Array.isArray(messages) || messages.length > 500)
       throw new Error('Ticket source returned an invalid thread.');
-    const ids = messages.map(value => value.remoteId);
+    const normalizedMessages = messages.map(value => ({
+      ...value,
+      direction: ['inbound', 'outbound'].includes(value.direction) ? value.direction : 'unknown',
+    }));
+    if (normalizedMessages.some(value => !value.remoteId || !value.body || !value.authorRole || !value.createdAt))
+      throw new Error('Ticket source returned an invalid thread.');
+    const ids = normalizedMessages.map(value => value.remoteId);
     if (new Set(ids).size !== ids.length) throw new Error('Ticket source returned duplicate message IDs.');
     const id = `${source.id}:${t.id}`;
     const previous = state.ticketThreads.find(value => value.id === id);
     const seen = new Set(previous?.messages.map(value => value.remoteId) ?? []);
     if (previous && [...seen].some(remoteId => !ids.includes(remoteId)))
       throw new Error('Ticket source returned an incomplete thread; earlier messages are missing.');
-    const record = { id, ticketId: t.id, connectionId: source.id, messages: structuredClone(messages),
+    const record = { id, ticketId: t.id, connectionId: source.id, messages: structuredClone(normalizedMessages),
       revision: (previous?.revision ?? 0) + 1, syncedAt: new Date().toISOString() };
     if (previous) Object.assign(previous, record);
     else state.ticketThreads.push(record);
     for (const reply of state.ticketReplies) {
       if (reply.ticketId !== t.id || reply.connectionId !== source.id || reply.status !== 'queued' || !reply.remoteId) continue;
-      const message = messages.find(value => value.remoteId === reply.remoteId && value.body === reply.body &&
-        !['user', 'customer'].includes(value.authorRole.toLowerCase()));
+      const message = normalizedMessages.find(value => value.remoteId === reply.remoteId && value.body === reply.body &&
+        value.direction === 'outbound');
       if (message?.deliveryStatus) reply.deliveryStatus = message.deliveryStatus;
     }
-    if (previous) for (const message of messages) {
-      if (seen.has(message.remoteId) || !['user', 'customer'].includes(message.authorRole.toLowerCase())) continue;
+    if (previous) for (const message of normalizedMessages) {
+      if (seen.has(message.remoteId) || message.direction !== 'inbound') continue;
       const key = `${id}:ticket_message_received:${message.remoteId}`;
       if (!state.ticketImportFacts.some(value => value.key === key)) state.ticketImportFacts.push({
         id: key, key, event: 'ticket_message_received', projectId: t.projectId,
@@ -607,7 +615,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
           if (!reply?.remoteId) throw new Error('Reply evidence is missing.');
           const thread = await syncThread(t, source);
           const message = thread.messages.find(value => value.remoteId === reply.remoteId && value.body === reply.body &&
-            !['user', 'customer'].includes(value.authorRole.toLowerCase()) && value.deliveryStatus === 'delivered');
+            value.direction === 'outbound' && value.deliveryStatus === 'delivered');
           if (!message) throw new Error('Reply is not confirmed delivered by the source.');
           evidenceMessageId = message.remoteId;
         }
@@ -642,7 +650,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
           const link = t.externalLinks?.find(value => value.connectionId === source.id);
           if (!link || !source.capabilities?.threadRead) throw new Error('Ticket source cannot verify this reply.');
           const messages = await externalTickets.listComments(source, link.remoteId);
-          const remote = messages.find(value => value.remoteId === c.remoteId && value.body === reply.body && !['user', 'customer'].includes(value.authorRole.toLowerCase()));
+          if (!Array.isArray(messages) || messages.length > 500) throw new Error('Ticket source returned an invalid thread.');
+          const normalizedMessages = messages.map(value => ({ ...value,
+            direction: ['inbound', 'outbound'].includes(value.direction) ? value.direction : 'unknown' }));
+          const remote = normalizedMessages.find(value => value.remoteId === c.remoteId && value.body === reply.body && value.direction === 'outbound');
           if (!remote) throw new Error('Matching remote reply was not found.');
           reply.status = 'queued'; reply.remoteId = remote.remoteId; reply.deliveryStatus = remote.deliveryStatus;
         } else reply.status = 'not-posted';

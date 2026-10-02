@@ -32,9 +32,11 @@ durable and independent of board placement or status.
 Bindings can opt into a polling interval. Work records the last attempt and any
 source error; the control plane drains durable import and source-message facts
 after each poll. A ticket thread is a source-owned projection. The first read
-establishes a baseline, while later requester messages can start or resume a
-workflow. An import fact waits until the source thread has loaded successfully.
+establishes a baseline, while later messages explicitly normalized as inbound
+can start or resume a workflow. Unknown or absent direction never starts work.
+An import fact waits until the source thread has loaded successfully.
 An incomplete thread is rejected so missing history cannot be mistaken
 for a new message. Outbound replies record intent before transmission
-and require reconciliation if the result is uncertain. A queued reply is not a
-delivery receipt.
+and require reconciliation if the result is uncertain. Confirmation matches the
+recorded remote message ID and body, requires outbound direction, and checks the
+source delivery state. A queued reply is not a delivery receipt.
