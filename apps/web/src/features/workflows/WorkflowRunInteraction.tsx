@@ -722,12 +722,14 @@ export function WorkflowRunInteraction({
               {activeReservation?.preview && (
                 <div className="workflow-approval-preview" aria-label="Prepared activity approval">
                   <strong>{activeReservation.preview.activity}</strong>
+                  {activeReservation.preview.resources?.model && <small>Model: {activeReservation.preview.resources.model}</small>}
                   {activeReservation.preview.action && <small>{activeReservation.preview.action}</small>}
                   {activeReservation.preview.summary && <p>{activeReservation.preview.summary}</p>}
                   {activeReservation.preview.body && <blockquote>{activeReservation.preview.body}</blockquote>}
                   <details>
                     <summary>Prepared values</summary>
-                    <pre>{JSON.stringify({ input: activeReservation.preview.input, intent: activeReservation.preview.intent }, null, 2)}</pre>
+                    <pre>{JSON.stringify({ input: activeReservation.preview.input, intent: activeReservation.preview.intent,
+                      ...(activeReservation.preview.resources ? { resources: activeReservation.preview.resources } : {}) }, null, 2)}</pre>
                   </details>
                 </div>
               )}

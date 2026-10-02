@@ -26,7 +26,7 @@ export type WorkflowActivityAttempt = {
 export type WorkflowActivityReservation = {
   id: string;
   digest: string;
-  preview?: { activity: string; input: unknown; intent: unknown; action?: string; summary?: string; body?: string };
+  preview?: { activity: string; input: unknown; intent: unknown; resources?: { model?: string }; action?: string; summary?: string; body?: string };
 };
 export type WorkflowRun = {
   id: string;
