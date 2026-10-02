@@ -14,6 +14,11 @@ existing Work actions through their owning canonical commands plus one unrelated
 data-transform implementation and a fake integration adapter exercised in acceptance tests.
 Reuse Library reviewed capability validation where relevant; do not invent duplicate grants.
 Pin activity identity/revision and validate input/output at publication/dispatch/completion.
+Expose registered descriptors in the authorized client read model and populate workflow action
+selection/typed input authoring from them. A fresh generic action must not silently select
+inspect_changes or describe itself as a board operation. Keep development/support templates
+available as explicit selections; no customer or repository template is a universal default.
+Unavailable registered revisions remain visible and fail closed rather than changing activity.
 
 Give runs typed inputs and activity outputs, explicit immutable output references, and bounded
 bindings to run input/prior activity output. No eval, secret material in snapshots, prototype
