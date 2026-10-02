@@ -661,7 +661,7 @@ export function createWorkflows({
       return {
         workflowRunsTotal: visibleRuns.length,
         workflowRunsTruncated: visibleRuns.length > 200,
-        workflowRuns: visibleRuns.slice(0, 200).map(publicRun),
+        workflowRuns: visibleRuns.slice(0, 200).map((run) => publicRun(run)),
         workflows: state.workflows.filter(workflow => visible({ ...workflow, organizationId: workflow.organizationId ?? 'personal' })).map(readDefinition),
         workflowDrafts: Object.fromEntries(
           Object.entries(state.workflowDrafts).filter(
