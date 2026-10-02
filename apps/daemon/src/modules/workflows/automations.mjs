@@ -4,7 +4,7 @@ import { normalizeWorkflow } from './workflows.mjs';
 const idPattern = /^[A-Za-z0-9][\w-]{0,79}$/;
 export function workflowForProject(state, id, version, projectId, { raw = false } = {}) {
   const project = state.projects?.find(item => item.id === projectId);
-  const workflow = state.workflows?.find(item => item.id === id && item.version === version);
+  const workflow = state.workflows?.find(item => item.id === id && (item.version ?? 1) === version);
   if (!project || !workflow || (workflow.organizationId ?? 'personal') !== project.organizationId ||
       workflow.projectId && workflow.projectId !== projectId || workflow.teamId && workflow.teamId !== project.teamId)
     throw new Error('Workflow is not available for this project.');
