@@ -10,7 +10,8 @@ Extend human activities beyond hardcoded approved/changes_requested: pinned conf
 IDs/labels, optional typed form schema, explicit reviewer assignment/eligibility, deadlines and
 exact reviewed input/output/effect refs. Add governed respond-to-human-task interface; maintain
 legacy approveGate/requestChanges via the same owner. UI renders compact configured controls and
-bounded form widgets from shapes, never customer types or next-operation inspection. Keep form
+bounded form widgets from shapes, never customer types or next-operation inspection. Human-task UI must operate independent runs without requiring a Session.flow or ticket:
+use run read/control commands and a minimal workflow-owned run/task selection surface. Keep form
 submission separate from authority; labels never imply permission. Preserve revision loops.
 
 Generalize captured evidence refs to content-addressed documents, validated adapter response

@@ -26,6 +26,16 @@ Run 1/2/3 in isolated checkouts concurrently. Integrate reviewed prerequisites b
 root. Start 7 on the reviewed integrated stack. Never implement on unknown dependent interfaces.
 Each implementation is assigned to a Luna agent at high reasoning effort with its saved spec.
 
+## Reviewed implementation proposals
+
+- [Activity interface](pr4-interface-design.md)
+- [Events, schedules and waits](pr5-interface-design.md)
+- [Human tasks and evidence](pr6-interface-design.md)
+- [Composition](pr7-interface-design.md)
+
+These proposals guide implementation; they are not proof of delivered behavior.
+The [review record](review-status.md) distinguishes implemented checks from pending work.
+
 ## Ownership and migration
 
 Workflows owns runs/attempts and deterministic progress. Control plane coordinates owner commands
