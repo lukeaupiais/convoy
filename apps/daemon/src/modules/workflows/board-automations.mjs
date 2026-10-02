@@ -36,7 +36,7 @@ export function boardAutomationRelationships({ boards, projects, workflows, rule
         ...(workflow ? { workflowName: workflow.name } : {}),
         available: Boolean(workflow), olderVersion: Boolean(workflow && latest.get(workflow.id)?.version !== workflow.version),
         projectId: rule.projectId, boardId: rule.when.boardId, columnId: rule.when.columnId,
-        ruleId: rule.id, ruleRevision: rule.revision, name: rule.name, label: rule.when.columnId ? `Enters ${board.columns.find(c => c.id === rule.when.columnId)?.name ?? 'unavailable column'}` : eventLabels[rule.when.event] ?? 'Unsupported event', event: rule.when.event, enabled: rule.enabled,
+        ruleId: rule.id, ruleRevision: rule.revision, name: rule.name, label: rule.when.columnId ? `Enters ${board.columns.find(c => c.id === rule.when.columnId)?.name ?? 'unavailable column'}` : eventLabels[rule.when.event] ?? 'Unavailable event', event: rule.when.event, enabled: rule.enabled,
         ...(decision ? { decision: {
           triggerKey: decision.triggerKey, status: decision.status, ruleRevision: decision.ruleRevision,
           workflowId: decision.workflowId, workflowVersion: decision.workflowVersion,

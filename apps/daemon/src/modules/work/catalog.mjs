@@ -273,11 +273,76 @@ export function createCatalog({ state, save, execution, externalTickets, context
   const boards = createBoards({ state, save, projects: state.projects, ticket, referencedColumn, referencedBoard });
   const syncingBindings = new Set();
   function recordColumnFacts(before, after, command = {}) {
-    if (command.workflowRunId) return;
     for (const transition of boards.columnTransitions(before, after)) {
       const key = `column:${after.id}:${after.revision}:${transition.boardId}`;
-      if (!state.workFacts.some(f => f.key === key)) state.workFacts.push({ id:key, key, event:'ticket_moved', projectId:after.projectId, ticketId:after.id, ...transition, status:'pending' });
+      if (!state.workFacts.some(f => f.key === key)) state.workFacts.push({ id:key, key, sourceEventId: key,
+        event:'ticket_moved', projectId:after.projectId, ticketId:after.id, ...transition,
+        payload: { ticketId: after.id, status: after.status, workType: after.workType ?? 'task',
+          boardId: transition.boardId, ...(transition.fromColumnId !== undefined ? { fromColumnId: transition.fromColumnId } : {}),
+          ...(transition.toColumnId !== undefined ? { toColumnId: transition.toColumnId } : {}) },
+        ...(command.workflowRunId ? { causation: { runId: command.workflowRunId, instance: command.workflowInstance } } : {}), status:'pending' });
     }
+  }
+  async function recordWorkflowCommandEvent(command, result) {
+    let eventNames = [];
+    if (command.action === 'createTicket' || command.action === 'createRelatedTicket') eventNames = ['ticket_created'];
+    else if (command.action === 'updateTicket') eventNames = ['ticket_updated'];
+    else if (command.action === 'setBoardPlacement' || command.action === 'clearBoardPlacement') eventNames = ['board_placement_changed'];
+    if (!eventNames.length) return;
+    const id = result?.id ?? result?.ticketId ?? command.ticketId ?? command.taskId;
+    const value = ticket(id);
+    if (!value) return;
+    const actionKey = command.idempotencyKey ?? command.requestId ?? `${command.action}:${value.id}:${result?.revision ?? value.revision}`;
+    for (const event of eventNames) {
+      const key = `command:${event}:${actionKey}`;
+      if (state.workFacts.some(fact => fact.key === key)) continue;
+      state.workFacts.push({ id: key, key, sourceEventId: actionKey, event, projectId: value.projectId,
+        ticketId: value.id, ...(command.boardId ? { boardId: command.boardId } : {}),
+        ...(result?.fromColumnId !== undefined ? { fromColumnId: result.fromColumnId } : {}),
+        ...(result?.toColumnId !== undefined ? { toColumnId: result.toColumnId } : {}),
+        payload: { ticketId: value.id, status: value.status, workType: value.workType ?? 'task',
+          ...(command.boardId ? { boardId: command.boardId } : {}),
+          ...(result?.fromColumnId !== undefined ? { fromColumnId: result.fromColumnId } : {}),
+          ...(result?.toColumnId !== undefined ? { toColumnId: result.toColumnId } : {}) },
+        ...(command.workflowRunId ? { causation: { runId: command.workflowRunId, instance: command.workflowInstance } } : {}),
+        status: 'pending' });
+    }
+    await save();
+  }
+  function pendingWorkflowEvents(limit = 500) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Invalid Work event page size.');
+    const rows = [
+      ...(state.workFacts ?? []).filter(fact => fact.status === 'pending').map(fact => ({ kind: 'work', fact })),
+      ...(state.ticketImportFacts ?? []).filter(fact => fact.status === 'pending').map(fact => ({ kind: 'import', fact })),
+    ].slice(0, limit);
+    return rows.flatMap(({ kind, fact }) => {
+      const current = ticket(fact.ticketId);
+      if (!current) return [];
+      const projectValue = state.projects.find(value => value.id === current.projectId);
+      return [{ kind, key: fact.key, organizationId: projectValue?.organizationId ?? 'personal',
+        projectId: current.projectId, event: fact.event, sourceId: `work.${current.projectId}`,
+        sourceEventId: fact.sourceEventId ?? fact.key,
+        payload: fact.payload ? structuredClone(fact.payload) : { ticketId: current.id, status: current.status, workType: current.workType ?? 'task',
+          ...(fact.boardId ? { boardId: fact.boardId } : {}),
+          ...(fact.fromColumnId !== undefined ? { fromColumnId: fact.fromColumnId } : {}),
+          ...(fact.toColumnId !== undefined ? { toColumnId: fact.toColumnId } : {}),
+          ...(fact.bindingId ? { bindingId: fact.bindingId } : {}),
+          ...(fact.messageId ? { messageId: fact.messageId } : {}) },
+        ...(fact.causation ? { causation: structuredClone(fact.causation) } : {}) }];
+    });
+  }
+  async function acknowledgeWorkflowEvent(kind, key) {
+    if (typeof key !== 'string' || key.length > 500) throw new Error('Invalid Work event identity.');
+    const collection = kind === 'import' ? state.ticketImportFacts : kind === 'work' ? state.workFacts : null;
+    if (!collection) throw new Error('Invalid Work event outbox owner.');
+    const fact = collection.find(value => value.key === key);
+    if (!fact) return false;
+    fact.status = 'observed';
+    await save();
+    if (kind === 'import') state.ticketImportFacts = state.ticketImportFacts.filter(value => value.status !== 'observed');
+    else state.workFacts = state.workFacts.filter(value => value.status !== 'observed');
+    await save();
+    return true;
   }
   async function importPage(c, source, remote, binding, runId, nextCursor) {
     const planned = []; let imported = 0; let updated = 0;
@@ -359,7 +424,9 @@ export function createCatalog({ state, save, execution, externalTickets, context
       const key = `${binding.id}:${change.next.id}:${event}:${remoteLink.remoteVersion}`;
       if (!state.ticketImportFacts.some(value => value.key === key)) state.ticketImportFacts.push({
         id: key, key, event, projectId: binding.projectId, bindingId: binding.id,
-        ticketId: change.next.id, status: source.capabilities?.threadRead ? 'awaiting_thread' : 'pending',
+        ticketId: change.next.id, payload: { ticketId: change.next.id, status: change.next.status,
+          workType: change.next.workType ?? 'task', bindingId: binding.id },
+        status: source.capabilities?.threadRead ? 'awaiting_thread' : 'pending',
       });
     }
     await save(); return { imported, updated };
@@ -400,7 +467,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
       if (!state.ticketImportFacts.some(value => value.key === key)) state.ticketImportFacts.push({
         id: key, key, event: 'ticket_message_received', projectId: t.projectId,
         bindingId: state.ticketImportBindings.find(value => value.connectionId === source.id && value.projectId === t.projectId)?.id,
-        ticketId: t.id, messageId: message.remoteId, status: 'pending',
+        ticketId: t.id, messageId: message.remoteId, payload: { ticketId: t.id, status: t.status,
+          workType: t.workType ?? 'task', messageId: message.remoteId,
+          ...(state.ticketImportBindings.find(value => value.connectionId === source.id && value.projectId === t.projectId)?.id
+            ? { bindingId: state.ticketImportBindings.find(value => value.connectionId === source.id && value.projectId === t.projectId).id } : {}) }, status: 'pending',
       });
     }
     for (const fact of state.ticketImportFacts)
@@ -953,6 +1023,11 @@ export function createCatalog({ state, save, execution, externalTickets, context
     },
     workflowMutationReceipt(command) {
       return workflowMutationReceiptFor(command);
+    },
+    workflowEvents: {
+      recordCommand: recordWorkflowCommandEvent,
+      pending: pendingWorkflowEvents,
+      acknowledge: acknowledgeWorkflowEvent,
     },
     workflowActivityEvidence,
     latestDeliveredWorkflowReply,

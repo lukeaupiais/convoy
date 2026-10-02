@@ -20,17 +20,33 @@ export function initializeAutomations(state) {
   state.automations ??= [];
 }
 
-export function createAutomations({ state, save, capabilities, authorizeRule = async () => {} }) {
+export function createAutomations({ state, save, capabilities, eventDescriptors = [], authorizeRule = async () => {} }) {
   initializeAutomations(state);
   function validate(rule) {
     if (!rule.when || !rule.then || !Array.isArray(rule.if) || rule.then.action !== 'start_workflow')
       throw new Error('Automation requires When, If and Then.');
     if (['event','boardId','columnId','bindingId','workType','workflowId','workflowVersion','migratedFrom'].some(key => Object.hasOwn(rule,key)))
       throw new Error('Legacy automation fields are not supported.');
-    if (Object.keys(rule.when).some(key => !['event','boardId','columnId','bindingId'].includes(key)) || Object.keys(rule.then).some(key => !['action','workflowId','workflowVersion'].includes(key))) throw new Error('Unsupported automation fields.');
+    if (Object.keys(rule.when).some(key => !['event','eventRevision','boardId','columnId','bindingId'].includes(key)) ||
+        Object.keys(rule.then).some(key => !['action','workflowId','workflowVersion'].includes(key)) ||
+        rule.concurrency !== undefined && (!rule.concurrency || typeof rule.concurrency !== 'object' || Array.isArray(rule.concurrency) ||
+          Object.keys(rule.concurrency).some(key => !['policy','maxActiveRuns','overflowPolicy'].includes(key))))
+      throw new Error('Unsupported automation fields.');
     const event = capabilities.events.find(value => value.id === rule.when.event);
     if (!event) throw new Error('Unsupported automation event.');
-    if (rule.if.length > 20 || rule.if.some(condition => !event.fields.includes(condition.field) || condition.operator !== 'equals' || typeof condition.value !== 'string' || Object.keys(condition).some(key => !['field','operator','value'].includes(key))))
+    const descriptor = eventDescriptors.find(value => value.id === event.descriptorId || value.aliases?.includes(event.id) || value.id === event.id);
+    if (rule.when.eventRevision !== undefined && (!Number.isInteger(rule.when.eventRevision) || rule.when.eventRevision < 1 || descriptor && rule.when.eventRevision !== descriptor.revision))
+      throw new Error('Choose an available workflow event revision.');
+    if (rule.if.length > 20 || rule.if.some(condition => {
+      const path = condition?.path ?? condition?.field;
+      const fieldDeclared = (event.fields ?? []).includes(path) || descriptor?.payload.some(field => field.path === path);
+      const validValue = condition.operator === 'exists'
+        ? condition.value === undefined || typeof condition.value === 'boolean'
+        : ['equals', 'notEquals'].includes(condition.operator)
+          ? ['string', 'number', 'boolean'].includes(typeof condition.value)
+          : ['greaterThan', 'lessThan'].includes(condition.operator) && typeof condition.value === 'number';
+      return !condition || !fieldDeclared || !validValue || Object.keys(condition).some(key => !['field','path','operator','value'].includes(key));
+    }))
       throw new Error('Unsupported automation condition.');
     workflowForProject(state, rule.then.workflowId, rule.then.workflowVersion, rule.projectId);
     if (!Number.isInteger(rule.then.workflowVersion) || rule.then.workflowVersion < 1) throw new Error('Choose a published workflow version.');
@@ -48,6 +64,10 @@ export function createAutomations({ state, save, capabilities, authorizeRule = a
       if (!board || !board.projectIds.includes(rule.projectId) || columnId && !board.columns.some(value => value.id === columnId))
         throw new Error('Automation board binding is unavailable.');
     }
+    if (rule.concurrency && (!['reject', 'hold', 'independent'].includes(rule.concurrency.policy) ||
+        !Number.isInteger(rule.concurrency.maxActiveRuns ?? 1) || (rule.concurrency.maxActiveRuns ?? 1) < 1 ||
+        (rule.concurrency.maxActiveRuns ?? 1) > 100 || rule.concurrency.overflowPolicy !== undefined &&
+        !['reject', 'hold'].includes(rule.concurrency.overflowPolicy))) throw new Error('Invalid automation concurrency policy.');
   }
   return {
     validate,
@@ -70,8 +90,12 @@ export function createAutomations({ state, save, capabilities, authorizeRule = a
       const actor = previous?.principal ?? principal;
       if (input.enabled && (!actor || !['user','workload'].includes(actor.kind))) throw new Error('Enabled automation needs a governed principal.');
       if (input.enabled) await authorizeRule(project.id, actor);
+      const event = capabilities.events.find(value => value.id === input.when.event);
+      const descriptor = eventDescriptors.find(value => value.id === event?.descriptorId || value.aliases?.includes(event?.id) || value.id === event?.id);
+      const when = { ...structuredClone(input.when), ...(descriptor && input.when.eventRevision === undefined ? { eventRevision: descriptor.revision } : {}) };
       const rule = { id, name: input.name.trim(), organizationId: project.organizationId, projectId: project.id,
-        when: structuredClone(input.when), if: structuredClone(input.if), then: structuredClone(input.then),
+        when, if: structuredClone(input.if), then: structuredClone(input.then),
+        ...(input.concurrency ? { concurrency: structuredClone(input.concurrency) } : {}),
         enabled: Boolean(input.enabled), principal: actor, revision: (previous?.revision ?? 0) + 1 };
       if (previous) Object.assign(previous, rule); else state.automations.push(rule);
       await save(); return structuredClone(rule);

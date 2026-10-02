@@ -257,7 +257,7 @@ export type AutomationDecisionFailure = {
   at?: string;
 };
 export type AutomationDecision = AutomationDecisionFailure & {
-  status: 'pending' | 'started' | 'failed' | 'conflict' | 'blocked_active' | 'coalesced';
+  status: 'pending' | 'reserved' | 'started' | 'failed' | 'held' | 'conflict' | 'blocked_active' | 'coalesced';
   ruleId?: string;
   ruleRevision?: number;
   activeSessionId?: string;

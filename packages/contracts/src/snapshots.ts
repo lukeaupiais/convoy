@@ -96,6 +96,24 @@ export type RuntimeSnapshot = {
   workflowActivities?: WorkflowActivityDescriptor[];
   workflowActivitiesUnavailableTotal?: number;
   workflowActivitiesTruncated?: boolean;
+  workflowEventDescriptors?: {
+    id: string; revision: number; label: string; tenantScope: 'organization' | 'project' | 'resource';
+    payload: { path: string; type: 'string' | 'number' | 'boolean' | 'enum'; values?: string[]; required?: boolean }[];
+    correlationPaths: string[]; aliases: string[]; manual?: boolean;
+  }[];
+  workflowSchedules?: {
+    items: { id: string; name: string; organizationId: string; projectId: string; workflowId: string; workflowVersion: number;
+      schedule: Record<string, unknown>; missedFirePolicy: 'skip' | 'coalesce_once' | { catchUp: { maxFirings: number } };
+      enabled: boolean; revision: number; nextFireAt: string }[]; total: number; truncated: boolean;
+  };
+  workflowWebhookBindings?: { items: { id: string; name: string; descriptorId: string; descriptorRevision: number;
+    organizationId: string; projectId: string; servicePrincipalId: string; eventIdPath: string;
+    fieldMap: { targetPath: string; sourcePath: string }[]; enabled: boolean; revision: number; updatedAt: string }[];
+    total: number; truncated: boolean };
+  workflowEventDecisions?: { items: { key: string; status: string; projectId: string; organizationId: string;
+    subscriptionId: string; subscriptionRevision: number; ruleId?: string; ruleRevision?: number;
+    workflowId: string; workflowVersion: number; runId: string; ticketId?: number; sourceEventId?: string;
+    at: string; message?: string }[]; total: number; truncated: boolean };
   workflowRuns?: import('./model/workflows').WorkflowRun[];
   workflowRunsTotal?: number;
   workflowRunsTruncated?: boolean;

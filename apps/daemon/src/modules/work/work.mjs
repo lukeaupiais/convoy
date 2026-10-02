@@ -49,6 +49,7 @@ export function createWork({ afterCommand = async (_command, result) => result, 
     id: 'work',
     commands,
     catalog,
+    workflowEvents: catalog.workflowEvents,
     snapshot({ scope } = {}) {
       const value = catalog.snapshot();
       if (!scope) return value;
@@ -91,6 +92,7 @@ export function createWork({ afterCommand = async (_command, result) => result, 
       const result = await (boardCommands.has(command.action)
         ? catalog.boards.command(command)
         : catalog.command(command));
+      await catalog.workflowEvents.recordCommand(command, result);
       return afterCommand(command, result, context);
     },
   };
