@@ -26,3 +26,12 @@ Use two unrelated activity schemas/configurations. Assert current permission/lea
 relevant; preserve existing exact attempt APIs. Do not weaken failed assertions to accept broad
 statuses. Report actual runtime evidence vs blocked capability, send findings owner4/root, and run
 file after owner fixes. Do not change tests owned by another agent.
+
+Supplemental Spec-review crash gaps, assigned to the same Luna high helper:
+- An approved required-gate durable activity loses acknowledgement after applying.
+  Reconciliation must use its exact persisted consumed reservation and current
+  authority; it may not lose approval proof or dispatch the effect again.
+- A process dies after its validated completed receipt is durably saved but before
+  its graph transition is saved. Restart must finish the same run/attempt using
+  that immutable receipt without redispatch. Exercise the actual checkpoint with
+  a child process and bounded fault barrier rather than editing status strings.

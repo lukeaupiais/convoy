@@ -137,3 +137,20 @@ Written helper assignments: pr4-acceptance-spec.md, pr4-lifecycle-acceptance-spe
 pr4-ui-authoring-spec.md. Existing Luna high agents assist PR4 with nonoverlapping test/UI files;
 PR4 owner retains backend/gate integration and the final scoped commit. Final immutable two-axis
 review, required checks, regression acceptance and exact-head remote CI remain mandatory.
+
+Parent follow-up runtime run: 17 tests, 15 pass and 2 fixture-maintenance failures
+(`/tmp/convoy-automation-series/pr4-parent-lifecycle-approval.log`). All five actual
+lifecycle cases and exact prepared approval acceptance pass. Remaining test updates
+track the explicit ready-before-dispatch checkpoint and newly required approval
+reservation; they may not weaken identity or no-replay assertions. Runner-only
+local/SSH/no-placement activity cases pass; the independent automated check case
+remains pending canonical authorization/resource integration.
+
+Further preliminary Spec review identified lost consumed reservation proof during
+reconciliation and a crash between durable completion receipt and graph advancement.
+Both fixes and actual fault-gap cases are required before acceptance. The approval
+preview also needs generic complete material disclosure: no silently truncated reply
+body or Work-field heuristics selecting a generic integration's effect summary.
+The supplemental exact-approval spec records these requirements. UI browser proof
+currently accepts ordinary payload JSON invalid-edit protection and empty drafts;
+run-input schema persistence and the corrected enum/prompt UI remain pending.

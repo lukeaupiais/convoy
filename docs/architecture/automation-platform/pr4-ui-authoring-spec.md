@@ -43,3 +43,13 @@ compact prepare/review action and current prepared state. Keep legacy gates func
 run command use is verified in acceptance; full independent Runs/form surface is PR6, not this scope.
 Read each feature's README and use its public index. Root must review every additional file and
 ordinary gate behavior. Do not introduce instructional paragraphs or promise delivery at approval.
+
+## Codec and empty draft clarification
+
+Authoring ownership includes `workflow-codec.ts`: preserve runInputSchema, resultSchema and
+resultBindings through fromWorkflow/toWorkflow/save/publish. A schema displayed in the editor
+must reach publication unchanged rather than fall back to an empty contract. The unconfigured
+blank template must have empty nodes/edges and no entry; adding a stage explicitly chooses its
+kind through existing controls. Preserve explicit development templates and stored workflows.
+An empty draft may be saved but cannot be published. Test round-trip data contract preservation
+and empty draft behavior, and verify no agent is seeded by entering an unconfigured editor.

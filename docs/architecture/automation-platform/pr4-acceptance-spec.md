@@ -53,3 +53,20 @@ runner tool need. The provider turn must begin without acquiring a runner/worksp
 requirements cannot block it. Use bounded injected provider/runner fixture ports, assert no
 runner dispatch and preserve cleanup. Report actual unresolved boundary conflicts to root;
 do not bypass execution grants or edit product code to manufacture proof.
+
+## Parent-owned runner activity acceptance
+
+Root owns only new `tests/acceptance/workflow-runner-activities.test.mjs` in the PR4 worktree.
+Use the bootstrap facade, disposable state, a controlled deterministic transform and canonical
+project placement. A configured runner is provisioned/diffed only once the runner activity becomes
+active; no conversation/session/provider is created. With placement none, the pure node completes
+and the active runner node holds truthfully without any runner dispatch. No production file edits
+are part of this parent assignment. The PR4 owner integrates this file in its scoped commit;
+independent reviewers review its behavioral proof with the final frozen diff.
+
+The parent runner acceptance also covers an independent automated check on a pinned
+runner under the existing `inspect` execution profile. It must enter canonical
+Execution placement and authorization, run one configured read-only shell check,
+and complete with zero sessions or provider calls. It must not bypass approval
+policy or synthesize an agent conversation. Profiles requiring interactive approval
+must remain held until an actual authorized decision exists.
