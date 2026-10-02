@@ -285,7 +285,8 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     const reservation = owner.activityReservationForActivation(session ?? run, node.id) ??
       owner.activityReservationForAttempt(run, node.id, instance);
     const context = { run, session, node, instance, signal, owner, ...(reservation ? { activityReservation: reservation } : {}) };
-    await authorizeActivity(run, descriptor, node, reservation);
+    const authorization = await authorizeActivity(run, descriptor, node, reservation);
+    if (authorization?.model) context.model = authorization.model;
     if (run.attempt?.instance !== instance || run.attempt?.nodeId !== node.id)
       throw new Error('Workflow activity attempt changed before dispatch.');
     if (run.attempt.outputDigest) return structuredClone(run.attempt.output);
@@ -404,6 +405,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     // allocate the node's provider, runner, or workspace resources; dispatch
     // rechecks all active grants after that node becomes active.
     const authorization = await authorizeActivity(run, descriptor, node, approvalReservation, { phase: 'prepare' });
+    if (authorization?.model) context.model = authorization.model;
     const intent = await implementation.prepare(input, identity, context);
     if (!intent || typeof intent !== 'object' || Array.isArray(intent) || Buffer.byteLength(JSON.stringify(intent)) > 16_000)
       throw new Error('Activity adapter prepared an invalid or oversized intent.');
@@ -449,12 +451,13 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       if (node.activityDescriptorDigest && activityDigest(descriptor) !== node.activityDescriptorDigest)
         throw new Error('Pinned activity metadata changed; reconciliation is blocked.');
       const reservation = owner.activityReservationForAttempt(run, node.id, command.instance);
-      await authorizeActivity(run, descriptor, node, reservation);
+      const authorization = await authorizeActivity(run, descriptor, node, reservation);
       if (run.attempt?.instance !== command.instance || run.attempt.nodeId !== node.id ||
           JSON.stringify(run.attempt.activityRef) !== JSON.stringify(ref) || !run.attempt.intent)
         throw new Error('Workflow activity intent is unavailable for reconciliation.');
       const input = owner.resolveActivityInput(run, node);
-      const result = await implementation.reconcile({ run, session, node, instance: command.instance, owner }, input,
+      const result = await implementation.reconcile({ run, session, node, instance: command.instance, owner,
+        ...(authorization?.model ? { model: authorization.model } : {}) }, input,
         structuredClone(run.attempt.intent), { requestedResolution: command.resolution });
       if (!result || !['applied', 'not_applied', 'unknown', 'waiting'].includes(result.state))
         throw new Error('Activity adapter returned an invalid reconciliation result.');

@@ -49,7 +49,10 @@ session IDs, workspace paths, runner assignments, or execution grants; an adapte
 that needs those values cannot prepare an approval intent and fails the command.
 Resource and Library checks run again when the approved activity becomes active; a
 grant revoked after review blocks dispatch without replaying or changing the approved
-intent.
+intent. Registered agent adapters receive the selected, authorized provider as
+`context.model` for prepare, dispatch, confirmation, and reconciliation. A linked
+`session.model` remains the conversation default; it does not override a different
+model selected on the active node.
 
 Agent submissions capture every declared artifact as an immutable, content-addressed
 review package. Human decisions apply to that captured submission; the mutable

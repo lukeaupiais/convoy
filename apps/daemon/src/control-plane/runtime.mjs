@@ -1109,6 +1109,7 @@ export async function createRuntime({
       const needsAgent = resources.location === 'agent';
       const session = run.sessionId ? state.sessions[run.sessionId] : null;
       const resourceContext = session ?? run;
+      let authorizedModel;
       if (phase === 'prepare') {
         // Gate preparation is deliberately resource independent. Validate the
         // selected provider against the run principal now, then reacquire the
@@ -1117,7 +1118,7 @@ export async function createRuntime({
           const selectedModel = node?.model ?? run.flow?.model ?? session?.model;
           if (!selectedModel) throw new Error('Select a provider model before preparing this activity.');
           await authorizeProjectModel(selectedModel, run.projectId, run.principal);
-          return { resourcePins: { model: selectedModel } };
+          return { model: selectedModel, resourcePins: { model: selectedModel } };
         }
         return { resourcePins: {} };
       }
@@ -1141,6 +1142,7 @@ export async function createRuntime({
           const nodeCapabilities = new Set(capabilities.modelTools(session, node).map(tool => tool.name));
           if ((resources.tools ?? []).some(name => !nodeCapabilities.has(name)))
             throw new Error('The pinned activity requires tools outside this node’s current Library capability profile.');
+          authorizedModel = activeModel;
         }
         if (phase !== 'prepare' && (resources.location === 'runner' || resources.workspace) &&
             (!resourceContext.workspace || !resourceContext.runnerId || !resourceContext.executionGrant || !resourceContext.assignment)) {
@@ -1166,6 +1168,7 @@ export async function createRuntime({
           }
         }
       }
+      return authorizedModel ? { model: authorizedModel } : {};
     },
   });
   const verification = createVerificationCoordinator({execution, catalog, runners, runnerFor, commandLogs,

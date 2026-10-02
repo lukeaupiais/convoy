@@ -212,6 +212,60 @@ test('each linked agent activity revalidates its own model before its adapter ru
   assert.equal(counters.agentDispatch, 1, 'the second node model must be checked before adapter dispatch');
 });
 
+test('each registered agent adapter receives its exact selected model on a shared linked session', { timeout: 20000 }, async t => {
+  const observed = [];
+  const activity = [{
+    descriptor: {
+      ref: { id: 'records.model-check', revision: 1 }, inputSchema: emptyObject, outputSchema: acceptedOutput,
+      resources: { location: 'agent', provider: 'required', workspace: false, tools: [] },
+      effect: 'pure', approval: { required: false }, cancellation: 'immediate',
+      confirmation: 'result', reconciliation: 'none', presentation: { label: 'Check selected model' },
+    },
+    implementation: {
+      async prepare(_input, _identity, context) {
+        observed.push({ phase: 'prepare', nodeId: context.node.id, model: context.model,
+          sessionModel: context.session?.model, sessionId: context.session?.id });
+        return {};
+      },
+      async dispatch(context) {
+        observed.push({ phase: 'dispatch', nodeId: context.node.id, model: context.model,
+          sessionModel: context.session?.model, sessionId: context.session?.id });
+        return { state: 'completed', output: { accepted: true } };
+      },
+    },
+  }];
+  const f = await fixture(t, { models: [{ id: 'fixture-a' }, { id: 'fixture-b' }], workflowActivities: activity });
+  const project = await f.act('saveProject', { name: 'Per-activity provider selection' });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  const workflow = {
+    id: 'per-activity-provider-selection', name: 'Per-activity provider selection',
+    nodes: [
+      { id: 'first', name: 'Use provider A', kind: 'action', model: 'fixture-a',
+        activity: { id: 'records.model-check', revision: 1 }, bindings: {} },
+      { id: 'second', name: 'Use provider B', kind: 'action', model: 'fixture-b',
+        activity: { id: 'records.model-check', revision: 1 }, bindings: {} },
+    ],
+    edges: [{ from: 'first', to: 'second', outcome: 'success' }],
+  };
+  await f.act('saveWorkflow', { projectId: project.id, workflow });
+  const { workflowRunId } = await f.act('startWorkflowRun', { projectId: project.id, workflowId: workflow.id, workflowVersion: 1 });
+  const run = await waitForRun(f.act, workflowRunId, value => ['completed', 'failed'].includes(value.status),
+    'Per-activity provider selection did not settle.');
+  assert.equal(run.status, 'completed', JSON.stringify(run));
+  assert.deepEqual(observed.map(({ phase, nodeId, model }) => ({ phase, nodeId, model })), [
+    { phase: 'prepare', nodeId: 'first', model: 'fixture-a' },
+    { phase: 'dispatch', nodeId: 'first', model: 'fixture-a' },
+    { phase: 'prepare', nodeId: 'second', model: 'fixture-b' },
+    { phase: 'dispatch', nodeId: 'second', model: 'fixture-b' },
+  ]);
+  const sessionIds = new Set(observed.map(value => value.sessionId));
+  assert.equal(sessionIds.size, 1, 'the run should reuse its single linked provider session');
+  assert.ok(sessionIds.values().next().value);
+  assert.ok(observed.every(value => value.sessionModel === 'fixture-a'),
+    'node selection is explicit adapter context, while linked session model metadata remains its original choice');
+  assert.equal(run.activityAttempts.filter(value => value.status === 'completed').length, 2);
+});
+
 function toolActivity(counters, { workspace = false } = {}) {
   return [{
     descriptor: {
