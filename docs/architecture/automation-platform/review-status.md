@@ -283,3 +283,41 @@ preserve both the PR4 safe attempt/private material projection and the exact cal
 read, plus both run/activity command results. Architecture/build and eight focused run UI,
 authority and exact-approval cases pass before full6 starts. Composition remains dependency
 ordered on reviewed integrated5+6; its Luna high owner4 has read-only seam notes ready.
+
+## PR4 broader verification correction
+
+Root reran unchanged `npm run test:modules` at5fa4ba8: 393 tests,384 pass,9 explicit
+prerequisite skips,zero failures (79.7s). The previous 50-second command-supervisor
+diagnostic was premature: that suite intentionally includes a 61-second process test.
+
+The unchanged full `npm test` then reproduced a capacity-foundation acceptance failure
+(static capacity timeout after5s) and the failed fixture left its runtime alive. Root
+stopped that disposable run and requested cancellation of both stalled old-head remote
+system jobs; checks/desktop passed but system is not verified. Saved corrective assignment:
+pr4-capacity-verification-spec.md. Owner4 investigates the active legacy-agent resource
+and capacity seam, preserves active-only acquisition and capacity assertions, and ensures
+fixture cleanup on failure. PR5/6 continue on5fa4ba8 and will integrate the reviewed fix.
+
+## PR4 capacity and legacy pin corrections
+
+Owner4 froze9cd70abc0161d70389d0ea6fabc0176c6ff8e53b over5fa4ba8. The ordinary/legacy
+agent launch path acquired configured placement but ignored text-only/capacity outcomes
+unless the graph required an artifact/check. The correction makes configured placement
+required for that active legacy turn and excludes registered activities, preserving the
+provider-only no-runner case. Capacity fixture cleanup now releases/close/removes on
+failure and keeps its original capacity/provision assertions. Runtime fixtures select
+explicit workflow IDs because implicit latest-graph selection was intentionally removed.
+
+Legacy organization/version are interpreted as personal/v1 at selection/publication,
+with original stored bytes unchanged. Root found the exact workflowForProject lookup
+also needed that version interpretation; follow-up228f40b0330bc4bdb749f8df6cc1ec90224d52d4
+adds the missing-version exact lookup and cross-organization/immutable-byte regression.
+Spec peer review accepts both immutable deltas. Standards peer accepts both immutable deltas, including the root follow-up blocker correction.
+
+Root full system after the capacity correction:611 tests,600 pass,11 explicit prerequisite
+skips,zero failures (130.35s), logpr4-9cd70ab-full-system.log. Final228f40b architecture/build
+and39 focused capacity/agent-resource/workflow/automation tests pass,zero skips/failures.
+The prior old-head CI system runs were cancelled after exposing the same defect. Root
+will publish the corrected head and verify its exact-head full remote CI.
+
+Corrected PR4 head228f40b is published; exact-head remote CI read-back is pending.

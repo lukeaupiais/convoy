@@ -60,3 +60,11 @@ weaken checks. Do not add filler UI copy. Do not push, merge, deploy, or message
 root will review commits, publish draft PRs, and verify remote CI. Commit only scoped changes.
 Each handoff identifies base/head commits, spec path, changed ownership, tests/results,
 compatibility behavior, and known limitations. Ask root about genuine specification conflicts.
+
+## Relative deadline semantics
+
+The initial optional human deadline is pinned as an absolute due timestamp when the node
+activates. It persists across restart and is presented as due/overdue state; it does not
+select an outcome, expire authority or automatically authorize an effect. Test the same
+attempt's due timestamp survives restart and unrelated metadata edits. Reuse the Workflow
+owner/serialized runtime tick when later composition needs a durable timeout transition.
