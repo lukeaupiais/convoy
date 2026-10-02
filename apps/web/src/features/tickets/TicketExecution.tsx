@@ -349,18 +349,13 @@ export function TicketExecution({
                     .map((skill) => `${skill.name} v${skill.version}`)
                     .join(', ') || 'None'}
                 </p>
-                <p>
-                  Each stage further limits tools through its permissions. Runner support and
-                  workspace policy apply at execution.
-                </p>
               </>
             )}
           </details>
           <p className="execution-note">
             {target === 'new'
               ? 'Uses the ticket description as context. Prior conversation history and worktrees are not copied.'
-              : 'Keeps this conversation’s context and existing worktree.'}{' '}
-            Board columns change only through configured actions.
+              : 'Keeps this conversation’s context and existing worktree.'}
           </p>
           {!state.auth.connected && (
             <p role="status">Connect your provider account in Chat before starting.</p>

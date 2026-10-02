@@ -34,6 +34,18 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   }
   node.advance = original.advance ?? 'automatic';
   if (!['automatic', 'manual'].includes(node.advance)) throw new Error(`${node.name}: choose automatic or manual advancement.`);
+  if (node.decisionLabels !== undefined) {
+    const labels = node.decisionLabels;
+    const supported = ['approved', 'changes_requested'];
+    if (node.kind !== 'human' || !labels || typeof labels !== 'object' || Array.isArray(labels) ||
+        Object.keys(labels).some(outcome => !supported.includes(outcome)))
+      throw new Error(`${node.name}: decision labels must use supported human outcomes.`);
+    for (const outcome of supported) if (Object.hasOwn(labels, outcome) &&
+        (typeof labels[outcome] !== 'string' || !labels[outcome].trim() || labels[outcome].length > 80 || /[\u0000-\u001f\u007f]/.test(labels[outcome])))
+      throw new Error(`${node.name}: decision labels must be plain text up to 80 characters.`);
+    node.decisionLabels = Object.fromEntries(supported.filter(outcome => Object.hasOwn(labels, outcome)).map(outcome => [outcome, labels[outcome].trim()]));
+    if (!Object.keys(node.decisionLabels).length) delete node.decisionLabels;
+  }
   delete node.phase;
   if (node.artifact) {
     required(node.artifact.path, 'Artifact path', 200);

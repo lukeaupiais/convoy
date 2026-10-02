@@ -1240,6 +1240,46 @@ function NodeInspector({
           </select>
         </label>
       )}
+      {node.type === 'approval' && (
+        <details open={!!node.decisionLabels}>
+          <summary>Decision labels</summary>
+          <label>
+            Approved
+            <input
+              value={node.decisionLabels?.approved ?? ''}
+              placeholder="Approve"
+              maxLength={80}
+              onChange={(event) => {
+                const value = event.target.value;
+                const decisionLabels = { ...node.decisionLabels, approved: value || undefined };
+                if (!decisionLabels.approved) delete decisionLabels.approved;
+                onPatch(node.id, {
+                  decisionLabels: Object.keys(decisionLabels).length ? decisionLabels : undefined,
+                });
+              }}
+            />
+          </label>
+          <label>
+            Changes requested
+            <input
+              value={node.decisionLabels?.changes_requested ?? ''}
+              placeholder="Request changes"
+              maxLength={80}
+              onChange={(event) => {
+                const value = event.target.value;
+                const decisionLabels = {
+                  ...node.decisionLabels,
+                  changes_requested: value || undefined,
+                };
+                if (!decisionLabels.changes_requested) delete decisionLabels.changes_requested;
+                onPatch(node.id, {
+                  decisionLabels: Object.keys(decisionLabels).length ? decisionLabels : undefined,
+                });
+              }}
+            />
+          </label>
+        </details>
+      )}
       {(node.type === 'agent' || node.type === 'check' || node.type === 'approval') && (
         <details open={!!node.artifact}>
           <summary>Required document</summary>
@@ -1265,9 +1305,6 @@ function NodeInspector({
       {node.type === 'agent' && (
         <details open={presentationBindings.length > 0}>
           <summary>Material presentation</summary>
-          <p className="field-hint">
-            Optionally label this node’s summary, a declared detail field, or captured artifacts.
-          </p>
           {presentationBindings.map((binding, index) => (
             <div className="workflow-presentation-binding" key={`${binding.source}-${index}`}>
               <label>
@@ -1711,9 +1748,6 @@ function ActionFields({
           </label>
           {field('swimlaneKey', 'Swimlane (optional)')}
         </>
-      )}
-      {operation === 'inspect_changes' && (
-        <p className="field-hint">Uses the assigned workspace and records review evidence.</p>
       )}
     </details>
   );

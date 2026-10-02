@@ -1,4 +1,13 @@
-import type { Session, WorkflowEdge } from '../../shared/api/runtime';
+import type { Session, WorkflowEdge, WorkflowStep } from '../../shared/api/runtime';
+
+export function workflowDecisionLabel(
+  node: Pick<WorkflowStep, 'decisionLabels'> | undefined,
+  outcome: 'approved' | 'changes_requested',
+) {
+  return (
+    node?.decisionLabels?.[outcome] ?? (outcome === 'approved' ? 'Approve' : 'Request changes')
+  );
+}
 
 export function workflowDecisionCapabilities(
   nodeId: string,

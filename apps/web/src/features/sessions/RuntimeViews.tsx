@@ -268,23 +268,12 @@ export function SessionControls({
           >
             Send answer
           </button>
-          <p>Answering does not approve tools or advance a workflow gate.</p>
         </div>
       )}
       {showWorkflowInteraction && s.flow ? (
         <WorkflowRunInteraction
           session={s}
           working={working || !owned || !runtimeAvailable}
-          resolveReplyDestination={(connectionId) => {
-            const ticket = state.tickets.find(
-              (value) => String(value.id) === String(s.activeTicketId),
-            );
-            const connection = state.ticketConnections?.find((value) => value.id === connectionId);
-            const link = ticket?.externalLinks?.find(
-              (value) => value.connectionId === connectionId,
-            );
-            return { name: connection?.name, remoteId: link?.remoteKey ?? link?.remoteId };
-          }}
           actions={{
             approveGate: () => void act('approveGate', { instance: s.flow!.instance }),
             requestChanges: (revisionFeedback) =>

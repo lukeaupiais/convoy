@@ -92,6 +92,18 @@ test('workflow editor codec round-trips canonical graph nodes without leaking ed
   assert.deepEqual(validateWorkflow(editor), []);
 });
 
+test('decision labels survive draft codec round trips and invalid metadata is rejected', () => {
+  const draft = fromWorkflow({ id: 'configured-review', name: 'Configured review', nodes: [
+    { id: 'review', kind: 'human', name: 'Review result', prompt: 'Review the submitted result.',
+      decisionLabels: { approved: 'Record estimate', changes_requested: 'Recalculate' } },
+  ], edges: [] });
+  assert.deepEqual(toWorkflow(draft).nodes[0].decisionLabels,
+    { approved: 'Record estimate', changes_requested: 'Recalculate' });
+  assert.deepEqual(validateWorkflow(draft), []);
+  draft.nodes[0].decisionLabels = { publish: 'Publish' };
+  assert.match(validateWorkflow(draft).join(' '), /supported human outcomes/);
+});
+
 test('workflow editor validation catches unreachable nodes and invalid numeric branches before publication', () => {
   const editor = fromWorkflow({
     id: 'bad',

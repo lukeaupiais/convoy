@@ -16,10 +16,28 @@ const js = ts.transpileModule(
 const {
   workflowActivityHistory,
   workflowDecisionCapabilities,
+  workflowDecisionLabel,
   workflowNeedsRecovery,
   workflowRunOutput,
   workflowStatusLabel,
 } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
+
+test('two unrelated workflow configurations render their own decision labels with generic defaults', () => {
+  const inventory = {
+    board: 'Warehouse North', workType: 'CycleCount', status: 'AwaitingRecount',
+    review: { decisionLabels: { approved: 'Record estimate', changes_requested: 'Recalculate' } },
+  };
+  const editorial = {
+    board: 'Quarterly Journal', workType: 'Essay', status: 'CopyDeskHold',
+    review: { decisionLabels: { approved: 'Publish draft', changes_requested: 'Revise copy' } },
+  };
+  assert.equal(workflowDecisionLabel(inventory.review, 'approved'), 'Record estimate');
+  assert.equal(workflowDecisionLabel(editorial.review, 'approved'), 'Publish draft');
+  assert.equal(workflowDecisionLabel(inventory.review, 'changes_requested'), 'Recalculate');
+  assert.equal(workflowDecisionLabel(editorial.review, 'changes_requested'), 'Revise copy');
+  assert.equal(workflowDecisionLabel(undefined, 'approved'), 'Approve');
+  assert.equal(workflowDecisionLabel(undefined, 'changes_requested'), 'Request changes');
+});
 
 test('workflow gate action capabilities depend on configured edges, independent of output materials', () => {
   const edges = [
@@ -417,7 +435,9 @@ test('recovery affordance is limited to blocked runs and uncertain execution or 
   assert.equal(workflowNeedsRecovery({ flow: { status: 'failed' } }), true);
   assert.equal(workflowNeedsRecovery({ assignment: { state: 'uncertain' } }), true);
   assert.equal(
-    workflowNeedsRecovery({ flow: { status: 'waiting_event', actionResult: { deliveryStatus: 'unknown' } } }),
+    workflowNeedsRecovery({
+      flow: { status: 'waiting_event', actionResult: { deliveryStatus: 'unknown' } },
+    }),
     true,
   );
   assert.equal(workflowNeedsRecovery({ flow: { status: 'running' } }), false);

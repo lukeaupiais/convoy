@@ -65,6 +65,8 @@ export type WorkflowSessionRule = {
   target?: string;
 };
 export type WorkflowArtifact = { path: string; headings: string[] };
+export type WorkflowDecisionOutcome = 'approved' | 'changes_requested';
+export type WorkflowDecisionLabels = Partial<Record<WorkflowDecisionOutcome, string>>;
 export type WorkflowActionOperation =
   'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'update_ticket' | 'move_ticket' | 'set_external_status' | 'send_external_reply';
 export type WorkflowConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
@@ -83,6 +85,8 @@ export type WorkflowStep = {
   kind: WorkflowNodeKind;
   prompt?: string;
   advance: WorkflowAdvance;
+  /** Optional human-facing labels for canonical decision outcomes; no route or authority effect. */
+  decisionLabels?: WorkflowDecisionLabels;
   artifact?: WorkflowArtifact;
   requiresCheck?: boolean;
   checkCommand?: string;

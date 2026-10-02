@@ -937,9 +937,6 @@ function App() {
                   )}
               </label>
             )}
-            <p className="muted">
-              Uses project placement by default. Configure an override in ticket details.
-            </p>
             <div className="workflow-actions">
               <span className="muted">
                 {newTaskPlacement ? 'Adding to selected board column' : 'Create a new ticket'}

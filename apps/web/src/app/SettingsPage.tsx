@@ -46,10 +46,6 @@ function InstructionPublisher({
               : 'Reusable by name';
   return (
     <>
-      <p className="muted">
-        <strong>AGENTS.md</strong> is the portable project format. Convoy publishes an immutable
-        copy so organization, user and project precedence stays explicit and inspectable.
-      </p>
       <form
         className="runtime-form"
         onSubmit={(event) => {
@@ -197,10 +193,6 @@ export function SettingsPage({
         ))}
       {view === 'Skills & instructions' && state && (
         <CapabilityLibrary state={state} projectId={projectId}>
-          <p className="muted">
-            Published versions are immutable. Apply them to a task from Chat before starting a run.
-            Browser-only drafts remain untouched.
-          </p>
           <InstructionPublisher
             state={state}
             working={working}

@@ -260,6 +260,26 @@ test('reply actions require a declared draft and a human approval route', () => 
   assert.throws(() => normalizeWorkflow({ ...workflow, nodes: [draft, review, { ...send, input: { ...send.input, body: 'Unreviewed text' } }] }), /submitted detail field/);
 });
 
+test('human decision labels normalize, pin with a run, and reject invalid metadata', async () => {
+  const workflow = normalizeWorkflow({ id: 'decision-labels', name: 'Decision labels', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', decisionLabels: { approved: 'Approve & send', changes_requested: 'Revise estimate' } },
+  ] }, { publishing: true });
+  assert.deepEqual(workflow.nodes[0].decisionLabels, { approved: 'Approve & send', changes_requested: 'Revise estimate' });
+  const session = { id: 'decision-labels-run', messages: [], checks: [], events: [], workflow };
+  const engine = createWorkflowEngine({ state: { sessions: { [session.id]: session } }, save: async () => {}, event: () => {}, launch: () => true });
+  await engine.start(session);
+  assert.deepEqual(session.workflow.nodes[0].decisionLabels, workflow.nodes[0].decisionLabels);
+  assert.throws(() => normalizeWorkflow({ id: 'unsupported-label', name: 'Unsupported label', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', decisionLabels: { cancelled: 'Cancel' } },
+  ] }), /supported human outcomes/);
+  assert.throws(() => normalizeWorkflow({ id: 'bad-label', name: 'Bad label', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', decisionLabels: { approved: '  ' } },
+  ] }), /plain text up to 80 characters/);
+  assert.throws(() => normalizeWorkflow({ id: 'wrong-node', name: 'Wrong node', nodes: [
+    { id: 'work', name: 'Work', kind: 'agent', decisionLabels: { approved: 'Proceed' } },
+  ] }), /supported human outcomes/);
+});
+
 test('approval preserves the captured draft and rejects a missing draft without advancing', async () => {
   const session = { id: 'reply', messages: [], checks: [], events: [], workspace: null, workflow: normalizeWorkflow({ id: 'reply', name: 'Reply', nodes: [
     { id: 'draft', name: 'Draft', kind: 'agent', submissionRequirements: { success: { fields: ['message'], minReferences: 0 } } },
