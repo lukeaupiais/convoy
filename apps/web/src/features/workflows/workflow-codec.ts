@@ -424,7 +424,11 @@ export function safeNode(raw: unknown, index: number): GraphNode {
             target: session?.target ? String(session.target) : undefined,
           }
         : undefined,
-    permissions: type === 'agent' ? String(value.permissions ?? node.permissions) : undefined,
+    permissions: type === 'agent'
+      ? String(value.permissions ?? node.permissions)
+      : type === 'action' && activity && typeof value.permissions === 'string'
+        ? value.permissions
+        : undefined,
     maxRounds:
       type === 'agent' && Number.isFinite(Number(value.maxRounds))
         ? Number(value.maxRounds)

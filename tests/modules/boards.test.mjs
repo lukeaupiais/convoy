@@ -14,6 +14,8 @@ const noExecution = () => ({
 
 function fixture() {
   const saved = [];
+  const externalThreads = {};
+  const threadReads = [];
   const state = {
     projects: [
       { id: 'alpha', name: 'Alpha', description: '', revision: 1, placement: { mode: 'none' } },
@@ -26,8 +28,14 @@ function fixture() {
     sessions: {},
   };
   const execution = noExecution();
-  const catalog = createCatalog({ state, save: async () => { saved.push(structuredClone(state)); }, execution });
-  return { state, catalog, saved };
+  const externalTickets = { listComments: async (_source, remoteId) => { threadReads.push(remoteId); return structuredClone(externalThreads[remoteId] ?? []); } };
+  const catalog = createCatalog({ state, save: async () => { saved.push(structuredClone(state)); }, execution, externalTickets });
+  return { state, catalog, saved, externalThreads, threadReads };
+}
+
+function addReplySource(fixture) {
+  fixture.state.ticketConnections.push({ id: 'source-a', organizationId: 'personal', enabled: true, capabilities: { threadRead: true } });
+  fixture.state.tickets[0].externalLinks = [{ connectionId: 'source-a', remoteId: 'remote-ticket' }];
 }
 
 test('migration creates one editable multi-project board without changing tickets', () => {
@@ -104,25 +112,61 @@ test('related-ticket evidence distinguishes an immutable receipt from a mutable 
   assert.equal(noReceipt.result.title, 'Later title', 'legacy projection may be available but is not an exact typed receipt');
 });
 
-test('Work reply evidence checks exact identity and scopes latest delivered selection to its project and run', () => {
-  const { catalog, state } = fixture();
+test('Work reply evidence checks exact identity and scopes latest delivered selection to its project and run', async () => {
+  const f = fixture(); const { catalog, state } = f; addReplySource(f);
   state.ticketReplies = [
     { id: 'reply-alpha', ticketId: 1, connectionId: 'source-a', body: 'Exact body', status: 'queued', deliveryStatus: 'delivered',
       workflowRunId: 'run-a', workflowInstance: 'instance-a', remoteId: 'remote-a', createdAt: '2026-09-01T00:00:00Z' },
     { id: 'reply-beta', ticketId: 2, connectionId: 'source-a', body: 'Foreign body', status: 'queued', deliveryStatus: 'delivered',
       workflowRunId: 'run-a', workflowInstance: 'instance-a', remoteId: 'remote-b', createdAt: '2026-09-02T00:00:00Z' },
   ];
-  state.ticketThreads = [{ id: 'source-a:1', ticketId: 1, connectionId: 'source-a', messages: [
-    { remoteId: 'remote-a', body: 'Exact body', direction: 'outbound', deliveryStatus: 'delivered' },
-  ] }];
+  f.externalThreads['remote-ticket'] = [
+    { remoteId: 'remote-a', body: 'Exact body', direction: 'outbound', deliveryStatus: 'delivered', authorRole: 'agent', createdAt: '2026-10-01T00:00:00Z' },
+  ];
+  state.ticketThreads = [{ id: 'source-a:1', ticketId: 1, connectionId: 'source-a', messages: structuredClone(f.externalThreads['remote-ticket']) }];
   const command = { action: 'postExternalTicketReply', requestId: 'reply-alpha', ticketId: 1,
     connectionId: 'source-a', body: 'Exact body', workflowRunId: 'run-a', workflowInstance: 'instance-a' };
   assert.equal(catalog.workflowActivityEvidence(command, 'alpha').reply.status, 'queued');
   assert.equal(catalog.workflowActivityEvidence({ ...command, body: 'Spoofed body' }, 'alpha').reply, null);
   assert.equal(catalog.workflowReplyConfirmation(command, 'alpha').state, 'completed');
   assert.equal(catalog.workflowReplyConfirmation(command, 'beta'), null);
-  assert.equal(catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' }).requestId, 'reply-alpha');
-  assert.equal(catalog.latestDeliveredWorkflowReply({ ticketId: 2, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' }), null);
+  assert.equal((await catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' })).requestId, 'reply-alpha');
+  assert.equal(await catalog.latestDeliveredWorkflowReply({ ticketId: 2, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' }), null);
+});
+
+test('latest Work reply selection ignores a newer pending reply even if its local delivery flag is stale', async () => {
+  const f = fixture(); const { catalog, state } = f; addReplySource(f);
+  state.ticketReplies = [
+    { id: 'reply-delivered', ticketId: 1, connectionId: 'source-a', body: 'Delivered body', status: 'queued',
+      deliveryStatus: 'pending', workflowRunId: 'run-a', remoteId: 'remote-delivered', createdAt: '2026-10-01T00:00:00Z' },
+    { id: 'reply-newer', ticketId: 1, connectionId: 'source-a', body: 'Pending body', status: 'queued',
+      deliveryStatus: 'delivered', workflowRunId: 'run-a', remoteId: 'remote-pending', createdAt: '2026-10-02T00:00:00Z' },
+  ];
+  f.externalThreads['remote-ticket'] = [
+    { remoteId: 'remote-delivered', body: 'Delivered body', direction: 'outbound', deliveryStatus: 'delivered', authorRole: 'agent', createdAt: '2026-10-01T00:00:00Z' },
+    { remoteId: 'remote-pending', body: 'Pending body', direction: 'outbound', deliveryStatus: 'queued', authorRole: 'agent', createdAt: '2026-10-02T00:00:00Z' },
+  ];
+  const selected = await catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' });
+  assert.equal(selected.requestId, 'reply-delivered');
+});
+
+test('Work reply selection accepts exact delivered thread evidence when its cached reply flag is pending', async () => {
+  const f = fixture(); const { catalog, state } = f; addReplySource(f);
+  state.ticketReplies = [{ id: 'reply-source-proof', ticketId: 1, connectionId: 'source-a', body: 'Exact delivered body',
+    status: 'queued', deliveryStatus: 'pending', workflowRunId: 'run-a', remoteId: 'remote-exact', createdAt: '2026-10-01T00:00:00Z' }];
+  f.externalThreads['remote-ticket'] = [
+    { remoteId: 'remote-exact', body: 'Exact delivered body', direction: 'outbound', deliveryStatus: 'delivered', authorRole: 'agent', createdAt: '2026-10-01T00:00:00Z' },
+  ];
+  const selected = await catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' });
+  assert.equal(selected.requestId, 'reply-source-proof');
+});
+
+test('Work reply selection rejects a foreign-organization connection before reading its thread', async () => {
+  const f = fixture(); addReplySource(f);
+  f.state.ticketConnections[0].organizationId = 'foreign-org';
+  await assert.rejects(f.catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a',
+    workflowRunId: 'run-a', projectId: 'alpha' }), /not available to this project/);
+  assert.deepEqual(f.threadReads, []);
 });
 
 test('boards can be created from editable templates and show multiple projects', async () => {

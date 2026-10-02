@@ -92,6 +92,7 @@ async function fixture(t, { models = [{ id: 'fixture' }], workflowActivities }) 
         runnerCalls.push(command.action);
         if (command.action === 'probe') return { repository: '/fixture', tools: ['read_file', 'shell'], shell: true };
         if (command.action === 'provision') return { path: '/fixture/agent-resource', branch: 'agent-resource' };
+        if (command.action === 'bind_execution') return {};
         if (command.action === 'remove') return {};
         assert.fail(`Unexpected runner action ${command.action}`);
       },
@@ -209,4 +210,215 @@ test('each linked agent activity revalidates its own model before its adapter ru
   assert.equal(second?.status, 'failed');
   assert.equal(counters.agentPrepare, 1, 'the second node model must be checked before preparing its intent');
   assert.equal(counters.agentDispatch, 1, 'the second node model must be checked before adapter dispatch');
+});
+
+function toolActivity(counters, { workspace = false } = {}) {
+  return [{
+    descriptor: {
+      ref: { id: 'records.inspect-file', revision: 1 }, inputSchema: emptyObject, outputSchema: acceptedOutput,
+      resources: { location: 'agent', provider: 'required', workspace, tools: ['read_file'] },
+      effect: 'pure', approval: { required: false }, cancellation: 'immediate',
+      confirmation: 'result', reconciliation: 'none', presentation: { label: 'Inspect file' },
+    },
+    implementation: {
+      async prepare(_input, _identity, context) {
+        counters.prepare += 1;
+        assert.ok(context.session?.currentAgentSessionId, 'the activity should receive a real provider session');
+        if (workspace) assert.ok(context.session?.workspace, 'the declared workspace requirement must be prepared before activity setup');
+        return {};
+      },
+      async dispatch(context) {
+        counters.dispatch += 1;
+        assert.ok(context.session?.currentAgentSessionId);
+        return { state: 'completed', output: { accepted: true } };
+      },
+    },
+  }];
+}
+
+function approvedToolActivity(counters) {
+  return [{
+    descriptor: {
+      ref: { id: 'records.approved-inspection', revision: 1 }, inputSchema: emptyObject, outputSchema: acceptedOutput,
+      resources: { location: 'agent', provider: 'required', workspace: true, tools: ['read_file'] },
+      effect: 'durable-effect', approval: { required: true, policy: 'workflow-gate' },
+      cancellation: 'reconcile-after-dispatch', confirmation: 'adapter-confirmed', reconciliation: 'adapter',
+      presentation: { label: 'Inspect approved file' },
+    },
+    implementation: {
+      async prepare(_input, identity, context) {
+        counters.prepare += 1;
+        assert.equal(context.session, null, 'preparing an approved intent must not acquire a provider session');
+        assert.equal(context.run.sessionId, undefined);
+        assert.equal(context.run.workspace, undefined, 'preparation must not allocate a workspace');
+        const intent = { idempotencyKey: identity.idempotencyKey, model: context.node.model };
+        counters.prepared.push({ runId: identity.runId, nodeId: identity.nodeId, instance: identity.instance, intent: structuredClone(intent) });
+        return intent;
+      },
+      async dispatch(context, _input, intent) {
+        counters.dispatch += 1;
+        assert.ok(context.session?.currentAgentSessionId, 'dispatch must use the lazily acquired provider session');
+        assert.ok(context.session?.workspace, 'dispatch must use the declared workspace');
+        assert.ok(context.session?.executionGrant?.digest, 'dispatch must use a current execution grant');
+        counters.dispatched.push({ runId: context.run.id, nodeId: context.node.id, instance: context.instance, intent: structuredClone(intent) });
+        return { state: 'completed', output: { accepted: true } };
+      },
+      async confirm() { return { state: 'completed', output: { accepted: true } }; },
+      async reconcile() { return { state: 'unknown' }; },
+    },
+  }];
+}
+
+async function configureWorkspaceProfile(f, name) {
+  let project = await f.act('saveProject', { name });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  await f.act('registerRunner', { name: `${name} runner`, kind: 'local', repository: '/fixture' });
+  const runner = (await f.snapshot()).runners[0];
+  project = await f.act('setPlacement', { projectId: project.id, revision: project.revision, placement: { mode: 'pinned', runnerId: runner.id } });
+  const profile = await f.act('publishProfile', { id: 'approved-file-inspection', name: 'Approved file inspection', tools: ['convoy.read_file'], skills: [] });
+  return { project, profile };
+}
+
+function approvalWorkflow(projectProfile, id) {
+  return {
+    id, name: id, capabilityProfile: { id: projectProfile.id, version: projectProfile.version },
+    nodes: [
+      { id: 'review', name: 'Review file inspection', kind: 'human', prompt: 'Approve the exact file inspection.' },
+      { id: 'inspect', name: 'Inspect approved file', kind: 'action', model: 'fixture', permissions: 'read',
+        activity: { id: 'records.approved-inspection', revision: 1 }, bindings: {} },
+    ],
+    edges: [{ from: 'review', to: 'inspect', outcome: 'approved' }],
+  };
+}
+
+async function prepareApprovedToolRun(f, project, profile, id) {
+  const workflow = approvalWorkflow(profile, id);
+  await f.act('saveWorkflow', { projectId: project.id, workflow });
+  const { workflowRunId } = await f.act('startWorkflowRun', { projectId: project.id, workflowId: workflow.id, workflowVersion: 1 });
+  const gate = await waitForRun(f.act, workflowRunId, run => run.status === 'waiting_gate', 'The required activity gate did not activate.');
+  await f.act('claimWorkflowRun', { workflowRunId });
+  const prepared = await f.act('prepareWorkflowActivity', { workflowRunId, gateInstance: gate.instance, targetNodeId: 'inspect' });
+  return { workflowRunId, gate, prepared };
+}
+
+test('required agent-resource approval prepares without resources and dispatches the same intent only after approval', { timeout: 20000 }, async t => {
+  const counters = { prepare: 0, dispatch: 0, prepared: [], dispatched: [] };
+  const f = await fixture(t, { workflowActivities: approvedToolActivity(counters) });
+  const { project, profile } = await configureWorkspaceProfile(f, 'Approved file inspection');
+  f.runnerCalls.length = 0;
+  const { workflowRunId, gate, prepared } = await prepareApprovedToolRun(f, project, profile, 'approved-file-inspection');
+
+  assert.equal(counters.prepare, 1);
+  assert.equal(counters.dispatch, 0);
+  assert.deepEqual(counters.prepared[0].intent, prepared.preview.intent);
+  assert.equal(counters.prepared[0].runId, workflowRunId);
+  assert.equal(counters.prepared[0].nodeId, 'inspect');
+  assert.match(counters.prepared[0].instance, /^[0-9a-f-]{36}$/i);
+  assert.equal((await f.snapshot()).sessions.length, 0, 'a ready approval preview must not attach a provider session');
+  assert.deepEqual(f.runnerCalls, [], 'approval preparation must not probe or provision the declared runner');
+
+  await f.act('decideWorkflowRun', { workflowRunId, instance: gate.instance, decision: 'approve',
+    activityReservationId: prepared.id, activityReservationDigest: prepared.digest });
+  const run = await waitForRun(f.act, workflowRunId, value => ['completed', 'failed'].includes(value.status), 'Approved agent-resource activity did not settle.');
+  assert.equal(run.status, 'completed', JSON.stringify(run));
+  assert.equal(counters.prepare, 1, 'the persisted approval intent must be reused without preparing a second identity');
+  assert.equal(counters.dispatch, 1);
+  assert.deepEqual(counters.dispatched, [counters.prepared[0]]);
+  assert.equal(counters.dispatched[0].intent.idempotencyKey, `${workflowRunId}:${counters.dispatched[0].instance}`);
+  assert.ok(f.runnerCalls.includes('provision'), 'workspace acquisition begins only after the approval is consumed');
+  const session = (await f.snapshot()).sessions.find(value => value.id === run.sessionId);
+  assert.ok(session?.currentAgentSessionId);
+  assert.ok(session?.workspace);
+  assert.ok(session?.executionGrant?.digest);
+});
+
+test('approval preview cannot preserve a tool grant revoked before the approved activity activates', { timeout: 20000 }, async t => {
+  const counters = { prepare: 0, dispatch: 0, prepared: [], dispatched: [] };
+  const f = await fixture(t, { workflowActivities: approvedToolActivity(counters) });
+  const { project, profile } = await configureWorkspaceProfile(f, 'Revoked file inspection');
+  f.runnerCalls.length = 0;
+  const { workflowRunId, gate, prepared } = await prepareApprovedToolRun(f, project, profile, 'revoked-file-inspection');
+  assert.equal(counters.prepare, 1);
+  assert.equal(counters.dispatch, 0);
+  assert.equal((await f.snapshot()).sessions.length, 0);
+  assert.deepEqual(f.runnerCalls, []);
+
+  await f.act('setToolEnabled', { id: 'convoy.read_file', enabled: false });
+  await f.act('decideWorkflowRun', { workflowRunId, instance: gate.instance, decision: 'approve',
+    activityReservationId: prepared.id, activityReservationDigest: prepared.digest });
+  const run = await waitForRun(f.act, workflowRunId, value => ['completed', 'failed'].includes(value.status), 'Revoked activity authority did not settle.');
+  assert.equal(run.status, 'failed', JSON.stringify(run));
+  assert.equal(counters.prepare, 1, 'the approved preview cannot be replaced with a wider preparation');
+  assert.equal(counters.dispatch, 0, 'current Library authority is rechecked before adapter dispatch');
+  assert.equal(counters.dispatched.length, 0);
+  assert.ok(run.activityAttempts.find(value => value.nodeId === 'inspect')?.status === 'failed');
+});
+
+test('a registered agent activity can use declared workspace tools under current Library and runner grants', { timeout: 20000 }, async t => {
+  const counters = { prepare: 0, dispatch: 0 };
+  const f = await fixture(t, { workflowActivities: toolActivity(counters, { workspace: true }) });
+  let project = await f.act('saveProject', { name: 'Authorized file inspection' });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  await f.act('registerRunner', { name: 'Authorized file runner', kind: 'local', repository: '/fixture' });
+  const runner = (await f.snapshot()).runners[0];
+  project = await f.act('setPlacement', { projectId: project.id, revision: project.revision, placement: { mode: 'pinned', runnerId: runner.id } });
+  const profile = await f.act('publishProfile', { id: 'file-inspection', name: 'File inspection', tools: ['convoy.read_file'], skills: [] });
+  const workflow = {
+    id: 'authorized-file-inspection', name: 'Authorized file inspection',
+    capabilityProfile: { id: profile.id, version: profile.version },
+    nodes: [{ id: 'inspect', name: 'Inspect file', kind: 'action', model: 'fixture', permissions: 'read',
+      activity: { id: 'records.inspect-file', revision: 1 }, bindings: {} }],
+    edges: [],
+  };
+  await f.act('saveWorkflow', { projectId: project.id, workflow });
+  f.runnerCalls.length = 0;
+  const { workflowRunId } = await f.act('startWorkflowRun', { projectId: project.id, workflowId: workflow.id, workflowVersion: 1 });
+  let run;
+  try {
+    run = await waitForRun(f.act, workflowRunId, value => ['completed', 'failed'].includes(value.status), 'Authorized workspace activity did not settle.');
+  } catch (error) {
+    const snapshot = await f.snapshot();
+    const sessions = snapshot.sessions.map(session => ({ id: session.id, status: session.status,
+      queueReason: session.queueReason, assignment: session.assignment, runnerId: session.runnerId, workspace: session.workspace }));
+    const runners = snapshot.runners.map(runner => ({ id: runner.id, online: runner.online, enabled: runner.enabled,
+      projectIds: runner.projectIds, tools: runner.capabilities?.tools }));
+    throw new Error(`${error.message}; counters=${JSON.stringify(counters)}; runnerCalls=${JSON.stringify(f.runnerCalls)}; sessions=${JSON.stringify(sessions)}; runners=${JSON.stringify(runners)}`);
+  }
+  assert.equal(run.status, 'completed', JSON.stringify(run));
+  assert.ok(run.sessionId, 'the activity has a real linked provider session');
+  assert.equal(counters.prepare, 1);
+  assert.equal(counters.dispatch, 1);
+  assert.ok(f.runnerCalls.includes('provision'), 'the declared workspace must acquire its current authorized runner');
+  const session = (await f.snapshot()).sessions.find(value => value.id === run.sessionId);
+  assert.ok(session?.workspace);
+  assert.ok(session?.executionGrant?.digest, 'the activity runs with a current runner execution grant');
+  assert.equal(run.activityAttempts.find(value => value.nodeId === 'inspect')?.status, 'completed');
+});
+
+test('a descriptor tool requirement does not grant a tool blocked by the registered action policy', { timeout: 20000 }, async t => {
+  const counters = { prepare: 0, dispatch: 0 };
+  const f = await fixture(t, { workflowActivities: toolActivity(counters, { workspace: true }) });
+  let project = await f.act('saveProject', { name: 'Restricted file inspection' });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  await f.act('registerRunner', { name: 'Restricted test runner', kind: 'local', repository: '/fixture' });
+  const runner = (await f.snapshot()).runners[0];
+  project = await f.act('setPlacement', { projectId: project.id, revision: project.revision, placement: { mode: 'pinned', runnerId: runner.id } });
+  const profile = await f.act('publishProfile', { id: 'file-inspection', name: 'File inspection', tools: ['convoy.read_file'], skills: [] });
+  const workflow = {
+    id: 'restricted-file-inspection', name: 'Restricted file inspection',
+    capabilityProfile: { id: profile.id, version: profile.version },
+    nodes: [{ id: 'inspect', name: 'Inspect file', kind: 'action', model: 'fixture', permissions: 'none',
+      activity: { id: 'records.inspect-file', revision: 1 }, bindings: {} }],
+    edges: [],
+  };
+  await f.act('saveWorkflow', { projectId: project.id, workflow });
+  const { workflowRunId } = await f.act('startWorkflowRun', { projectId: project.id, workflowId: workflow.id, workflowVersion: 1 });
+  const run = await waitForRun(f.act, workflowRunId, value => value.status === 'failed', 'Restricted tool activity did not fail closed.');
+  assert.equal(run.nodeId, 'inspect');
+  const session = (await f.snapshot()).sessions.find(value => value.id === run.sessionId);
+  assert.ok(session?.workspace, 'denial must be attributable to action policy after the declared workspace was available');
+  assert.ok(session?.executionGrant?.digest, 'the registered action had a current runner execution grant');
+  assert.ok(f.runnerCalls.includes('provision'), 'runner and workspace requirements were otherwise satisfiable');
+  assert.equal(counters.prepare, 0, 'Library must reject the descriptor need before activity preparation');
+  assert.equal(counters.dispatch, 0, 'a descriptor requirement cannot bypass the action policy');
 });

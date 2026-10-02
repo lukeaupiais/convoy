@@ -39,3 +39,13 @@ test('activity intent rejects non-JSON values before changing the attempt or dur
     assert.equal(f.saves, saves);
   }
 });
+
+test('registered actions use the Library permission enum and default to no tool authority', () => {
+  const workflow = permissions => normalizeWorkflow({ id: 'agent-permission', name: 'Agent permission', nodes: [{
+    id: 'inspect', name: 'Inspect', kind: 'action', activity: { id: 'test.inspect', revision: 1 }, bindings: {},
+    ...(permissions === undefined ? {} : { permissions }),
+  }] });
+  assert.equal(workflow().nodes[0].permissions, 'none');
+  assert.equal(workflow('read-write').nodes[0].permissions, 'read-write');
+  assert.throws(() => workflow('unrestricted'), /invalid tool policy/);
+});

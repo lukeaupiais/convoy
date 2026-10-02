@@ -1,4 +1,32 @@
-import type { WorkflowActivityBinding, WorkflowActivityRef, WorkflowJsonSchema } from '../../shared/api/runtime';
+import type { WorkflowActivityBinding, WorkflowActivityDescriptor, WorkflowActivityRef, WorkflowJsonSchema, WorkflowStep } from '../../shared/api/runtime';
+
+export const workflowPermissionOptions = [
+  ['none', 'None'],
+  ['read', 'Read only'],
+  ['read-write', 'Read and write'],
+  ['full', 'Read, write and shell'],
+] as const satisfies readonly [NonNullable<WorkflowStep['permissions']>, string][];
+
+export function activityDeclaresWorkflowTools(descriptor: WorkflowActivityDescriptor | undefined): boolean {
+  return descriptor?.resources.location === 'agent' &&
+    (Boolean(descriptor.resources.workspace) || Boolean(descriptor.resources.tools?.length));
+}
+
+export function workflowPermissionIsUnavailable(value: string | undefined): boolean {
+  return Boolean(value) && !workflowPermissionOptions.some(([permission]) => permission === value);
+}
+
+export function activityPermissionEditor(descriptor: WorkflowActivityDescriptor | undefined, permission: string | undefined) {
+  if (!activityDeclaresWorkflowTools(descriptor)) return null;
+  const value = permission ?? 'none';
+  return {
+    value,
+    options: [
+      ...(workflowPermissionIsUnavailable(permission) ? [{ value: permission!, label: `${permission} · unavailable`, disabled: true }] : []),
+      ...workflowPermissionOptions.map(([item, label]) => ({ value: item, label, disabled: false })),
+    ],
+  };
+}
 
 export type JsonEditResult = { value: unknown } | { error: string };
 

@@ -55,7 +55,7 @@ function replyBody(context, input, node) {
   return body;
 }
 
-function workCommandFor(refId, input, identity, context, catalog, latestDeliveredReply) {
+async function workCommandFor(refId, input, identity, context, catalog, latestDeliveredReply) {
   const operation = operationIds[refId];
   if (!operation) throw new Error(`No Work activity is registered for ${refId}.`);
   const legacy = context?.node?.operation ? context.node : null;
@@ -83,7 +83,7 @@ function workCommandFor(refId, input, identity, context, catalog, latestDelivere
     command.ticketId ??= context.session?.activeTicketId ?? context.run?.activeTicketId;
     command.requestId ??= command.requestKey ?? `${identity.runId}-${identity.instance}`;
     if (command.evidenceReply === 'latest_delivered') {
-      const evidence = latestDeliveredReply?.({ ticketId: command.ticketId,
+      const evidence = await latestDeliveredReply?.({ ticketId: command.ticketId,
         connectionId: command.connectionId, workflowRunId: identity.runId, projectId: identity.projectId });
       if (!evidence?.requestId) throw new Error('No delivered reply from this workflow run was found.');
       command.evidenceReplyRequestId = evidence.requestId;
@@ -211,7 +211,7 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
   for (const refId of Object.keys(operationIds)) {
     implementations.set(`${refId}@1`, {
       async prepare(input, identity, context) {
-        const command = workCommandFor(refId, input, identity, context, catalog, latestDeliveredReply);
+        const command = await workCommandFor(refId, input, identity, context, catalog, latestDeliveredReply);
         return { command };
       },
       async dispatch(context, _input, intent, signal) {

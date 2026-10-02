@@ -1092,7 +1092,7 @@ export async function createRuntime({
     activityCatalog,
     injectedActivities: workflowActivities,
     getWorkflowOwner: () => workflows,
-    authorizeActivity: async (run, descriptor, node, approvalReservation = null) => {
+    authorizeActivity: async (run, descriptor, node, approvalReservation = null, { phase = 'dispatch' } = {}) => {
       if (!run?.principal || !run.projectId) throw new Error('Workflow activity has no governed project identity.');
       await identity.assertPrincipalActive(run.principal);
       await requireProjectPermission(run.projectId, 'project.execute', run.principal);
@@ -1107,9 +1107,21 @@ export async function createRuntime({
         throw new Error('This activity requires the exact prepared and approved intent reservation.');
       const resources = descriptor.resources;
       const needsAgent = resources.location === 'agent';
+      const session = run.sessionId ? state.sessions[run.sessionId] : null;
+      const resourceContext = session ?? run;
+      if (phase === 'prepare') {
+        // Gate preparation is deliberately resource independent. Validate the
+        // selected provider against the run principal now, then reacquire the
+        // full Library/workspace/runner authority when the node becomes active.
+        if (needsAgent) {
+          const selectedModel = node?.model ?? run.flow?.model ?? session?.model;
+          if (!selectedModel) throw new Error('Select a provider model before preparing this activity.');
+          await authorizeProjectModel(selectedModel, run.projectId, run.principal);
+          return { resourcePins: { model: selectedModel } };
+        }
+        return { resourcePins: {} };
+      }
       if (needsAgent || resources.location === 'runner' || resources.workspace) {
-        const session = run.sessionId ? state.sessions[run.sessionId] : null;
-        const resourceContext = session ?? run;
         if (!session && needsAgent) {
           const error = new Error('This activity is waiting for an active provider session.');
           error.code = 'ACTIVITY_RESOURCES_UNAVAILABLE';
@@ -1120,13 +1132,17 @@ export async function createRuntime({
           // this run already has a provider session from an earlier node. Check
           // that exact choice on every dispatch rather than inheriting whichever
           // model happened to be on the linked session.
-          const activeModel = node?.model ?? run.flow?.model ?? session.model;
+          const pinnedModel = approvalReservation?.resourcePins?.model;
+          const selectedModel = node?.model ?? run.flow?.model ?? session.model;
+          if (pinnedModel && selectedModel !== pinnedModel)
+            throw new Error('The approved provider model changed before this activity could run.');
+          const activeModel = pinnedModel ?? selectedModel;
           await authorizeSessionModel(session, activeModel);
           const nodeCapabilities = new Set(capabilities.modelTools(session, node).map(tool => tool.name));
           if ((resources.tools ?? []).some(name => !nodeCapabilities.has(name)))
             throw new Error('The pinned activity requires tools outside this node’s current Library capability profile.');
         }
-        if ((resources.location === 'runner' || resources.workspace) &&
+        if (phase !== 'prepare' && (resources.location === 'runner' || resources.workspace) &&
             (!resourceContext.workspace || !resourceContext.runnerId || !resourceContext.executionGrant || !resourceContext.assignment)) {
           const error = new Error('This activity is waiting for an authorized workspace and runner.');
           error.code = 'ACTIVITY_RESOURCES_UNAVAILABLE';

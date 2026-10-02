@@ -40,7 +40,13 @@ invoking its adapter. Workflows remains the sole owner of attempts and compatibi
 effect evidence. Completed receipts are immutable; waiting effects can be confirmed
 against their owner, while uncertain durable effects require adapter reconciliation
 and are never replayed automatically. Current project grants and required exact
-human-gate approvals are checked for dispatch and reconciliation.
+human-gate approvals are checked for dispatch and reconciliation. Preparing an
+approval reservation is resource independent: it checks the active run principal,
+project permission, and selected provider model, then pins that model with the exact
+intent. It does not allocate a future provider session, runner, workspace, or tool
+grant. Those resource and Library checks run again when the approved activity becomes
+active; a grant revoked after review blocks dispatch without replaying or changing the
+approved intent.
 
 Agent submissions capture every declared artifact as an immutable, content-addressed
 review package. Human decisions apply to that captured submission; the mutable

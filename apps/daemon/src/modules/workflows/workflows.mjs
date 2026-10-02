@@ -151,6 +151,13 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (!Array.isArray(node.skills) || node.skills.length > 30 || node.skills.some(id => typeof id !== 'string')) throw new Error(`${node.name}: invalid skill selection.`);
     if (node.model && (typeof node.model !== 'string' || node.model.length > 100)) throw new Error(`${node.name}: invalid model.`);
   } else if (node.presentationBindings !== undefined) throw new Error(`${node.name}: presentation bindings require an agent submission.`);
+  if (node.kind === 'action' && node.activity !== undefined) {
+    // Registered activities declare resource needs, not Library authority. An
+    // agent-resource action must opt into the normal Library permission level;
+    // the activity descriptor itself never widens that policy.
+    node.permissions ??= 'none';
+    if (!['none', 'read', 'read-write', 'full'].includes(node.permissions)) throw new Error(`${node.name}: invalid tool policy.`);
+  }
   ids.add(node.id); return node;
 }
 

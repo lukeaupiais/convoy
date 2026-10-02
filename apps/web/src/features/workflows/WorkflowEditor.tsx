@@ -13,7 +13,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { command, type RuntimeState, type WorkflowActivityBinding, type WorkflowActivityDescriptor, type WorkflowJsonSchema } from '../../shared/api/runtime';
-import { activityBindingSelectionValue, activityBindingSourceIsAvailable, activityBindingSourceKey, activityEnumOptionIndex, activityEnumValueAt, activityJsonEditKey, activityPinIsStale, activitySchemaPathLabel, activitySourceOptionKey, changedActivityPin, declaredObjectPaths, parseActivityJsonEdit, parseRunInputSchemaEdit } from './workflow-authoring';
+import { activityBindingSelectionValue, activityBindingSourceIsAvailable, activityBindingSourceKey, activityEnumOptionIndex, activityEnumValueAt, activityJsonEditKey, activityPermissionEditor, activityPinIsStale, activitySchemaPathLabel, activitySourceOptionKey, changedActivityPin, declaredObjectPaths, parseActivityJsonEdit, parseRunInputSchemaEdit } from './workflow-authoring';
 import { ProfilePicker, profileRef } from '../library';
 import { newId } from '../../shared/lib/browser';
 import {
@@ -1663,6 +1663,7 @@ function ActionFields({
   const operation = node.operation;
   const activity = activities.find((descriptor) => descriptor.ref.id === node.activity?.id && descriptor.ref.revision === node.activity?.revision);
   const activityPinStale = activityPinIsStale(node.activityDescriptorDigest, activity?.digest);
+  const permissionEditor = !activityPinStale ? activityPermissionEditor(activity, node.permissions) : null;
   const setActivity = (key: string) => {
     const selected = activities.find((descriptor) => `${descriptor.ref.id}@${descriptor.ref.revision}` === key);
     if (!selected) { onPatch(node.id, { activity: undefined, activityDescriptorDigest: undefined, bindings: undefined, operation: undefined, input: undefined }); return; }
@@ -1697,6 +1698,12 @@ function ActionFields({
           <option value="">Session default</option>
           {node.model && !models.some(model => model.id === node.model) && <option value={node.model} disabled>{node.model} · unavailable</option>}
           {models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}
+        </select>
+      </label>}
+      {permissionEditor && <label>
+        Tool permissions
+        <select value={permissionEditor.value} onChange={event => onPatch(node.id, { permissions: event.target.value })}>
+          {permissionEditor.options.map(option => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
         </select>
       </label>}
       {activity && !activityPinStale && <RegisteredActivityFields node={node} workflow={workflow} descriptor={activity} activities={activities}

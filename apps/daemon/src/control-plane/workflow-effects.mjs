@@ -375,18 +375,23 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       principal: structuredClone(run.principal), nodeId: node.id, instance, idempotencyKey: `${run.id}:${instance}` };
     const session = run.sessionId ? state.sessions?.[run.sessionId] : null;
     const context = { run, session, node, instance, owner, ...(approvalReservation ? { activityReservation: approvalReservation } : {}) };
-    await authorizeActivity(run, descriptor, node, approvalReservation);
+    // Preparation computes a bounded immutable intent for review. It must not
+    // allocate the node's provider, runner, or workspace resources; dispatch
+    // rechecks all active grants after that node becomes active.
+    const authorization = await authorizeActivity(run, descriptor, node, approvalReservation, { phase: 'prepare' });
     const intent = await implementation.prepare(input, identity, context);
     if (!intent || typeof intent !== 'object' || Array.isArray(intent) || Buffer.byteLength(JSON.stringify(intent)) > 16_000)
       throw new Error('Activity adapter prepared an invalid or oversized intent.');
     // Approval sees the exact validated values and deterministic prepared effect
     // that will be consumed at activation. Never infer review material from a
     // particular command shape or silently truncate a payload.
-    const preview = { activity: descriptor.presentation.label, input: structuredClone(input), intent: structuredClone(intent) };
+    const resourcePins = authorization?.resourcePins ?? {};
+    const preview = { activity: descriptor.presentation.label, input: structuredClone(input), intent: structuredClone(intent),
+      ...(Object.keys(resourcePins).length ? { resources: structuredClone(resourcePins) } : {}) };
     if (Buffer.byteLength(JSON.stringify(preview)) > 24_000) throw new Error('Activity approval material is too large to review safely.');
     return { ref: structuredClone(ref), input, inputDigest: activityDigest(input), intent: structuredClone(intent),
       intentDigest: activityDigest(intent), idempotencyKey: identity.idempotencyKey,
-      preview };
+      resourcePins, preview };
   }
 
   async function executeAction(session, node, instance, result = null, signal) {

@@ -111,6 +111,24 @@ test('registered action model pins survive codec round trips even when unavailab
   assert.equal(roundTrip.nodes[0].activityDescriptorDigest, 'a'.repeat(64));
 });
 
+test('registered agent activity permission choices survive publication, including denied and unavailable values', () => {
+  for (const permissions of ['read', 'none', 'read-write', 'full', 'workspace-admin']) {
+    const source = {
+      id: 'agent-activity-permission', name: 'Agent activity permission', entryNode: 'action', maxRevisions: 2,
+      nodes: [{ id: 'action', kind: 'action', name: 'Summarize', activity: { id: 'agent.summarize', revision: 3 },
+        activityDescriptorDigest: 'a'.repeat(64), permissions }],
+      edges: [],
+    };
+    assert.equal(toWorkflow(fromWorkflow(source)).nodes[0].permissions, permissions);
+  }
+  const unrelated = { id: 'unrelated', name: 'No tools', entryNode: 'action', maxRevisions: 2,
+    nodes: [{ id: 'action', kind: 'action', name: 'Compute', activity: { id: 'data.multiply', revision: 1 }, permissions: 'full' }], edges: [] };
+  assert.equal(toWorkflow(fromWorkflow(unrelated)).nodes[0].permissions, 'full', 'codec preserves stored policy when descriptor is unavailable or not loaded; runtime remains authoritative');
+  const nonActivityAction = { id: 'legacy', name: 'Legacy', entryNode: 'action', maxRevisions: 2,
+    nodes: [{ id: 'action', kind: 'action', name: 'Legacy action', operation: 'inspect_changes', permissions: 'full' }], edges: [] };
+  assert.equal(toWorkflow(fromWorkflow(nonActivityAction)).nodes[0].permissions, undefined);
+});
+
 test('workflow run schemas and result bindings survive editor round trips', () => {
   const source = {
     id: 'typed-run', name: 'Typed run', entryNode: 'input', maxRevisions: 2,

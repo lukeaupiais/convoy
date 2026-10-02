@@ -400,6 +400,7 @@ export function createWorkflows({
       const targetInstance = randomUUID();
       const prepared = await prepareActivityIntent(run, target, targetInstance, { gateNodeId, gateInstance });
       const intent = checkedActivityIntent(prepared.intent);
+      const resourcePins = checkedActivityIntent(prepared.resourcePins ?? {});
       const intentDigest = activityDigest(intent);
       if (prepared.intentDigest !== intentDigest) throw new Error('Prepared activity intent digest is invalid.');
       const preview = validateActivityValue(prepared.preview, activityIntentSchema);
@@ -410,11 +411,11 @@ export function createWorkflows({
         id: randomUUID(), runId, gateNodeId, gateInstance, targetNodeId, targetInstance,
         activityRef: structuredClone(prepared.ref), inputDigest: prepared.inputDigest,
         activityDescriptorDigest: target.activityDescriptorDigest ?? activityDigest(descriptor),
-        intentDigest, idempotencyKey: prepared.idempotencyKey,
+        intentDigest, idempotencyKey: prepared.idempotencyKey, resourcePins,
         intent, preview,
         digest: activityDigest({ runId, gateNodeId, gateInstance, targetNodeId, targetInstance,
           activityRef: prepared.ref, activityDescriptorDigest: target.activityDescriptorDigest ?? activityDigest(descriptor),
-          inputDigest: prepared.inputDigest, intentDigest }),
+          inputDigest: prepared.inputDigest, intentDigest, resourcePins }),
         createdAt: new Date().toISOString(),
       };
       run.activityReservations.push(reservation);

@@ -7,7 +7,7 @@ const source = await readFile(new URL('../../apps/web/src/features/workflows/wor
 const js = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const { parseActivityJsonEdit, parseRunInputSchemaEdit, activityBindingSourceKey, activityBindingSelectionValue, activityBindingSourceIsAvailable, declaredObjectPaths, activityEnumOptionIndex, activityEnumValueAt, activityPinIsStale, changedActivityPin } =
+const { parseActivityJsonEdit, parseRunInputSchemaEdit, activityBindingSourceKey, activityBindingSelectionValue, activityBindingSourceIsAvailable, declaredObjectPaths, activityEnumOptionIndex, activityEnumValueAt, activityPinIsStale, changedActivityPin, activityPermissionEditor, activityDeclaresWorkflowTools, workflowPermissionIsUnavailable, workflowPermissionOptions } =
   await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
 
 test('JSON authoring keeps invalid intermediate text out of the configured value and accepts valid nested values', () => {
@@ -81,4 +81,25 @@ test('a selected activity pin is stale only when both authoritative digests exis
   assert.equal(activityPinIsStale('a'.repeat(64), 'a'.repeat(64)), false);
   assert.equal(activityPinIsStale(undefined, 'b'.repeat(64)), false);
   assert.equal(activityPinIsStale('a'.repeat(64), undefined), false);
+});
+
+test('agent workflow permission controls follow declared resources and retain an unavailable stored choice', () => {
+  assert.deepEqual(workflowPermissionOptions.map(([permission]) => permission), ['none', 'read', 'read-write', 'full']);
+  assert.equal(activityDeclaresWorkflowTools({ resources: { location: 'agent', provider: 'required', tools: ['read_file'] } }), true);
+  assert.equal(activityDeclaresWorkflowTools({ resources: { location: 'agent', provider: 'required', workspace: true } }), true);
+  assert.equal(activityDeclaresWorkflowTools({ resources: { location: 'agent', provider: 'required' } }), false);
+  for (const location of ['daemon', 'runner', 'integration'])
+    assert.equal(activityDeclaresWorkflowTools({ resources: { location } }), false);
+  assert.equal(workflowPermissionIsUnavailable('none'), false);
+  assert.equal(workflowPermissionIsUnavailable('read-write'), false);
+  assert.equal(workflowPermissionIsUnavailable('workspace-admin'), true);
+  assert.equal(workflowPermissionIsUnavailable(undefined), false);
+  const agentTools = { resources: { location: 'agent', provider: 'required', tools: ['read_file'] } };
+  assert.equal(activityPermissionEditor({ resources: { location: 'daemon' } }, 'full'), null);
+  assert.equal(activityPermissionEditor({ resources: { location: 'agent', provider: 'required' } }, 'full'), null);
+  assert.equal(activityPermissionEditor(agentTools, 'read-write').value, 'read-write');
+  assert.equal(activityPermissionEditor(agentTools, 'none').value, 'none');
+  assert.deepEqual(activityPermissionEditor(agentTools, 'workspace-admin').options[0], {
+    value: 'workspace-admin', label: 'workspace-admin · unavailable', disabled: true,
+  });
 });

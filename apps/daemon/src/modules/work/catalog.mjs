@@ -150,13 +150,25 @@ export function createCatalog({ state, save, execution, externalTickets, context
     }
     return null;
   }
-  function latestDeliveredWorkflowReply({ ticketId, connectionId, workflowRunId, projectId }) {
-    if (ticket(ticketId)?.projectId !== projectId) return null;
+  async function latestDeliveredWorkflowReply({ ticketId, connectionId, workflowRunId, projectId }) {
+    const target = ticket(ticketId);
+    if (target?.projectId !== projectId) return null;
+    const source = activeConnection(connectionId);
+    if (source.organizationId !== project(target.projectId).organizationId)
+      throw new Error('Connection is not available to this project.');
+    if (!target.externalLinks?.some(value => value.connectionId === connectionId) ||
+        !source.capabilities?.threadRead || !externalTickets?.listComments) return null;
+    // Delivery selection belongs to Work and uses a fresh canonical source
+    // thread. Cached reply.deliveryStatus is only a projection and can lag.
+    const thread = await syncThread(target, source);
+    if (!thread) return null;
     const value = state.ticketReplies.filter(reply => reply.ticketId === ticketId && reply.connectionId === connectionId &&
-      reply.workflowRunId === workflowRunId && reply.status === 'queued')
+      reply.workflowRunId === workflowRunId && reply.status === 'queued' &&
+      thread.messages?.some(message => message.remoteId === reply.remoteId && message.body === reply.body &&
+        message.direction === 'outbound' && message.deliveryStatus === 'delivered'))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
     return value ? { requestId: value.id, ticketId: value.ticketId, connectionId: value.connectionId,
-      workflowRunId: value.workflowRunId, deliveryStatus: value.deliveryStatus } : null;
+      workflowRunId: value.workflowRunId, remoteId: value.remoteId, deliveryStatus: 'delivered' } : null;
   }
   function workflowReplyConfirmation(command, projectId) {
     if (ticket(command.ticketId)?.projectId !== projectId) return null;
