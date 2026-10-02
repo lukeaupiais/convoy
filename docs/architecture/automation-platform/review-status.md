@@ -83,9 +83,35 @@ ebca318c8f330176fa21d1780a06960e3aec9986 (both push and pull-request runs).
 Full system: 536 tests, 524 pass, 12 explicit skips, zero failures. It covers runner/process
 tests and PostgreSQL in its provisioned environment; desktop has its own passing job.
 
+## PR 6 — Separately reviewed run UI preparation
+
+Authorized phase base: reviewed PR 3 head ebca318c8f330176fa21d1780a06960e3aec9986.
+Initial implementation: 4398f5c54ae65f1a66e5d1295fb78cf4ab214b00.
+Corrected frozen head: 140ff3b44c087ced77a59c8520172d7ff75ea195.
+This phase is not the complete human/forms/evidence PR and has not been published.
+
+Spec review of the initial phase found no additional blockers. Parent Standards review found
+an array callback incorrectly passing its index as caller identity and a clipped Runs panel
+below the full-height editor. The corrected snapshot callback omits caller projection; exact
+run reads still calculate actor/client/expiry ownership. A workflow-owned Definitions/Runs
+switch keeps one bounded pane visible. The non-first leased snapshot row is covered by an
+acceptance assertion. The correction Spec follow-up accepts both fixes with no new findings.
+
+Parent architecture/build and focused web/run-authority checks pass: seven tests, zero failures
+or skips. Log: /tmp/convoy-automation-series/pr6-ui-corrected-parent-tests.log.
+Built UI browser verification uses a disposable loopback runtime, isolated Chrome context and
+synthetic procurement/publication configurations. Desktop 1466x977 and emulated mobile 390x844
+show reachable panes, scrollable Runs and no horizontal overflow. Actual UI project filtering,
+claim, cancellation and new-run start work; read-back has zero sessions. This proves the run
+surface only, not pending form/evidence behavior. Layout/control artifacts are under
+/tmp/convoy-automation-series/pr6-corrected-*-layout.json and pr6-browser-controls.json.
+
 ## Remaining PRs
 
-Activities/data implementation is delegated on the reviewed PR 3 head. Human/evidence has
-a concrete written seam map and awaits reviewed activities/data.
-Events/waits and composition have delegated written proposals; code awaits reviewed dependencies.
+Activities/data implementation is delegated on the reviewed PR 3 head. Preliminary review
+found codec action fallback, object schema assignability and terminal receipt-state gaps;
+these must be corrected before a frozen full review. Human/forms/evidence integration awaits
+reviewed activities/data. Events/waits and composition have delegated written proposals;
+code awaits reviewed dependencies. Event acceptance must durably reserve the canonical run
+identity before its first effect; lost acknowledgement must recover the same run.
 No implementation PR has been merged or deployed.

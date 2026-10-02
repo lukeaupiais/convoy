@@ -17,7 +17,11 @@ Automation When/If/Then subscribes to declared events and pins a workflow; retai
 workflow option instead of introducing a second action executor. Typed bounded predicates read
 advertised event payload paths. Define concurrency explicitly: initial configurable reject/hold
 and independent runs are sufficient; dedupe by event+rule revision; avoid universal one-ticket
-lock. Preserve legacy rules and explicit retries for held/conflicting decisions.
+lock. Preserve legacy rules and explicit retries for held/conflicting decisions. Bind the
+subscription decision to its canonical run identity durably before executing its first activity.
+Restart after run creation but before an acknowledgement/decision update must recover that same
+run rather than allocate a second one. Test this gap with an applied effect and a lost save or
+response; duplicate event delivery alone is insufficient proof.
 
 Wait nodes bind explicit correlation plus event type/predicate or durable timer/deadline. Buffer
 or index events so an event arriving just before wait registration is not lost, with bounded
