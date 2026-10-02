@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAutomations } from '../../apps/daemon/src/modules/workflows/index.mjs';
+import { createAutomations, workflowForProject } from '../../apps/daemon/src/modules/workflows/index.mjs';
 import { workAutomationCapabilities } from '../../apps/daemon/src/modules/work/index.mjs';
 import { migrateAutomationState } from '../../scripts/migrate-automations.mjs';
 const workflow={id:'review',name:'Review',organizationId:'personal',version:1,nodes:[{id:'review',name:'Review',kind:'human'}]};
@@ -26,4 +26,24 @@ test('offline migration preserves ordered graph routes, version pins and active 
  assert.equal(migrated.automations[0].then.workflowVersion,1);assert.equal('workflowStartRules' in migrated,false);
  assert.equal(state.automationSchemaVersion,undefined);
  assert.throws(()=>migrateAutomationState(migrated),/already migrated/);
+});
+
+test('legacy workflow pins resolve as personal v1 without rewriting or crossing organization scope', () => {
+ const legacy = {
+  id: 'review',
+  name: 'Review',
+  steps: [{ id: 'review', name: 'Review', kind: 'human' }],
+ };
+ const state = {
+  projects: [{ id: 'p', organizationId: 'personal' }, { id: 'foreign', organizationId: 'other' }],
+  workflows: [structuredClone(legacy)],
+ };
+ const before = JSON.stringify(state.workflows[0]);
+
+ const selected = workflowForProject(state, 'review', 1, 'p');
+ assert.equal(selected.organizationId, 'personal');
+ assert.equal(selected.version, 1);
+ assert.equal(JSON.stringify(state.workflows[0]), before);
+ assert.throws(() => workflowForProject(state, 'review', 1, 'foreign'), /not available/);
+ assert.equal(JSON.stringify(state.workflows[0]), before);
 });

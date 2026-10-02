@@ -1,8 +1,8 @@
-import { workflowActionInput } from '../modules/workflows/index.mjs';
+import { workflowActionInput, activityDigest } from '../modules/workflows/index.mjs';
+import { createWorkflowActivityImplementationMap, activityRefForNode } from './workflow-activity-adapters.mjs';
 
 export function migrateWorkflowEffectState(state) {
   state.automationDecisionLedger ??= {};
-  state.workflowEffectLedger ??= {};
   state.automationFailures ??= [];
   state.automationFailures = state.automationFailures.slice(-100);
 }
@@ -12,8 +12,16 @@ export function migrateWorkflowEffectState(state) {
  * written before mutation so restarts fail closed instead of replaying an
  * uncertain create/update/move.
  */
-export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, workCommand, makeSession, pinInstructions, normalizeWorkflow, event, save, now, getEngine, requireText, automations, authorizeStart }) {
+export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, workCommand, workEvidence,
+  latestDeliveredReply, workReplyConfirmation, inspectChanges, makeSession, pinInstructions, normalizeWorkflow,
+  event, save, now, getEngine, requireText, automations, authorizeStart, activityCatalog, injectedActivities = [],
+  getWorkflowOwner = () => null, authorizeActivity = async () => {} }) {
   migrateWorkflowEffectState(state);
+  const activityImplementations = createWorkflowActivityImplementationMap({ workCommand, workEvidence,
+    latestDeliveredReply, workReplyConfirmation, catalog, state, inspectChanges, injected: injectedActivities });
+  const effectRecord = key => getWorkflowOwner()?.effectRecord(key) ?? null;
+  const saveEffect = (key, value) => getWorkflowOwner()?.saveEffectRecord(key, value);
+  const deleteEffect = key => getWorkflowOwner()?.deleteEffectRecord(key);
   async function boardCommand(command, session) {
     const result = workCommand
       ? await workCommand(command, session)
@@ -84,7 +92,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         await authorizeStart(rule, session);
         event(session, 'workflow_triggered', { workflowId: workflow.id, ticketId: ticket.id, trigger: rule.when.event, sourceKey: key });
         await save();
-        await getEngine().start(session);
+        await getEngine().start(session, { triggerKey: key });
         record.status = 'started';
       } catch (error) {
         record.status = 'failed'; record.message = error.message;
@@ -132,7 +140,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     const expectedCommand = { action: 'postExternalTicketReply', ticketId, connectionId: input.connectionId, body,
       requestId: `reply-${session.flow.id}-${instance}`, workflowRunId: session.flow.id, workflowInstance: instance };
     const effectKey = `${session.flow.id}:${instance}:${node.id}`;
-    let effect = state.workflowEffectLedger[effectKey];
+    let effect = effectRecord(effectKey);
     if (effect && !['succeeded', 'blocked'].includes(effect.status))
       throw new Error('Reply send has an uncertain outcome. Reconcile the existing reply before retrying.');
     const command = effect?.status === 'blocked' ? effect.command : expectedCommand;
@@ -142,8 +150,9 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         command.workflowInstance !== expectedCommand.workflowInstance)
       throw new Error('The recorded approved reply identity no longer matches this workflow step.');
     if (!effect) {
-      effect = state.workflowEffectLedger[effectKey] = { at: now(), status: 'pending', operation: node.operation,
+      effect = { at: now(), status: 'pending', operation: node.operation,
         sessionId: session.id, projectId: session.projectId, command: structuredClone(command) };
+      saveEffect(effectKey, effect);
       await save();
     }
     if (effect.status !== 'succeeded') {
@@ -153,6 +162,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         delete effect.message;
         delete effect.blockingReplyRequestId;
         delete effect.blockingReplyStatus;
+        saveEffect(effectKey, effect);
         await save();
       } catch (error) {
         if (error?.code === 'TICKET_REPLY_UNRESOLVED' && error?.outcome === 'not-dispatched' &&
@@ -164,6 +174,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         } else {
           effect.status = 'uncertain'; effect.message = error.message;
         }
+        saveEffect(effectKey, effect);
         await save(); throw error;
       }
     }
@@ -178,7 +189,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     return structuredClone(reply);
   }
 
-  async function executeAction(session, node, instance) {
+  async function executeLegacyAction(session, node, instance) {
     if (node.operation === 'inspect_changes') return null;
     if (node.operation === 'send_external_reply') return sendApprovedReply(session, node, instance);
     if (!['create_ticket', 'create_related_ticket', 'update_ticket', 'move_ticket', 'set_external_status'].includes(node.operation)) throw new Error('Unsupported workflow action.');
@@ -222,12 +233,12 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     if (target !== undefined && command.revision === undefined) command.revision = catalog.ticket(target)?.revision;
     if (['create_ticket', 'create_related_ticket'].includes(node.operation)) command.requestId ??= command.requestKey ?? `${session.flow.id}-${instance}`;
     const effectKey = `${session.flow.id}:${instance}:${node.id}`;
-    const previous = state.workflowEffectLedger[effectKey];
+    const previous = effectRecord(effectKey);
     if (previous) {
       if (previous.status === 'succeeded') return structuredClone(previous.result);
       throw new Error('Workflow board effect has an uncertain outcome. Inspect the board before retrying this step.');
     }
-    state.workflowEffectLedger[effectKey] = {
+    const effect = {
       at: now(),
       status: 'pending',
       operation: node.operation,
@@ -236,22 +247,190 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       organizationId: state.projects.find((project) => project.id === session.projectId)?.organizationId,
       command: structuredClone(command),
     };
+    saveEffect(effectKey, effect);
     await save();
     try {
       const result = await boardCommand(command, session);
       if (['create_ticket', 'create_related_ticket'].includes(node.operation) && result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = result.id; }
-      state.workflowEffectLedger[effectKey] = {
-        ...state.workflowEffectLedger[effectKey],
+      saveEffect(effectKey, {
+        ...effect,
         status: 'succeeded',
         result: structuredClone(result),
-      };
+      });
       await save();
       return result;
     } catch (error) {
-      state.workflowEffectLedger[effectKey].status = 'uncertain'; state.workflowEffectLedger[effectKey].message = error.message;
+      effect.status = 'uncertain'; effect.message = error.message; saveEffect(effectKey, effect);
       await save();
       throw error;
     }
+  }
+
+  async function executeRegisteredActivity(session, node, instance, signal) {
+    const owner = getWorkflowOwner();
+    if (!owner) throw new Error('Workflow activity owner is unavailable.');
+    const run = session?.independentRun ? session : owner.run(session?.workflowRunId ?? session?.flow?.id);
+    if (!run) throw new Error('Workflow run is unavailable.');
+    const ref = activityRefForNode(node);
+    const descriptor = owner.activityDescriptor(ref);
+    const key = `${ref?.id}@${ref?.revision}`;
+    const implementation = activityImplementations.get(key);
+    if (!descriptor || !implementation) throw new Error(`Pinned activity ${key} is unavailable.`);
+    if (node.activityDescriptorDigest && activityDigest(descriptor) !== node.activityDescriptorDigest)
+      throw new Error(`Pinned activity ${key} metadata changed; this run is blocked.`);
+    const input = owner.resolveActivityInput(run, node);
+    const identity = { runId: run.id, organizationId: run.organizationId, projectId: run.projectId,
+      principal: structuredClone(run.principal), nodeId: node.id, instance,
+      idempotencyKey: `${run.id}:${instance}` };
+    const reservation = owner.activityReservationForActivation(session ?? run, node.id) ??
+      owner.activityReservationForAttempt(run, node.id, instance);
+    const context = { run, session, node, instance, signal, owner, ...(reservation ? { activityReservation: reservation } : {}) };
+    const authorization = await authorizeActivity(run, descriptor, node, reservation);
+    if (authorization?.model) context.model = authorization.model;
+    if (run.attempt?.instance !== instance || run.attempt?.nodeId !== node.id)
+      throw new Error('Workflow activity attempt changed before dispatch.');
+    if (run.attempt.outputDigest) return structuredClone(run.attempt.output);
+    if (run.attempt.status === 'uncertain') throw new Error('Workflow activity outcome is uncertain. Reconcile it before continuing.');
+
+    if (run.attempt.waitingOutput) {
+      if (typeof implementation.confirm !== 'function') throw new Error('Waiting activity requires adapter confirmation or reconciliation.');
+      const confirmation = await implementation.confirm(context, input, { command: run.attempt.intent?.command, ...structuredClone(run.attempt.intent) });
+      if (!confirmation) throw new Error('Waiting activity has no confirmation adapter.');
+      if (confirmation.state === 'retry') {
+        await owner.reconcileActivityAttempt(session, { instance, nodeId: node.id, ref, state: 'not_applied',
+          message: 'Work proved the previous attempt was not dispatched.' });
+        return executeRegisteredActivity(session, node, instance, signal);
+      }
+      if (confirmation.state === 'waiting') {
+        await owner.recordActivityResult(session, { instance, nodeId: node.id, ref, status: 'waiting', output: confirmation.output,
+          evidence: confirmation.evidence, expectedWaitingOutputDigest: run.attempt.waitingOutputDigest });
+        return { activityWaiting: true, output: structuredClone(confirmation.output) };
+      }
+      if (confirmation.state === 'failed') {
+        await owner.recordActivityResult(session, { instance, nodeId: node.id, ref, status: 'failed', message: confirmation.message ?? 'Work confirmed the activity failed.' });
+        throw new Error(confirmation.message ?? 'Work confirmed the activity failed.');
+      }
+      if (confirmation.state !== 'completed') {
+      await owner.recordActivityResult(session, { instance, nodeId: node.id, ref, status: 'uncertain', message: confirmation.message ?? 'Activity confirmation is uncertain.', dispatchReceipt: true });
+        throw new Error(confirmation.message ?? 'Activity confirmation is uncertain. Reconcile it before continuing.');
+      }
+      await owner.recordActivityResult(session, { instance, nodeId: node.id, ref, status: 'completed', output: confirmation.output, dispatchReceipt: true });
+      return confirmation.output;
+    }
+
+    if (run.attempt.intent && run.attempt.effect === 'durable-effect' && run.attempt.status === 'running' && run.attempt.dispatchStarted)
+      throw new Error('Workflow activity has an unfinished dispatch. Reconcile it before continuing.');
+    if (run.attempt.intent && run.attempt.status !== 'ready' && run.attempt.status !== 'running')
+      throw new Error('Workflow activity is not eligible for dispatch.');
+    const isLegacy = !node.activity;
+    const intent = run.attempt.intent ?? (reservation ? structuredClone(reservation.intent) : await implementation.prepare(input, identity, context));
+    await owner.recordActivityIntent(session, { instance, nodeId: node.id, ref, input, intent,
+      idempotencyKey: identity.idempotencyKey, reservationId: run.attempt.reservationId, legacy: isLegacy,
+      ...(isLegacy ? { legacyCommand: { operation: node.operation } } : {}) });
+    if (signal?.aborted) {
+      await owner.resetActivityBeforeDispatch(session, { instance, nodeId: node.id, ref, message: 'Activity stopped before dispatch.' });
+      throw new Error('Workflow activity stopped.');
+    }
+    await owner.markActivityDispatchStarted(session, { instance, nodeId: node.id, ref });
+    if (signal?.aborted) {
+      await owner.resetActivityBeforeDispatch(session, { instance, nodeId: node.id, ref, message: 'Activity stopped before dispatch.' });
+      throw new Error('Workflow activity stopped.');
+    }
+    let result;
+    try {
+      result = await implementation.dispatch(context, input, run.attempt.intent, signal);
+      if (!result || !['completed', 'waiting', 'failed'].includes(result.state))
+        throw new Error('Activity adapter returned an invalid result state.');
+    } catch (error) {
+      await owner.recordActivityResult(session, { instance, nodeId: node.id, ref,
+        status: descriptor.effect === 'pure' ? 'failed' : 'uncertain', message: error.message, dispatchReceipt: true });
+      throw error;
+    }
+    if (result.state === 'completed') {
+      await owner.recordActivityResult(session, { instance, nodeId: node.id, ref, status: 'completed', output: result.output, dispatchReceipt: true });
+      return structuredClone(result.output);
+    }
+    if (result.state === 'waiting') {
+      await owner.recordActivityResult(session, { instance, nodeId: node.id, ref, status: 'waiting', output: result.output, message: result.message, evidence: result.evidence, dispatchReceipt: true });
+      return { activityWaiting: true, output: result.output };
+    }
+    const failure = new Error(result.message ?? 'Activity failed before dispatch.');
+    await owner.recordActivityResult(session, { instance, nodeId: node.id, ref, status: 'failed', message: failure.message,
+      ...(result.output !== undefined ? { output: result.output } : {}), ...(result.evidence ? { evidence: result.evidence } : {}), dispatchReceipt: true });
+    throw failure;
+  }
+
+  async function prepareActivityIntent(run, node, instance, approvalReservation = null) {
+    const owner = getWorkflowOwner();
+    const ref = activityRefForNode(node);
+    const descriptor = owner?.activityDescriptor(ref);
+    const implementation = activityImplementations.get(`${ref?.id}@${ref?.revision}`);
+    if (!owner || !descriptor || !implementation) throw new Error('Pinned activity revision is unavailable.');
+    if (node.activityDescriptorDigest && activityDigest(descriptor) !== node.activityDescriptorDigest)
+      throw new Error('Pinned activity metadata changed; preparation is blocked.');
+    if (run.attempt?.activityRef && activityDigest(run.attempt.activityRef) === activityDigest(ref) &&
+        run.attempt.activityDescriptorDigest && run.attempt.activityDescriptorDigest !== activityDigest(descriptor))
+      throw new Error('Pinned activity metadata changed; preparation is blocked.');
+    const input = owner.resolveActivityInput(run, node);
+    const identity = { runId: run.id, organizationId: run.organizationId, projectId: run.projectId,
+      principal: structuredClone(run.principal), nodeId: node.id, instance, idempotencyKey: `${run.id}:${instance}` };
+    const sourceRef = run.flow?.decisionSubmissionRef;
+    const sourceEntry = sourceRef && run.flow?.history?.find(value => value.nodeId === sourceRef.nodeId &&
+      value.instance === sourceRef.instance && value.to === approvalReservation?.gateNodeId);
+    const submission = sourceEntry?.submission ? structuredClone(sourceEntry.submission) : undefined;
+    if (submission && Buffer.byteLength(JSON.stringify(submission)) > 16_000)
+      throw new Error('Captured submission is too large for resource-independent activity preparation.');
+    const runContext = {
+      id: run.id,
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      principal: structuredClone(run.principal),
+      ...(run.activeTicketId != null ? { activeTicketId: run.activeTicketId } : {}),
+      ...(run.ticketId != null ? { ticketId: run.ticketId } : {}),
+      flow: {
+        status: run.flow?.status,
+        nodeId: run.flow?.nodeId,
+        instance: run.flow?.instance,
+        ...(run.flow?.decisionSubmissionRef ? { decisionSubmissionRef: structuredClone(run.flow.decisionSubmissionRef) } : {}),
+        ...(sourceEntry ? { history: [{
+          nodeId: sourceEntry.nodeId, instance: sourceEntry.instance, to: sourceEntry.to, outcome: sourceEntry.outcome,
+          ...(submission ? { submission } : {}),
+        }] } : {}),
+        ...(run.flow?.ticketBindings?.last_created != null ? { ticketBindings: { last_created: run.flow.ticketBindings.last_created } } : {}),
+      },
+    };
+    const context = { run: runContext, session: null, node: structuredClone(node), instance,
+      ...(approvalReservation ? { activityReservation: structuredClone(approvalReservation) } : {}) };
+    // Preparation computes a bounded immutable intent for review. It must not
+    // allocate the node's provider, runner, or workspace resources; dispatch
+    // rechecks all active grants after that node becomes active.
+    const authorization = await authorizeActivity(run, descriptor, node, approvalReservation, { phase: 'prepare' });
+    if (authorization?.model) context.model = authorization.model;
+    const intent = await implementation.prepare(input, identity, context);
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent) || Buffer.byteLength(JSON.stringify(intent)) > 16_000)
+      throw new Error('Activity adapter prepared an invalid or oversized intent.');
+    // Approval sees the exact validated values and deterministic prepared effect
+    // that will be consumed at activation. Never infer review material from a
+    // particular command shape or silently truncate a payload.
+    const resourcePins = authorization?.resourcePins ?? {};
+    const preview = { activity: descriptor.presentation.label, input: structuredClone(input), intent: structuredClone(intent),
+      ...(Object.keys(resourcePins).length ? { resources: structuredClone(resourcePins) } : {}) };
+    if (Buffer.byteLength(JSON.stringify(preview)) > 24_000) throw new Error('Activity approval material is too large to review safely.');
+    return { ref: structuredClone(ref), input, inputDigest: activityDigest(input), intent: structuredClone(intent),
+      intentDigest: activityDigest(intent), idempotencyKey: identity.idempotencyKey,
+      resourcePins, preview };
+  }
+
+  async function executeAction(session, node, instance, result = null, signal) {
+    if (activityRefForNode(node)) {
+      try { return await executeRegisteredActivity(session, node, instance, signal); }
+      catch (error) {
+        if (error?.code === 'ACTIVITY_RESOURCES_UNAVAILABLE')
+          return { activityWaiting: true, output: { message: error.message, waitingFor: 'resources' } };
+        throw error;
+      }
+    }
+    return executeLegacyAction(session, node, instance, result);
   }
 
   async function reconcile(session, command) {
@@ -260,7 +439,55 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     if (typeof command.instance !== 'string' || session.flow.instance !== command.instance) throw new Error('Workflow step instance has changed. Refresh before reconciling.');
     const node = engine.current(session); const effectKey = `${session.flow.id}:${command.instance}:${node.id}`;
     if (command.effectKey !== effectKey) throw new Error('Provide the exact workflow effect key.');
-    const effect = state.workflowEffectLedger[effectKey];
+    const runForReconciliation = session.independentRun ? session : getWorkflowOwner()?.run(session.workflowRunId ?? session.flow.id);
+    if (node.activity || (runForReconciliation?.attempt?.intent && runForReconciliation?.attempt?.activityRef)) {
+      const owner = getWorkflowOwner();
+      const run = session.independentRun ? session : owner?.run(session.workflowRunId ?? session.flow.id);
+      const ref = owner?.getActivityRef(node);
+      const descriptor = owner?.activityDescriptor(ref);
+      const implementation = activityImplementations.get(`${ref?.id}@${ref?.revision}`);
+      if (!run || !descriptor || !implementation || typeof implementation.reconcile !== 'function' || descriptor.reconciliation !== 'adapter')
+        throw new Error('This pinned activity has no adapter reconciliation capability.');
+      if (node.activityDescriptorDigest && activityDigest(descriptor) !== node.activityDescriptorDigest)
+        throw new Error('Pinned activity metadata changed; reconciliation is blocked.');
+      const reservation = owner.activityReservationForAttempt(run, node.id, command.instance);
+      const authorization = await authorizeActivity(run, descriptor, node, reservation);
+      if (run.attempt?.instance !== command.instance || run.attempt.nodeId !== node.id ||
+          JSON.stringify(run.attempt.activityRef) !== JSON.stringify(ref) || !run.attempt.intent)
+        throw new Error('Workflow activity intent is unavailable for reconciliation.');
+      const input = owner.resolveActivityInput(run, node);
+      const result = await implementation.reconcile({ run, session, node, instance: command.instance, owner,
+        ...(authorization?.model ? { model: authorization.model } : {}) }, input,
+        structuredClone(run.attempt.intent), { requestedResolution: command.resolution });
+      if (!result || !['applied', 'not_applied', 'unknown', 'waiting'].includes(result.state))
+        throw new Error('Activity adapter returned an invalid reconciliation result.');
+      const effectApplied = result.state === 'applied' || (result.state === 'waiting' && result.effectApplied === true);
+      if (command.resolution === 'applied' && !effectApplied)
+        throw new Error(result.message ?? 'The activity adapter has no canonical proof that the effect was applied.');
+      if (command.resolution === 'not_applied' && result.state !== 'not_applied')
+        throw new Error(`The activity adapter cannot confirm that this effect was not applied.${result.message ? ` ${result.message}` : ''}`);
+      if (result.state === 'applied' && command.result && result.output && Object.entries(command.result).some(([key, value]) =>
+          value === undefined ? Object.hasOwn(result.output, key) : !Object.hasOwn(result.output, key) ||
+            activityDigest(result.output[key]) !== activityDigest(value)))
+        throw new Error(result.message ?? 'Caller-supplied result does not match the canonical activity receipt.');
+      await owner.reconcileActivityAttempt(session, { instance: command.instance, nodeId: node.id, ref,
+        state: result.state, ...(result.output !== undefined ? { output: result.output } : {}), message: result.message });
+      if (result.state === 'applied') {
+        if (session.flow.status !== 'cancelled') {
+          session.flow.status = 'running'; session.status = 'running';
+          await engine.finishAutomated(session, command.instance, 'success', result.output);
+        }
+      } else if (result.state === 'waiting' && session.flow.status !== 'cancelled') {
+        session.flow.status = 'running'; session.status = 'running';
+        await engine.holdAction(session, command.instance, result.output ?? { message: result.message });
+      } else if (result.state === 'not_applied' && session.flow.status !== 'cancelled') {
+        session.flow.resumeStatus = 'ready'; session.flow.status = 'paused'; session.status = 'paused';
+      }
+      event(session, 'workflow_activity_reconciled', { effectKey, resolution: result.state, flowCancelled: session.flow.status === 'cancelled' });
+      await save();
+      return;
+    }
+    const effect = effectRecord(effectKey);
     if (!effect || !['pending', 'uncertain', 'succeeded'].includes(effect.status)) throw new Error('Workflow effect is not awaiting reconciliation.');
     if (!['applied', 'not_applied'].includes(command.resolution)) throw new Error('Confirm applied or not_applied explicitly.');
     if (effect.status === 'succeeded' && command.resolution !== 'applied') throw new Error('A recorded successful workflow effect cannot be discarded.');
@@ -283,6 +510,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         if (reportedId === undefined || String(reportedId) !== String(targetId)) throw new Error('Applied effect result must reference its recorded target ticket.');
       }
       effect.status = 'succeeded'; effect.result ??= appliedResult; effect.reconciledAt = now();
+      saveEffect(effectKey, effect);
       if (cancelled) {
         event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'applied', flowCancelled: true, cachedSuccess });
         await save();
@@ -295,11 +523,11 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         if (result?.awaitingDelivery) await engine.holdAction(session, command.instance, result);
         else await engine.finishAutomated(session, command.instance, 'success', result);
       }
-      catch (error) { session.flow.status = 'failed'; session.status = 'failed'; effect.status = 'uncertain'; effect.message = error.message; throw error; }
+      catch (error) { session.flow.status = 'failed'; session.status = 'failed'; effect.status = 'uncertain'; effect.message = error.message; saveEffect(effectKey, effect); throw error; }
     } else {
       if (node.operation === 'send_external_reply' && state.ticketReplies.some(reply => reply.id === effect.command?.requestId))
         throw new Error('Reconcile the existing external reply; do not discard its send identity.');
-      delete state.workflowEffectLedger[effectKey];
+      deleteEffect(effectKey);
       if (!cancelled) { session.flow.resumeStatus = 'ready'; session.flow.status = 'paused'; session.status = 'paused'; }
       event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'not_applied', ...(cancelled ? { flowCancelled: true } : {}) });
     }
@@ -325,7 +553,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     session.workflow = { ...normalizeWorkflow(workflow), version: workflow.version };
     record.status = 'pending'; record.attempts = (record.attempts ?? 0) + 1; record.lastRetryAt = now();
     event(session, 'workflow_trigger_retry', { triggerKey, workflowId: workflow.id, workflowVersion: workflow.version }); await save();
-    try { await getEngine().start(session); record.status = 'started'; }
+    try { await getEngine().start(session, { triggerKey }); record.status = 'started'; }
     catch (error) {
       record.status = 'failed'; record.message = error.message;
       state.automationFailures.push({ at: now(), triggerKey, workflowId: workflow.id, workflowVersion: workflow.version, ticketId: ticket.id, trigger: record.trigger, message: error.message });
@@ -335,5 +563,20 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     await save();
   }
 
-  return { boardCommand, observeBoardCommand, drainImportFacts, executeAction, reconcile, retryTrigger };
+  return {
+    boardCommand, observeBoardCommand, drainImportFacts, executeAction, reconcile, retryTrigger, prepareActivityIntent,
+    async workflowRunFailed(session, error) {
+      const triggerKey = session?.flow?.triggerKey;
+      const record = triggerKey && state.automationDecisionLedger?.[triggerKey];
+      if (!record || record.status !== 'started') return;
+      record.status = 'failed';
+      record.message = String(error?.message ?? 'Triggered workflow failed.').slice(0, 1000);
+      state.automationFailures.push({ at: now(), triggerKey, workflowId: record.workflowId,
+        workflowVersion: record.workflowVersion, ticketId: record.ticketId, trigger: record.trigger, message: record.message });
+      state.automationFailures = state.automationFailures.slice(-100);
+      event(session, 'workflow_trigger_failed', { triggerKey, workflowId: record.workflowId, ticketId: record.ticketId, message: record.message });
+      await save();
+    },
+    hasActivity(ref) { return activityImplementations.has(`${ref?.id}@${ref?.revision}`); },
+  };
 }

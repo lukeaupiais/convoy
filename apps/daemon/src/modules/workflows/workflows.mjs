@@ -1,6 +1,7 @@
 import { submissionContract, validateSubmissionContract } from './submission-contract.mjs';
 import { normalizeRuntimeSelection } from '../execution/index.mjs';
 import { normalizeSubmissionRequirements, validateSubmissionRequirements } from './submission-requirements.mjs';
+import { activityDigest, validateActivitySchema } from './activity-data.mjs';
 import { randomUUID } from 'node:crypto';
 
 const required = (value, label, limit = 6000) => {
@@ -25,7 +26,13 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
       throw new Error(`${node.name}: choose a supported ticket event to wait for.`);
     node.waitFor = { event: waitFor.event, ticketSource: waitFor.ticketSource ?? 'active_ticket', ...(waitFor.relationKind ? { relationKind: waitFor.relationKind } : {}), ...(waitFor.status ? { status: waitFor.status } : {}) };
   }
-  if (node.kind !== 'branch') node.prompt = required(original.prompt ?? `${node.name} completed by the workflow.`, `Objective for ${node.name}`);
+  if (node.kind === 'action') {
+    // Actions are declared by their exact operation/input, not an implicit
+    // agent objective. Preserve configured legacy prompt strings as metadata.
+    if (original.prompt !== undefined && original.prompt !== '')
+      node.prompt = required(original.prompt, `Objective for ${node.name}`);
+    else delete node.prompt;
+  } else if (node.kind !== 'branch') node.prompt = required(original.prompt ?? `${node.name} completed by the workflow.`, `Objective for ${node.name}`);
   else if (node.prompt !== undefined) {
     // Branch nodes are evaluated data-only and do not need an objective. The
     // graph editor may serialize that empty field; normalize it away.
@@ -56,20 +63,30 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (node.kind === 'check' || node.requiresCheck) node.checkCommand = required(node.checkCommand, `${node.name}: exact check command`, 4000);
   if (node.kind === 'action') {
     const operation = node.operation;
-    if (!['inspect_changes', 'create_ticket', 'create_related_ticket', 'update_ticket', 'move_ticket', 'set_external_status', 'send_external_reply'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
-    node.operation = operation;
-    if (node.args !== undefined || node.payload !== undefined || node.boardAction !== undefined || node.action !== undefined) throw new Error('Use canonical action input.');
-    const input = node.input;
-    if (operation !== 'inspect_changes' && (!input || typeof input !== 'object' || Array.isArray(input))) throw new Error(`${node.name}: board action input is required.`);
-    if (operation === 'create_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.projectId !== undefined && (typeof input.projectId !== 'string' || !input.projectId.trim()))) throw new Error(`${node.name}: create_ticket needs a title and an optional projectId.`);
-    if (operation === 'create_related_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.kind !== undefined && !safeId(input.kind))) throw new Error(`${node.name}: create_related_ticket needs a title and an optional safe relation kind.`);
-    if (operation === 'update_ticket' && input.ticketSource !== 'active_ticket' && input.ticketSource !== 'last_created' && input.ticketId === undefined && input.taskId === undefined) throw new Error(`${node.name}: update_ticket needs a ticket target.`);
-    if (operation === 'move_ticket' && (typeof input.boardId !== 'string' || !input.placement?.columnId || input.columnId !== undefined)) throw new Error(`${node.name}: move_ticket needs boardId and columnId.`);
-    if (operation === 'set_external_status' && (typeof input.connectionId !== 'string' || !input.connectionId || typeof input.status !== 'string' || !input.status || input.evidenceReply !== undefined && input.evidenceReply !== 'latest_delivered'))
-      throw new Error(`${node.name}: set_external_status needs a connection, source status, and optional latest_delivered reply evidence.`);
-    if (operation === 'send_external_reply' && (typeof input.connectionId !== 'string' || !input.connectionId || !safeId(input.sourceNodeId) || typeof input.field !== 'string' || !/^[a-zA-Z][\w-]{0,63}$/.test(input.field) || ['__proto__', 'constructor', 'prototype'].includes(input.field) || Object.keys(input).some(key => !['connectionId', 'sourceNodeId', 'field'].includes(key))))
-      throw new Error(`${node.name}: send_external_reply needs a connection, sourceNodeId and submitted detail field.`);
-    delete node.action;
+    if (node.activity !== undefined) {
+      const ref = node.activity;
+      if (operation !== undefined || !ref || typeof ref !== 'object' || Array.isArray(ref) || Object.keys(ref).some(key => !['id', 'revision'].includes(key)) ||
+          typeof ref.id !== 'string' || !/^[a-z][\w.-]{1,100}$/.test(ref.id) || !Number.isInteger(ref.revision) || ref.revision < 1)
+        throw new Error(`${node.name}: choose one registered activity revision.`);
+      if (node.input !== undefined || node.args !== undefined || node.payload !== undefined || node.boardAction !== undefined || node.action !== undefined)
+        throw new Error(`${node.name}: registered activities use typed bindings.`);
+      if (node.bindings !== undefined && (!node.bindings || typeof node.bindings !== 'object' || Array.isArray(node.bindings) || Object.keys(node.bindings).length > 128))
+        throw new Error(`${node.name}: activity bindings must be a bounded object.`);
+    } else {
+      if (!['inspect_changes', 'create_ticket', 'create_related_ticket', 'update_ticket', 'move_ticket', 'set_external_status', 'send_external_reply'].includes(operation)) throw new Error(`${node.name}: unsupported workflow action.`);
+      node.operation = operation;
+      if (node.args !== undefined || node.payload !== undefined || node.boardAction !== undefined || node.action !== undefined) throw new Error('Use canonical action input.');
+      const input = node.input;
+      if (operation !== 'inspect_changes' && (!input || typeof input !== 'object' || Array.isArray(input))) throw new Error(`${node.name}: board action input is required.`);
+      if (operation === 'create_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.projectId !== undefined && (typeof input.projectId !== 'string' || !input.projectId.trim()))) throw new Error(`${node.name}: create_ticket needs a title and an optional projectId.`);
+      if (operation === 'create_related_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.kind !== undefined && !safeId(input.kind))) throw new Error(`${node.name}: create_related_ticket needs a title and an optional safe relation kind.`);
+      if (operation === 'update_ticket' && input.ticketSource !== 'active_ticket' && input.ticketSource !== 'last_created' && input.ticketId === undefined && input.taskId === undefined) throw new Error(`${node.name}: update_ticket needs a ticket target.`);
+      if (operation === 'move_ticket' && (typeof input.boardId !== 'string' || !input.placement?.columnId || input.columnId !== undefined)) throw new Error(`${node.name}: move_ticket needs boardId and columnId.`);
+      if (operation === 'set_external_status' && (typeof input.connectionId !== 'string' || !input.connectionId || typeof input.status !== 'string' || !input.status || input.evidenceReply !== undefined && input.evidenceReply !== 'latest_delivered'))
+        throw new Error(`${node.name}: set_external_status needs a connection, source status, and optional latest_delivered reply evidence.`);
+      if (operation === 'send_external_reply' && (typeof input.connectionId !== 'string' || !input.connectionId || !safeId(input.sourceNodeId) || typeof input.field !== 'string' || !/^[a-zA-Z][\w-]{0,63}$/.test(input.field) || ['__proto__', 'constructor', 'prototype'].includes(input.field) || Object.keys(input).some(key => !['connectionId', 'sourceNodeId', 'field'].includes(key))))
+        throw new Error(`${node.name}: send_external_reply needs a connection, sourceNodeId and submitted detail field.`);
+    }
   }
   if (node.kind === 'branch') {
     const condition = node.condition;
@@ -134,6 +151,13 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (!Array.isArray(node.skills) || node.skills.length > 30 || node.skills.some(id => typeof id !== 'string')) throw new Error(`${node.name}: invalid skill selection.`);
     if (node.model && (typeof node.model !== 'string' || node.model.length > 100)) throw new Error(`${node.name}: invalid model.`);
   } else if (node.presentationBindings !== undefined) throw new Error(`${node.name}: presentation bindings require an agent submission.`);
+  if (node.kind === 'action' && node.activity !== undefined) {
+    // Registered activities declare resource needs, not Library authority. An
+    // agent-resource action must opt into the normal Library permission level;
+    // the activity descriptor itself never widens that policy.
+    node.permissions ??= 'none';
+    if (!['none', 'read', 'read-write', 'full'].includes(node.permissions)) throw new Error(`${node.name}: invalid tool policy.`);
+  }
   ids.add(node.id); return node;
 }
 
@@ -143,6 +167,17 @@ export function normalizeWorkflow(input, { publishing = false } = {}) {
   const isLegacy = !Array.isArray(input.nodes); const sourceNodes = isLegacy ? input.steps : input.nodes;
   if (!Array.isArray(sourceNodes) || !sourceNodes.length || sourceNodes.length > 100) throw new Error('Add between 1 and 100 workflow nodes.');
   const value = { id: input.id || randomUUID(), name: required(input.name, 'Workflow name', 120), schemaVersion: 3, nodes: [], edges: [], entryNode: input.entryNode ?? input.startNode, maxRevisions: input.maxRevisions ?? 3 };
+  const runInputSchema = input.runInputSchema ?? { type: 'object', properties: {}, required: [], additionalProperties: false };
+  validateActivitySchema(runInputSchema);
+  if (runInputSchema.type !== 'object') throw new Error('Workflow runInputSchema must describe an object.');
+  value.runInputSchema = structuredClone(runInputSchema);
+  if (input.resultSchema !== undefined) {
+    validateActivitySchema(input.resultSchema);
+    if (input.resultSchema.type !== 'object') throw new Error('Workflow resultSchema must describe an object.');
+    value.resultSchema = structuredClone(input.resultSchema);
+    if (!input.resultBindings || typeof input.resultBindings !== 'object' || Array.isArray(input.resultBindings)) throw new Error('Workflow result bindings are required when resultSchema is declared.');
+    value.resultBindings = structuredClone(input.resultBindings);
+  } else if (input.resultBindings !== undefined) throw new Error('Workflow result bindings require a resultSchema.');
   if (input.capabilityProfile != null) {
     const ref = input.capabilityProfile;
     if (typeof ref.id !== 'string' || !ref.id.trim() || ref.id.length > 120 || !Number.isInteger(ref.version) || ref.version < 1)
@@ -231,11 +266,21 @@ export function ensureAgentSessions(s) {
   return s.agentSessions[s.currentAgentSessionId];
 }
 
-export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, sealEvidence = async () => null, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {}, bindRun = () => {}, attachAgent = async () => { throw new Error('Agent activity requires an attached conversation.'); } }) {
+export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, sealEvidence = async () => null, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {}, bindRun = () => {}, attachAgent = async () => { throw new Error('Agent activity requires an attached conversation.'); }, getWorkflowOwner = () => null }) {
   let pumping = false; let pumpAgain = false;
+  const decodedRuns = new WeakMap();
   const runOwner = s => s.independentRun ? s : state.workflowRuns?.[s.workflowRunId];
   const attemptStatus = (s, status) => { const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow?.instance) { owner.attempt.status = status; owner.attempt.updatedAt = new Date().toISOString(); } };
-  const definition = s => runOwner(s)?.workflow ?? s.workflow;
+  const definition = s => {
+    const owner = runOwner(s);
+    if (!owner) return s.workflow;
+    if (!decodedRuns.has(owner)) {
+      const decoded = normalizeWorkflow(owner.workflow);
+      decoded.version = owner.workflow?.version;
+      decodedRuns.set(owner, decoded);
+    }
+    return decodedRuns.get(owner);
+  };
   const nodes = s => definition(s).nodes ?? definition(s).steps;
   const current = s => { const list = nodes(s); return list.find(n => n.id === s.flow?.nodeId) ?? list[s.step]; };
   function requireInstance(s, instance) { if (!s.flow || s.flow.instance !== instance) throw new Error('This workflow step has changed. Refresh before acting.'); }
@@ -250,17 +295,28 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
 
   function activate(s, nodeId, outcome = 'success') {
     const list = nodes(s); const index = list.findIndex(n => n.id === nodeId); if (index < 0) throw new Error('Workflow transition references an unknown node.');
-    s.step = index; s.flow.nodeId = nodeId; s.flow.instance = randomUUID(); s.flow.validation = null; s.flow.submission = null; s.flow.agentSessionId = null; s.flow.lastOutcome = outcome;
+    const owner = runOwner(s);
+    const reservation = getWorkflowOwner()?.activityReservationForActivation(s, nodeId);
+    s.step = index; s.flow.nodeId = nodeId; s.flow.instance = reservation?.targetInstance ?? randomUUID(); s.flow.validation = null; s.flow.submission = null; s.flow.agentSessionId = null; s.flow.lastOutcome = outcome;
     delete s.flow.decisionSubmissionRef;
     if (list[index].operation !== 'send_external_reply') delete s.flow.approvedSubmission;
     const node = list[index]; s.flow.status = node.kind === 'human' ? 'waiting_gate' : node.kind === 'wait' ? 'waiting_event' : 'ready'; s.status = s.flow.status;
-    const owner = runOwner(s); if (owner) { owner.activityAttempts ??= []; if (owner.attempt) owner.activityAttempts.push(structuredClone(owner.attempt)); owner.attempt = { instance: s.flow.instance, nodeId: node.id, status: s.flow.status === 'waiting_gate' || s.flow.status === 'waiting_event' ? 'waiting' : 'ready', startedAt: new Date().toISOString() }; }
+    if (owner) {
+      owner.activityAttempts ??= []; if (owner.attempt) owner.activityAttempts.push(structuredClone(owner.attempt));
+      owner.attempt = { instance: s.flow.instance, nodeId: node.id, status: s.flow.status === 'waiting_gate' || s.flow.status === 'waiting_event' ? 'waiting' : 'ready', startedAt: new Date().toISOString(),
+        ...(reservation ? { reservationId: reservation.id, activityRef: structuredClone(reservation.activityRef), intent: structuredClone(reservation.intent), intentDigest: reservation.intentDigest, inputDigest: reservation.inputDigest, idempotencyKey: reservation.idempotencyKey } : {}) };
+    }
     event(s, 'step_activated', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance: s.flow.instance, name: node.name, outcome });
   }
   function transition(s, outcome) {
-    attemptStatus(s, ['failed', 'changes_requested'].includes(outcome) ? 'failed' : 'completed');
     assertOutcome(s, outcome);
     const node = current(s); const edge = edgeFor(s, outcome); const latestEvidence = s.flow.evidenceTrail?.at(-1)?.evidence;
+    const workflowOwner = getWorkflowOwner();
+    if (node.kind === 'human' && outcome !== 'approved')
+      workflowOwner?.invalidateActivityReservations(s, { gateNodeId: node.id, gateInstance: s.flow.instance });
+    const terminalResult = !edge ? workflowOwner?.resolveWorkflowResult(s) : null;
+    if (!edge && terminalResult) workflowOwner.recordWorkflowResult(s, terminalResult);
+    attemptStatus(s, ['failed', 'changes_requested'].includes(outcome) ? 'failed' : 'completed');
     if (latestEvidence) s.flow.previousEvidence = latestEvidence;
     const completedInstance = s.flow.instance;
     const submission = node.kind === 'agent' && s.flow.lastSubmission?.nodeId === node.id && s.flow.lastSubmission?.instance === completedInstance
@@ -275,9 +331,21 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       ...(validation.references ? { references: validation.references.map(({ path, startLine, endLine, sha256 }) => ({ path, startLine, endLine, sha256 })) } : {}),
     } : undefined;
     const reviewedSubmissionRef = node.kind === 'human' && s.flow.decisionSubmissionRef ? structuredClone(s.flow.decisionSubmissionRef) : undefined;
-    s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: completedInstance, outcome, at: new Date().toISOString(), to: edge?.to ?? null, ...(submission ? { submission } : {}), ...(sourceEvidence ? { sourceEvidence } : {}), ...(reviewedSubmissionRef ? { decisionSubmissionRef: reviewedSubmissionRef } : {}) });
+    const reservationDecision = s.flow.activityReservationDecision;
+    delete s.flow.activityReservationDecision;
+    s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: completedInstance, outcome, at: new Date().toISOString(), to: edge?.to ?? null, ...(submission ? { submission } : {}), ...(sourceEvidence ? { sourceEvidence } : {}), ...(reviewedSubmissionRef ? { decisionSubmissionRef: reviewedSubmissionRef } : {}),
+      ...(outcome === 'approved' && reservationDecision ? {
+        activityReservationId: reservationDecision.id, activityReservationDigest: reservationDecision.digest,
+        activityReservation: { targetNodeId: reservationDecision.targetNodeId,
+          activityRef: structuredClone(reservationDecision.activityRef), inputDigest: reservationDecision.inputDigest,
+          intentDigest: reservationDecision.intentDigest, preview: structuredClone(reservationDecision.preview) },
+      } : {}) });
     const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === completedInstance) { owner.attempt.status = 'completed'; owner.attempt.outcome = outcome; owner.attempt.completedAt = new Date().toISOString(); }
-    if (!edge) { s.flow.status = 'completed'; s.status = 'accepted'; attemptStatus(s, 'completed'); event(s, 'workflow_completed', { runId: s.flow.id }); return; }
+    if (!edge) {
+      s.flow.status = 'completed'; s.status = 'accepted'; attemptStatus(s, 'completed');
+      event(s, 'workflow_completed', { runId: s.flow.id, ...(terminalResult?.resultDigest ? { resultDigest: terminalResult.resultDigest } : {}) });
+      return;
+    }
     activate(s, edge.to, outcome);
     if (current(s).kind === 'human') {
       const source = [...s.flow.history].reverse().find(entry => entry.submission?.nodeId && entry.submission?.instance && entry.submission?.revision === s.flow.revision + 1);
@@ -397,20 +465,33 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     },
     async start(s, options = {}) {
       if (active(s) || busy(s)) throw new Error('A workflow is already active.'); if (!definition(s)) throw new Error('Select and apply a workflow first.');
-      s.workflow = { ...normalizeWorkflow(s.workflow), version: s.workflow.version };
-      if (!s.independentRun && definition(s).nodes.some(node => node.artifact || node.kind === 'check' || node.kind === 'action' && node.operation === 'inspect_changes' || node.requiresCheck) && !s.workspace && !canProvision(s)) throw new Error('This workflow requires a worktree. Select a runner or placement pool first.');
+      if (!s.independentRun) s.workflow = { ...normalizeWorkflow(s.workflow), version: s.workflow.version };
       if (!s.independentRun) prepareStart(s, options);
       const main = s.independentRun ? null : ensureAgentSessions(s);
       delete s.boardPhase;
       const pinned = definition(s);
-      const flow = { id: s.independentRun ? s.id : randomUUID(), workflowId: pinned.id, workflowVersion: pinned.version, ...(s.model ? { model: s.model } : {}), status: 'ready', nodeId: null, instance: null, ...(!s.independentRun ? { aliases: { main: main.id }, bindings: {}, lastAgent: main.id, agentSessionId: null } : { aliases: {}, bindings: {}, lastAgent: null, agentSessionId: null }), revision: 0, history: [], startedAt: new Date().toISOString() };
+      const flow = { id: s.independentRun ? s.id : randomUUID(), workflowId: pinned.id, workflowVersion: pinned.version, ...(options.triggerKey ? { triggerKey: options.triggerKey } : {}), ...(s.model ? { model: s.model } : {}), status: 'ready', nodeId: null, instance: null, ...(!s.independentRun ? { aliases: { main: main.id }, bindings: {}, lastAgent: main.id, agentSessionId: null } : { aliases: {}, bindings: {}, lastAgent: null, agentSessionId: null }), revision: 0, history: [], startedAt: new Date().toISOString() };
       if (!s.independentRun) bindRun(s, flow);
       s.flow = flow;
       event(s, 'workflow_started', { runId: s.flow.id, workflowId: pinned.id, version: pinned.version }); activate(s, pinned.entryNode); await save();
     },
     async pump() {
       if (pumping) { pumpAgain = true; return; } pumping = true;
-      try { do { pumpAgain = false; const contexts = [...Object.values(state.sessions), ...Object.values(state.workflowRuns ?? {}).filter(run => run.independentRun && !run.sessionId)]; for (let s of contexts) { if (s.flow?.status !== 'ready' || busy(s)) continue; let node = current(s); try { if (node.kind === 'agent') { if (s.independentRun) s = await attachAgent(s); resolveSession(s); node = current(s); } s.flow.status = 'running'; s.status = 'running'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance) { owner.attempt.status = 'running'; owner.attempt.startedAt = new Date().toISOString(); } await save(); if (s.flow.status !== 'running') continue; if (!launch(s, node, s.flow.instance)) { s.flow.status = 'ready'; s.status = 'queued'; if (owner?.attempt && owner.attempt.instance === s.flow.instance) owner.attempt.status = 'ready'; await save(); } } catch (e) { s.flow.status = 'failed'; s.status = 'failed'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance) owner.attempt.status = 'failed'; event(s, 'workflow_failed', { message: e.message }); await save(); } } } while (pumpAgain); } finally { pumping = false; }
+      try { do { pumpAgain = false; const contexts = [...Object.values(state.sessions), ...Object.values(state.workflowRuns ?? {}).filter(run => run.independentRun && !run.sessionId)]; for (let s of contexts) { if (s.flow?.status !== 'ready' || busy(s)) continue; let node = current(s); try {
+        const owner = runOwner(s);
+        const workflowOwner = getWorkflowOwner();
+        const activityRef = node.activity ? workflowOwner?.getActivityRef(node) : null;
+        const descriptor = activityRef ? workflowOwner?.activityDescriptor(activityRef) : null;
+        if (activityRef && (!descriptor || node.activityDescriptorDigest && node.activityDescriptorDigest !== activityDigest(descriptor)))
+          throw new Error('Pinned activity metadata is unavailable or changed; resource acquisition is blocked.');
+        const needsProviderSession = node.kind === 'agent' || Boolean(s.independentRun && descriptor?.resources.location === 'agent');
+        if (needsProviderSession) {
+          if (s.independentRun) s = await attachAgent(s);
+          if (node.kind === 'agent') resolveSession(s);
+          node = current(s);
+        }
+        s.flow.status = 'running'; s.status = 'running'; const activeOwner = runOwner(s); if (activeOwner?.attempt && activeOwner.attempt.instance === s.flow.instance) { if (['ready', 'running'].includes(activeOwner.attempt.status)) { activeOwner.attempt.status = 'running'; activeOwner.attempt.startedAt = new Date().toISOString(); } } await save(); if (s.flow.status !== 'running') continue; if (!launch(s, node, s.flow.instance)) { s.flow.status = 'ready'; s.status = 'queued'; if (activeOwner?.attempt && activeOwner.attempt.instance === s.flow.instance && activeOwner.attempt.status === 'running') activeOwner.attempt.status = 'ready'; await save(); }
+      } catch (e) { s.flow.status = 'failed'; s.status = 'failed'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance && !['uncertain', 'completed', 'cancelled'].includes(owner.attempt.status)) owner.attempt.status = 'failed'; event(s, 'workflow_failed', { message: e.message }); await save(); } } } while (pumpAgain); } finally { pumping = false; }
     },
     async submit(s, instance, args) {
       requireInstance(s, instance); const node = current(s); if (s.flow.status !== 'running' || node.kind !== 'agent') throw new Error('This agent cannot submit the current step.'); const summary = required(args.summary, 'Completion summary', 4000);
@@ -481,6 +562,11 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
         const sourceEvidence = decisionSource?.evidenceEntry?.evidence;
         if (decisionSource && sourceEvidence !== s.flow.previousEvidence) await validateEvidence(sourceEvidence, decisionSource.ref);
         const next = nodes(s).find(candidate => candidate.id === edgeFor(s, 'approved')?.to);
+        const reservationDecision = next?.activity ? getWorkflowOwner()?.verifyActivityReservationDecision(s, {
+          gateNodeId: node.id, gateInstance: command.instance, targetNodeId: next.id,
+          reservationId: command.activityReservationId, reservationDigest: command.activityReservationDigest,
+        }) : null;
+        if (reservationDecision) s.flow.activityReservationDecision = reservationDecision;
         if (next?.operation === 'send_external_reply') {
           const sourceRef = decisionSource?.ref;
           const submission = decisionSource?.submission;
@@ -489,11 +575,13 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
             throw new Error('The reply needs a captured draft from the configured source step. Request changes before approving.');
           s.flow.approvedSubmission = { reviewNodeId: node.id, reviewInstance: command.instance, sourceSubmissionRef: structuredClone(sourceRef), submission: structuredClone(submission) };
         }
-        await finish(s, 'Human approved', [], 'approved'); event(s, 'gate_approved', { instance: command.instance, actor: command.actor ?? s.lease?.label, principal: command.principal }); await save(); return;
+        try { await finish(s, 'Human approved', [], 'approved'); }
+        catch (error) { delete s.flow.activityReservationDecision; throw error; }
+        event(s, 'gate_approved', { instance: command.instance, actor: command.actor ?? s.lease?.label, principal: command.principal }); await save(); return;
       }
       if (command.action !== 'continueWorkflow') throw new Error('There is no pending workflow gate.');
       if (s.flow.status === 'awaiting_continue') { const instance = s.flow.instance; const expectedStatus = s.flow.status; const evidence = await validate(s); requireInstance(s, instance); if (s.flow.status !== expectedStatus || JSON.stringify(evidence.artifact) !== JSON.stringify(s.flow.validation?.artifact) || evidence.digest !== s.flow.validation?.digest) throw new Error('Submitted evidence changed. Request a fresh submission before advancing.'); event(s, 'step_completed', { instance, actor: s.lease?.label, evidence, outcome: 'success' }); transition(s, 'success'); }
-      else if (['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status)) { const resume = s.flow.resumeStatus; s.flow.status = ['awaiting_continue', 'waiting_gate', 'waiting_event'].includes(resume) ? resume : 'ready'; s.flow.resumeStatus = null; s.status = s.flow.status; attemptStatus(s, ['ready', 'awaiting_continue', 'waiting_gate', 'waiting_event'].includes(s.flow.status) ? 'ready' : 'waiting'); }
+      else if (['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status)) { const resume = s.flow.resumeStatus; s.flow.status = ['awaiting_continue', 'waiting_gate', 'waiting_event'].includes(resume) ? resume : 'ready'; s.flow.resumeStatus = null; s.status = s.flow.status; const owner = runOwner(s); const preDispatchBlocked = owner?.attempt?.waitingEvidence?.workPreDispatch === true; const durableUnresolved = owner?.attempt?.instance === s.flow.instance && owner.attempt.effect === 'durable-effect' && ['uncertain', 'failed'].includes(owner.attempt.status) && !preDispatchBlocked; if (!durableUnresolved) attemptStatus(s, ['ready', 'awaiting_continue', 'waiting_gate', 'waiting_event'].includes(s.flow.status) ? 'ready' : 'waiting'); }
       else throw new Error('This workflow is not waiting to continue.'); await save();
     },
     async pause(s, cancel = false) { if (!active(s) && !(cancel && s.flow?.status === 'cancelled')) throw new Error('No active workflow.'); if (cancel) { delete s.queuedInput; delete s.queueReason; } if (s.flow.status === 'paused' && !cancel) return; s.flow.resumeStatus = s.flow.status; s.flow.status = cancel ? 'cancelled' : 'paused'; s.status = s.flow.status; attemptStatus(s, cancel ? 'cancelled' : 'waiting'); event(s, cancel ? 'workflow_cancelled' : 'workflow_paused', { instance: s.flow.instance }); abort(s); await save(); },
@@ -542,7 +630,8 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       await save();
       return { stop: true };
     },
-    async fail(s, instance) { if (s.flow?.instance === instance && !['paused', 'cancelled', 'completed'].includes(s.flow.status)) { s.flow.status = s.status === 'interrupted' ? 'interrupted' : 'failed'; attemptStatus(s, s.flow.status === 'interrupted' ? 'uncertain' : 'failed'); await save(); } },
-    async executeAction(s, instance, result = null) { requireInstance(s, instance); if (actionExecutor) return actionExecutor(s, current(s), instance, result); return null; },
+    async fail(s, instance) { if (s.flow?.instance === instance && !['paused', 'cancelled', 'completed'].includes(s.flow.status)) { s.flow.status = s.status === 'interrupted' ? 'interrupted' : 'failed'; const owner = runOwner(s); if (owner?.attempt?.instance !== instance || owner.attempt.status !== 'uncertain') attemptStatus(s, s.flow.status === 'interrupted' ? 'uncertain' : 'failed'); await save(); } },
+    current: s => structuredClone(current(s)),
+    async executeAction(s, instance, result = null, signal) { requireInstance(s, instance); if (actionExecutor) return actionExecutor(s, current(s), instance, result, signal); return null; },
   };
 }

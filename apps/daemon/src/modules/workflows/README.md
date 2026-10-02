@@ -18,8 +18,43 @@ event, including an update to linked development work. Workflow actions can
 create a linked development ticket in the same project. The customer ticket's
 external status remains owned by its source.
 
-External effects are requested through injected callbacks and recorded so restart
-recovery can avoid uncertain replay.
+Workflow actions resolve through a static registry of versioned activity descriptors.
+Descriptors publish bounded input/output schemas, resource needs, effect and approval
+policy, lifecycle capabilities, and presentation data; implementations are supplied
+by the daemon composition root rather than loaded from workflow content. Run inputs
+and completed activity outputs are immutable values. Bindings accept constants or
+declared paths from run input and earlier reachable activity outputs, and are checked
+at publication and again when resolved for dispatch.
+
+An activity acquires resources only when it becomes active. Daemon transforms do
+not create agent sessions or require a workspace; runner activities recheck the
+current execution grant and exact workspace before dispatch. A registered activity
+that declares an agent resource lazily attaches a real provider session when its
+node becomes active, using the stored run principal. Its exact node model, current
+provider grant, and declared tools are checked before each adapter prepare/dispatch,
+including when a run already has a linked session. Provider-only activities do not
+acquire a runner just because the project has a runner placement. Legacy agent nodes
+still create their session when activated and use the project's configured runner
+placement for that active turn, queuing when capacity is occupied; later nodes do
+not reserve resources early. Each effect attempt pins its activity
+revision, resolved input digest, idempotency identity, and prepared intent before
+invoking its adapter. Workflows remains the sole owner of attempts and compatibility
+effect evidence. Completed receipts are immutable; waiting effects can be confirmed
+against their owner, while uncertain durable effects require adapter reconciliation
+and are never replayed automatically. Current project grants and required exact
+human-gate approvals are checked for dispatch and reconciliation. Preparing an
+approval reservation is resource independent: it checks the active run principal,
+project permission, and selected provider model, then pins that model with the exact
+intent. It does not allocate a future provider session, runner, workspace, or tool
+grant. Adapter `prepare` receives `session: null` and a bounded run projection without
+session IDs, workspace paths, runner assignments, or execution grants; an adapter
+that needs those values cannot prepare an approval intent and fails the command.
+Resource and Library checks run again when the approved activity becomes active; a
+grant revoked after review blocks dispatch without replaying or changing the approved
+intent. Registered agent adapters receive the selected, authorized provider as
+`context.model` for prepare, dispatch, confirmation, and reconciliation. A linked
+`session.model` remains the conversation default; it does not override a different
+model selected on the active node.
 
 Agent submissions capture every declared artifact as an immutable, content-addressed
 review package. Human decisions apply to that captured submission; the mutable
@@ -43,10 +78,11 @@ effect stays uncertain through cancellation and restart until its exact effect
 key is explicitly reconciled. Restart clears live run leases while retaining
 actor and decision evidence.
 
-The built-in **Team delivery** template is an editable, additive starting graph:
+The built-in **Team delivery** template is an explicitly selected, editable starting graph:
 plan ticket → approve plan → implement → verify → human review. Failed checks
 and requested changes route back to implementation through the bounded revision
-loop. It produces evidence and an accepted handoff only; it never pushes,
+loop. Projects without a configured default do not select a workflow implicitly. It
+produces evidence and an accepted handoff only; it never pushes,
 merges, deploys, or changes a ticket's authoritative delivery state.
 
 Its default verification command is a portable runner-level whitespace check.

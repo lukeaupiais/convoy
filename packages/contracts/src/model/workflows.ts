@@ -11,9 +11,22 @@ export type WorkflowActivityAttempt = {
   instance: string;
   nodeId: string;
   status: 'ready' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'uncertain';
+  activityRef?: WorkflowActivityRef;
+  effect?: 'pure' | 'observation' | 'durable-effect';
+  inputDigest?: string;
+  outputDigest?: string;
   startedAt?: string;
   completedAt?: string;
   outcome?: string;
+  /** Compatibility evidence retained for already published Work operation graphs. */
+  effectKey?: string;
+  idempotencyKey?: string;
+  effectResult?: Record<string, unknown>;
+};
+export type WorkflowActivityReservation = {
+  id: string;
+  digest: string;
+  preview?: { activity: string; input: unknown; intent: unknown; resources?: { model?: string }; action?: string; summary?: string; body?: string };
 };
 export type WorkflowRun = {
   id: string;
@@ -29,6 +42,9 @@ export type WorkflowRun = {
   activeTicketId?: number | null;
   startedAt: string;
   updatedAt?: string;
+  runInputDigest?: string;
+  resultDigest?: string;
+  activityReservations?: (WorkflowActivityReservation & { gateNodeId: string; gateInstance: string; targetNodeId: string; targetInstance: string; activityRef: WorkflowActivityRef; inputDigest: string; intentDigest: string; consumedAt?: string })[];
   attempt?: WorkflowActivityAttempt;
   activityAttempts?: WorkflowActivityAttempt[];
   history: { nodeId: string; instance?: string; outcome: string; at?: string; to?: string | null }[];
@@ -97,6 +113,44 @@ export type WorkflowSessionRule = {
   target?: string;
 };
 export type WorkflowArtifact = { path: string; headings: string[] };
+export type WorkflowActivityRef = { id: string; revision: number };
+export type WorkflowJsonSchema = {
+  type: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null';
+  properties?: Record<string, WorkflowJsonSchema>;
+  required?: string[];
+  additionalProperties?: boolean;
+  items?: WorkflowJsonSchema;
+  enum?: unknown[];
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
+};
+export type WorkflowActivityBinding =
+  | { literal: unknown }
+  | { from: { kind: 'run_input'; path: string[] } }
+  | { from: { kind: 'activity_output'; nodeId: string; path: string[] } };
+export type WorkflowActivityDescriptor = {
+  ref: WorkflowActivityRef;
+  /** Canonical digest of the registered descriptor metadata at this revision. */
+  digest?: string;
+  inputSchema: WorkflowJsonSchema;
+  outputSchema: WorkflowJsonSchema;
+  resources:
+    | { location: 'daemon' }
+    | { location: 'agent'; provider: 'required'; tools?: string[]; workspace?: boolean }
+    | { location: 'runner'; runner: 'required'; workspace?: boolean }
+    | { location: 'integration'; adapterId: string };
+  effect: 'pure' | 'observation' | 'durable-effect';
+  approval: { required: boolean; policy?: 'workflow-gate' | 'command-policy' };
+  cancellation: 'immediate' | 'cooperative' | 'reconcile-after-dispatch';
+  confirmation: 'result' | 'adapter-confirmed' | 'human-reconciled';
+  reconciliation: 'none' | 'adapter';
+  presentation: { label: string; description?: string; group?: string };
+  available?: boolean;
+};
 export type WorkflowDecisionOutcome = 'approved' | 'changes_requested';
 export type WorkflowDecisionLabels = Partial<Record<WorkflowDecisionOutcome, string>>;
 export type WorkflowActionOperation =
@@ -124,6 +178,9 @@ export type WorkflowStep = {
   checkCommand?: string;
   operation?: WorkflowActionOperation;
   input?: Record<string, unknown>;
+  activity?: WorkflowActivityRef;
+  activityDescriptorDigest?: string;
+  bindings?: Record<string, WorkflowActivityBinding>;
   session?: WorkflowSessionRule;
   permissions?: WorkflowPermission;
   maxRounds?: number;
@@ -173,6 +230,9 @@ export type WorkflowDefinition = {
   edges: WorkflowEdge[];
   entryNode: string;
   maxRevisions: number;
+  runInputSchema?: WorkflowJsonSchema;
+  resultSchema?: WorkflowJsonSchema;
+  resultBindings?: Record<string, WorkflowActivityBinding>;
   /** Compatibility projection for older clients. New code must use nodes. */
   steps: WorkflowStep[];
 };
@@ -186,6 +246,7 @@ export type WorkflowEffect = {
   message?: string;
   blockingReplyRequestId?: string;
 };
+export type WorkflowRunInput = { runInputDigest?: string; resultDigest?: string };
 export type AutomationDecisionFailure = {
   triggerKey: string;
   workflowId: string;

@@ -1,4 +1,5 @@
 import type { WorkflowDefinition, WorkflowStep } from '../../shared/api/runtime';
+import type { WorkflowActivityBinding, WorkflowActivityRef, WorkflowJsonSchema } from '../../shared/api/runtime';
 import { newId } from '../../shared/lib/browser';
 
 export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait';
@@ -42,6 +43,9 @@ export type GraphNode = {
   checkCommand?: string;
   operation?: ActionOperation;
   input?: ActionInput;
+  activity?: WorkflowActivityRef;
+  activityDescriptorDigest?: string;
+  bindings?: Record<string, WorkflowActivityBinding>;
   condition?: Condition;
   waitFor?: {
     event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated';
@@ -74,6 +78,9 @@ export type GraphWorkflow = {
   edges: GraphEdge[];
   entryNode?: string;
   maxRevisions: number;
+  runInputSchema?: WorkflowJsonSchema;
+  resultSchema?: WorkflowJsonSchema;
+  resultBindings?: Record<string, WorkflowActivityBinding>;
 };
 
 export function canAddPresentationBinding(
@@ -242,9 +249,6 @@ export function fresh(type: NodeKind = 'agent', index = 0): GraphNode {
   if (type === 'action')
     return {
       ...common,
-      prompt: 'Perform this explicit board operation.',
-      operation: 'inspect_changes',
-      input: {},
     };
   if (type === 'wait')
     return {
@@ -334,7 +338,14 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     !Array.isArray(value.decisionLabels)
       ? (structuredClone(value.decisionLabels) as DecisionLabels)
       : undefined;
-  const operation = String(value.operation ?? 'inspect_changes') as ActionOperation;
+  const rawActivity = value.activity as Record<string, unknown> | undefined;
+  const activity = rawActivity && typeof rawActivity === 'object' && typeof rawActivity.id === 'string' && Number.isInteger(rawActivity.revision)
+    ? structuredClone(rawActivity as unknown as WorkflowActivityRef) : undefined;
+  const activityDescriptorDigest = typeof value.activityDescriptorDigest === 'string' && /^[a-f0-9]{64}$/.test(value.activityDescriptorDigest)
+    ? value.activityDescriptorDigest : undefined;
+  const bindings = value.bindings && typeof value.bindings === 'object' && !Array.isArray(value.bindings)
+    ? structuredClone(value.bindings as Record<string, WorkflowActivityBinding>) : undefined;
+  const operation = value.operation === undefined ? undefined : String(value.operation) as ActionOperation;
   const outcomes = Array.isArray(value.outcomes) ? value.outcomes.map(String) : undefined;
   const conditionOutcomes =
     rawCondition?.outcomes && typeof rawCondition.outcomes === 'object'
@@ -396,6 +407,9 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     checkCommand:
       type === 'check' || value.requiresCheck ? String(value.checkCommand ?? '') : undefined,
     operation: type === 'action' ? operation : undefined,
+    activity: type === 'action' ? activity : undefined,
+    activityDescriptorDigest: type === 'action' ? activityDescriptorDigest : undefined,
+    bindings: type === 'action' ? bindings : undefined,
     input:
       type === 'action' && value.input && typeof value.input === 'object'
         ? (structuredClone(value.input) as ActionInput)
@@ -410,7 +424,11 @@ export function safeNode(raw: unknown, index: number): GraphNode {
             target: session?.target ? String(session.target) : undefined,
           }
         : undefined,
-    permissions: type === 'agent' ? String(value.permissions ?? node.permissions) : undefined,
+    permissions: type === 'agent'
+      ? String(value.permissions ?? node.permissions)
+      : type === 'action' && activity && typeof value.permissions === 'string'
+        ? value.permissions
+        : undefined,
     maxRounds:
       type === 'agent' && Number.isFinite(Number(value.maxRounds))
         ? Number(value.maxRounds)
@@ -432,7 +450,10 @@ export function safeNode(raw: unknown, index: number): GraphNode {
         ? (value.submissionRequirements as WorkflowStep['submissionRequirements'])
         : undefined,
     summaryHeadings: type === 'agent' ? (value.summaryHeadings as string[] | undefined) : undefined,
-    model: type === 'agent' && value.model ? String(value.model) : undefined,
+    model:
+      (type === 'agent' || Boolean(value.activity)) && value.model
+        ? String(value.model)
+        : undefined,
     condition:
       type === 'branch'
         ? {
@@ -483,6 +504,9 @@ export function backendNode(node: GraphNode): WorkflowStep {
     waitFor,
     operation,
     input,
+    activity,
+    activityDescriptorDigest,
+    bindings,
     session,
     artifact,
     presentationBindings,
@@ -522,10 +546,16 @@ export function backendNode(node: GraphNode): WorkflowStep {
     result.requiresCheck = true;
   }
   if (type === 'action') {
-    result.operation = operation ?? 'inspect_changes';
-    const actionInput = { ...(input ?? {}) };
-    if (operation === 'create_ticket' && actionInput.projectId === '') delete actionInput.projectId;
-    result.input = actionInput;
+    if (activity) {
+      result.activity = structuredClone(activity);
+      if (activityDescriptorDigest) result.activityDescriptorDigest = activityDescriptorDigest;
+      result.bindings = structuredClone(bindings ?? {});
+    } else if (operation) {
+      result.operation = operation;
+      const actionInput = { ...(input ?? {}) };
+      if (operation === 'create_ticket' && actionInput.projectId === '') delete actionInput.projectId;
+      result.input = actionInput;
+    }
   }
   if (type === 'wait')
     result.waitFor = waitFor ?? { event: 'ticket_message_received', ticketSource: 'active_ticket' };
@@ -589,10 +619,20 @@ export function toWorkflow(graph: GraphWorkflow): WorkflowDefinition {
     schemaVersion: 3,
     entryNode: graph.entryNode || nodes[0]?.id || '',
     maxRevisions: Number.isInteger(graph.maxRevisions) ? graph.maxRevisions : 3,
+    ...(graph.runInputSchema ? { runInputSchema: structuredClone(graph.runInputSchema) } : {}),
+    ...(graph.resultSchema ? { resultSchema: structuredClone(graph.resultSchema) } : {}),
+    ...(graph.resultBindings ? { resultBindings: structuredClone(graph.resultBindings) } : {}),
     nodes,
     edges: graph.edges,
     steps: nodes,
   };
+}
+
+export function blankWorkflow(): GraphWorkflow {
+  return fromWorkflow({
+    id: newId(), name: 'Untitled workflow', version: 0,
+    nodes: [], edges: [], entryNode: '', maxRevisions: 3,
+  });
 }
 
 export function starter(): GraphWorkflow {
@@ -658,7 +698,7 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
   }
   for (const node of workflow.nodes) {
     if (!node.name.trim()) continue;
-    if (node.type !== 'branch' && !node.prompt.trim())
+    if (!['branch', 'action'].includes(node.type) && !node.prompt.trim())
       errors.push(`${node.name}: objective is required.`);
     if (node.type === 'branch') {
       const condition = node.condition;

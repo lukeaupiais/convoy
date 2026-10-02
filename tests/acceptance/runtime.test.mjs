@@ -488,8 +488,9 @@ test('tool execution requires exact approval; workflows enforce artifacts, gates
       ),
     };
   }, runners);
-  await act('saveWorkflow', {
+  const testWorkflow = await act('saveWorkflow', {
     workflow: {
+      id: 'runtime-evidence',
       name: 'Test',
       steps: [
         {
@@ -504,7 +505,7 @@ test('tool execution requires exact approval; workflows enforce artifacts, gates
   });
   await act('registerRunner', { name: 'Local', kind: 'local', repository: '/fixture' });
   const runnerId = (await runtime.snapshot()).runners[0].id;
-  await act('configure', { runnerId, workflow: true });
+  await act('configure', { runnerId, workflow: testWorkflow.id });
   const version = (await session()).workflow.version;
   await act('saveWorkflow', {
     workflow: { name: 'New template', steps: [{ name: 'New', kind: 'human', prompt: 'New' }] },
@@ -600,8 +601,9 @@ test('verification gates reject changed code and accept only the configured succ
     }),
     /required/,
   );
-  await act('saveWorkflow', {
+  const checkWorkflow = await act('saveWorkflow', {
     workflow: {
+      id: 'runtime-check',
       name: 'Check',
       steps: [
         {
@@ -616,7 +618,7 @@ test('verification gates reject changed code and accept only the configured succ
     },
   });
   await act('registerRunner', { name: 'Local', kind: 'local', repository: '/fixture' });
-  await act('configure', { runnerId: (await runtime.snapshot()).runners[0].id, workflow: true });
+  await act('configure', { runnerId: (await runtime.snapshot()).runners[0].id, workflow: checkWorkflow.id });
   await act('startWorkflow');
   const approval = await until(async () => (await session()).pending);
   await act('decide', { approvalId: approval.id, allow: true });
