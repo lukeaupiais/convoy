@@ -115,3 +115,25 @@ reviewed activities/data. Events/waits and composition have delegated written pr
 code awaits reviewed dependencies. Event acceptance must durably reserve the canonical run
 identity before its first effect; lost acknowledgement must recover the same run.
 No implementation PR has been merged or deployed.
+
+## PR4 preliminary review and additional assignments
+
+PR4 remains work in progress; no frozen review acceptance or draft publication yet. Parent early
+module/web run: 324 pass, zero failures or skips. Parent early affected acceptance run: 47 tests,
+40 pass, 7 failures (legacy reply/status/recovery cluster and lost pinned-version projection).
+Logs: /tmp/convoy-automation-series/pr4-parent-early-modules-web.log and
+/tmp/convoy-automation-series/pr4-parent-early-acceptance.log. These are diagnostic evidence,
+not acceptance of the unfinished implementation.
+
+Independent preliminary Spec review identified a required-approval reservation bypass and
+pure/observation attempts incorrectly sharing durable unknown-effect recovery. Parent review
+also identified JSON authoring losing intermediate edits and unsupported receipt confirmation
+from current mutable ticket state. Fixes and targeted runtime proof are assigned before freeze.
+The preliminary Standards review found a lifetime reservation cap mislabeled as outstanding;
+that must be fixed while retaining exact immutable decision identity. The generic fresh-project
+name change to Workspace is intentional and preserves existing stored names and project ID.
+
+Written helper assignments: pr4-acceptance-spec.md, pr4-lifecycle-acceptance-spec.md and
+pr4-ui-authoring-spec.md. Existing Luna high agents assist PR4 with nonoverlapping test/UI files;
+PR4 owner retains backend/gate integration and the final scoped commit. Final immutable two-axis
+review, required checks, regression acceptance and exact-head remote CI remain mandatory.
