@@ -14,7 +14,7 @@ const isolatedSource = source.replace(
 const js = ts.transpileModule(isolatedSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const { fromWorkflow, toWorkflow, validateWorkflow, reorderWorkflowStages, insertWorkflowStage, workflowStageOrder, canAddPresentationBinding } =
+const { fromWorkflow, toWorkflow, validateWorkflow, reorderWorkflowStages, insertWorkflowStage, workflowStageOrder, canAddPresentationBinding, blankWorkflow, fresh } =
   await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
 
 test('workflow codec uses the browser-compatible ID seam rather than requiring randomUUID', () => {
@@ -90,6 +90,36 @@ test('workflow editor codec round-trips canonical graph nodes without leaking ed
   assert.equal(encoded.nodes[1].kind, 'human');
   assert.equal('type' in encoded.nodes[0], false);
   assert.deepEqual(validateWorkflow(editor), []);
+});
+
+test('fresh generic actions have no tutorial prompt and legacy action prompts survive round trips', () => {
+  const action = fresh('action');
+  assert.equal(action.prompt, '');
+  const legacy = { id: 'legacy-action', name: 'Legacy action', nodes: [{ id: 'action', kind: 'action', name: 'Action', prompt: 'Configured legacy context.', operation: 'inspect_changes', input: {} }], edges: [], entryNode: 'action' };
+  const roundTrip = toWorkflow(fromWorkflow(legacy));
+  assert.equal(roundTrip.nodes[0].prompt, 'Configured legacy context.');
+});
+
+test('workflow run schemas and result bindings survive editor round trips', () => {
+  const source = {
+    id: 'typed-run', name: 'Typed run', entryNode: 'input', maxRevisions: 2,
+    runInputSchema: { type: 'object', properties: { amount: { type: 'number' } }, required: ['amount'], additionalProperties: false },
+    resultSchema: { type: 'object', properties: { total: { type: 'number' } }, required: ['total'], additionalProperties: false },
+    resultBindings: { total: { from: { kind: 'activity_output', nodeId: 'sum', path: ['amount'] } } },
+    nodes: [{ id: 'input', kind: 'action', name: 'Sum', activity: { id: 'data.multiply', revision: 1 }, bindings: {} }],
+    edges: [],
+  };
+  const roundTrip = toWorkflow(fromWorkflow(source));
+  assert.deepEqual(roundTrip.runInputSchema, source.runInputSchema);
+  assert.deepEqual(roundTrip.resultSchema, source.resultSchema);
+  assert.deepEqual(roundTrip.resultBindings, source.resultBindings);
+});
+
+test('blank workflow starts without an agent node and can add any explicit first stage', () => {
+  const blank = blankWorkflow();
+  assert.deepEqual(blank.nodes, []);
+  assert.equal(blank.entryNode, '');
+  assert.match(validateWorkflow(blank).join(' '), /Add at least one node/);
 });
 
 test('decision labels survive draft codec round trips and invalid metadata is rejected', () => {

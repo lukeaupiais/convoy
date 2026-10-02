@@ -1,4 +1,15 @@
-import type { Session, WorkflowEdge, WorkflowStep } from '../../shared/api/runtime';
+import type { Session, WorkflowActivityDescriptor, WorkflowEdge, WorkflowStep } from '../../shared/api/runtime';
+
+export function requiredGateActivityTarget(session: Session, activities: WorkflowActivityDescriptor[] = []) {
+  const flow = session.flow;
+  if (!flow || flow.status !== 'waiting_gate') return undefined;
+  const edges = session.workflow?.edges ?? [];
+  const edge = edges.find(value => value.from === flow.nodeId && value.outcome === 'approved');
+  const node = edge && (session.workflow?.nodes ?? session.workflow?.steps ?? []).find(value => value.id === edge.to);
+  if (!node?.activity) return undefined;
+  const descriptor = activities.find(value => value.ref.id === node.activity?.id && value.ref.revision === node.activity?.revision);
+  return descriptor?.approval.required && descriptor.approval.policy === 'workflow-gate' ? node.id : undefined;
+}
 
 export function workflowDecisionLabel(
   node: Pick<WorkflowStep, 'decisionLabels'> | undefined,

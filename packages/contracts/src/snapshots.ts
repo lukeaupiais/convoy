@@ -44,6 +44,7 @@ import type {
 } from './model/work';
 import type {
   WorkflowDefinition,
+  WorkflowActivityDescriptor,
   BoardAutomationView,
   AutomationRule,
   WorkflowEffect,
@@ -92,6 +93,9 @@ export type RuntimeSnapshot = {
   runnerPools: RunnerPool[];
   scheduler: { maxConcurrent: number };
   workflowDrafts?: Record<string, { workflow: WorkflowDefinition; revision: number }>;
+  workflowActivities?: WorkflowActivityDescriptor[];
+  workflowActivitiesUnavailableTotal?: number;
+  workflowActivitiesTruncated?: boolean;
   workflowRuns?: import('./model/workflows').WorkflowRun[];
   workflowRunsTotal?: number;
   workflowRunsTruncated?: boolean;

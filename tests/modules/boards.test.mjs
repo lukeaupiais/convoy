@@ -43,6 +43,26 @@ test('migration creates one editable multi-project board without changing ticket
   assert.deepEqual(again.snapshot().boards[0].tickets.map(t => t.ticketId), [1, 2]);
 });
 
+test('workflow mutation receipts bind update and placement identity and deduplicate exact Work commands', async () => {
+  const { catalog, state } = fixture();
+  const update = { action: 'updateTicket', ticketId: 1, taskId: 1, revision: 1,
+    patch: { status: 'Approved' }, workflowRunId: 'run-1', workflowInstance: 'step-1',
+    idempotencyKey: 'run-1:step-1', requestId: 'step-1' };
+  const updated = await catalog.command(update);
+  const retried = await catalog.command(update);
+  assert.deepEqual(retried, updated);
+  assert.equal(state.workflowMutationReceipts['run-1:step-1:updateTicket'].result.status, 'Approved');
+  assert.ok(catalog.workflowMutationReceipt(update));
+  await assert.rejects(catalog.command({ ...update, patch: { status: 'Rejected' } }), /identity was reused/);
+
+  const placement = { action: 'setBoardPlacement', boardId: 'default-board', ticketId: 1,
+    revision: updated.revision, placement: { columnId: 'column-done' }, workflowRunId: 'run-1',
+    workflowInstance: 'step-2', idempotencyKey: 'run-1:step-2' };
+  const moved = await catalog.command(placement);
+  assert.deepEqual(await catalog.command(placement), moved);
+  assert.ok(catalog.workflowMutationReceipt(placement));
+});
+
 test('boards can be created from editable templates and show multiple projects', async () => {
   const { catalog } = fixture();
   const template = await catalog.command({ action: 'saveBoardTemplate', name: 'Research', description: 'Editable', columns: [{ id: 'idea', name: 'Ideas', value: 'idea' }, { id: 'done', name: 'Done', value: 'done' }], grouping: { mode: 'field', field: 'custom.stage' } });

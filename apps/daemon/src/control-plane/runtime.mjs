@@ -13,6 +13,11 @@ import {
   initializeAutomations,
   workflowForProject,
   defaultWorkflowDefinition,
+  validateActivityBindings,
+  validateWorkflowResultBindings,
+  createActivityCatalog,
+  builtinActivityDescriptors,
+  legacyActivityRef,
 } from '../modules/workflows/index.mjs';
 import { createWork } from '../modules/work/index.mjs';
 import {
@@ -94,6 +99,7 @@ const orchestrationCommands = [
   'getWorkflowRun',
   'heartbeat',
   'openTicketConversation',
+  'prepareWorkflowActivity',
   'reconcileAssignment',
   'release',
   'releaseWorkflowRun',
@@ -163,6 +169,7 @@ export async function createRuntime({
     capabilities: ['organizations', 'provider-connections', 'remote-execution'],
     authenticationMethods: ['local-bootstrap'],
   },
+  workflowActivities = [],
 }) {
   if (!persistence?.store || !persistence?.contextFiles || !persistence?.commandLogs)
     throw new Error('Runtime persistence ports are required.');
@@ -173,6 +180,10 @@ export async function createRuntime({
     readLegacyConversation = async () => null,
   } = persistence;
   const state = store.data;
+  const activityCatalog = createActivityCatalog([
+    ...builtinActivityDescriptors,
+    ...workflowActivities.map((registration) => registration?.descriptor),
+  ]);
   const jobs = new Map();
   const listeners = new Set();
   const publish = (change) => {
@@ -647,7 +658,7 @@ export async function createRuntime({
       run.flow.resumeStatus = run.flow.status;
       run.flow.status = 'interrupted';
       run.status = 'interrupted';
-      const effect = run.attempt && state.workflowEffectLedger?.[`${run.id}:${run.attempt.instance}:${run.attempt.nodeId}`];
+      const effect = run.attempt && workflows?.effectForAttempt(run.id, run.attempt.instance, run.attempt.nodeId);
       if (run.attempt?.status === 'running' && effect?.status === 'succeeded') {
         run.attempt.status = 'completed';
         run.attempt.outcome = 'success';
@@ -676,6 +687,7 @@ export async function createRuntime({
     execute: (...args) => runners.execute(...args),
     event,
     capacityProvider,
+    workflowRunAssignments: () => workflows?.placementAssignments() ?? [],
     audit: securityAudit.record,
     authorizeFullSystem: async (session, profileId) => {
       const project = state.projects.find((candidate) => candidate.id === session.projectId);
@@ -1029,6 +1041,10 @@ export async function createRuntime({
   workflowEffects = createWorkflowEffects({
     state,
     catalog,
+    inspectChanges: (session, ignoreArtifact, signal) => runners.execute(runnerFor(session), {
+      action: 'diff', ...(session.executionGrant?.profileId === 'verify' ? { execution: verification.descriptor(session) } : {}),
+      workspace: session.workspace.path, ignoreArtifact,
+    }, signal),
     conversations,
     sessionFor: workExecution.sessionFor,
     boards,
@@ -1060,6 +1076,7 @@ export async function createRuntime({
         : command;
       return work.command(governedCommand, { principal, projectId });
     },
+    workReceipt: command => work.catalog.workflowMutationReceipt(command),
     makeSession,
     pinInstructions,
     normalizeWorkflow,
@@ -1074,22 +1091,62 @@ export async function createRuntime({
       await requireProjectPermission(rule.projectId, 'project.execute', rule.principal);
       await authorizeProjectModel(session.model, rule.projectId, rule.principal);
       capabilities.pinDefault(session);
-      const nodes = session.workflow?.nodes ?? [];
-      const required = [
-        ...new Set(
-          nodes.flatMap((node) => [
-            ...(node.artifact ? ['read_file'] : []),
-            ...(node.kind === 'check' || node.requiresCheck ? ['shell'] : []),
-          ]),
-        ),
-      ];
-      if (
-        required.length ||
-        nodes.some((node) => node.kind === 'action' && node.operation === 'inspect_changes')
-      ) {
-        const choice = placement.choose(session, required);
-        if (choice.textOnly || (choice.reason && !choice.capacityDemand))
-          throw new Error(choice.reason ?? 'This workflow requires an authorized runner.');
+    },
+    activityCatalog,
+    injectedActivities: workflowActivities,
+    getWorkflowOwner: () => workflows,
+    authorizeActivity: async (run, descriptor, node, approvalReservation = null) => {
+      if (!run?.principal || !run.projectId) throw new Error('Workflow activity has no governed project identity.');
+      await identity.assertPrincipalActive(run.principal);
+      await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+      const reservedRoute = approvalReservation && run.flow?.status === 'waiting_gate' &&
+        run.flow.nodeId === approvalReservation.gateNodeId && run.flow.instance === approvalReservation.gateInstance &&
+        normalizeWorkflow(run.workflow).edges.some(edge => edge.from === approvalReservation.gateNodeId && edge.to === node.id && edge.outcome === 'approved');
+      const consumedReservation = approvalReservation && run.attempt?.reservationId === approvalReservation.id &&
+        run.attempt?.instance === approvalReservation.targetInstance && run.attempt?.nodeId === node.id &&
+        approvalReservation.targetNodeId === node.id;
+      if (node?.activity && descriptor.approval.required && descriptor.approval.policy === 'workflow-gate' &&
+          !reservedRoute && !consumedReservation)
+        throw new Error('This activity requires the exact prepared and approved intent reservation.');
+      const resources = descriptor.resources;
+      const needsAgent = resources.location === 'agent';
+      if (needsAgent || resources.location === 'runner' || resources.workspace) {
+        const session = run.sessionId ? state.sessions[run.sessionId] : null;
+        const resourceContext = session ?? run;
+        if (!session && needsAgent) {
+          const error = new Error('This activity is waiting for an active provider session.');
+          error.code = 'ACTIVITY_RESOURCES_UNAVAILABLE';
+          throw error;
+        }
+        if (session && needsAgent) {
+          await authorizeSessionModel(session, session.model);
+          const nodeCapabilities = new Set(capabilities.modelTools(session, node).map(tool => tool.name));
+          if ((resources.tools ?? []).some(name => !nodeCapabilities.has(name)))
+            throw new Error('The pinned activity requires tools outside this node’s current Library capability profile.');
+        }
+        if ((resources.location === 'runner' || resources.workspace) &&
+            (!resourceContext.workspace || !resourceContext.runnerId || !resourceContext.executionGrant || !resourceContext.assignment)) {
+          const error = new Error('This activity is waiting for an authorized workspace and runner.');
+          error.code = 'ACTIVITY_RESOURCES_UNAVAILABLE';
+          throw error;
+        }
+        if (resources.location === 'runner' || resources.workspace) {
+          const runner = state.runners.find(value => value.id === resourceContext.runnerId);
+          const environment = runner && state.environments.find(value => value.id === runner.environmentId);
+          const currentGrant = runner && execution.policy.resolve(resourceContext, runner);
+          const access = runner && environment && execution.access.authorize(resourceContext, environment, 'use', {
+            executionProfile: currentGrant?.profileId, repository: runner.repository,
+          });
+          if (!runner || !environment?.enabled || !runner.enabled || !runner.online || !runner.projectIds.includes(run.projectId) ||
+              !execution.policy.supports(runner, currentGrant?.profileId) || !access?.allowed ||
+              currentGrant?.digest !== resourceContext.executionGrant.digest ||
+              resourceContext.assignment.state !== 'running' || resourceContext.assignment.policyDigest !== currentGrant.digest ||
+              resourceContext.executionGrant.runnerId !== runner.id || resourceContext.executionGrant.environmentId !== environment.id) {
+            const error = new Error('Runner, workspace, or execution authorization changed before this activity could run.');
+            error.code = 'ACTIVITY_RESOURCES_UNAVAILABLE';
+            throw error;
+          }
+        }
       }
     },
   });
@@ -1097,7 +1154,13 @@ export async function createRuntime({
     save: () => store.save(), event});
   engine = createWorkflowEngine({
     state,
+    getWorkflowOwner: () => workflows,
     prepareStart: (session, options) => {
+      const entry = (session.workflow?.nodes ?? session.workflow?.steps ?? []).find(node => node.id === session.workflow?.entryNode);
+      const entryRef = entry?.activity ?? legacyActivityRef(entry?.operation);
+      const entryDescriptor = entryRef && activityCatalog.get(entryRef);
+      if (entry?.operation && entryDescriptor?.resources.location === 'runner' && placement.effective(session).mode === 'none')
+        throw new Error('This legacy workflow activity requires a configured runner placement.');
       capabilities.pin(session, capabilities.resolveForWorkflow(session, session.workflow, options));
       verification.pin(session);
     },
@@ -1223,13 +1286,11 @@ export async function createRuntime({
           uncertainIds.add(run.sessionId ?? run.id);
       const uncertain = uncertainIds.size;
       if (active + uncertain >= scheduler.maxConcurrent) return false;
-      if (step.kind === 'check' || step.requiresCheck || step.artifact || step.kind === 'action' && step.operation === 'inspect_changes') {
-        s.flow.status = 'failed'; s.status = 'failed';
-        if (s.attempt?.instance === instance) s.attempt.status = 'failed';
-        event(s, 'workflow_failed', { message: 'This activity requires a repository runner.' });
-        void store.save();
-        return true;
-      }
+      const descriptor = step.activity ? activityCatalog.get(step.activity) : null;
+      const runnerRequired = step.kind === 'check' || Boolean(step.requiresCheck) || Boolean(step.artifact) ||
+        step.kind === 'action' && (step.operation === 'inspect_changes' || descriptor?.resources.location === 'runner' || descriptor?.resources.workspace);
+      const requiredTools = [...(descriptor?.resources.tools ?? []), ...(step.artifact ? ['read_file'] : []),
+        ...(step.kind === 'check' || step.requiresCheck ? ['shell'] : [])];
       const controller = new AbortController();
       const job = { controller };
       jobs.set(s.id, job);
@@ -1239,11 +1300,28 @@ export async function createRuntime({
           if (!principal) throw new Error('Workflow run has no governed principal.');
           await identity.assertPrincipalActive(principal);
           await requireProjectPermission(s.projectId, 'project.execute', principal);
-          if (step.kind !== 'action' && step.kind !== 'branch') throw new Error('This activity needs a supported event or operator action.');
+          s.executionPrincipal = structuredClone(principal);
+          s.placement ??= structuredClone(project?.placement ?? { mode: 'none' });
+          s.executionProfile ??= project?.executionProfile ?? 'inherit';
+          if (runnerRequired) {
+            const placed = await placement.prepare(s, requiredTools, controller.signal);
+            if (placed.textOnly || placed.reason) {
+              s.queueReason = placed.reason ?? 'This activity is waiting for an authorized runner placement.';
+              s.flow.resumeStatus = 'ready'; s.flow.status = 'paused'; s.status = 'paused';
+              if (s.attempt?.instance === instance) await workflows.markActivityResourceWait(s, { instance, nodeId: step.id, status: 'waiting' });
+              else await store.save();
+              return;
+            }
+            await verification.prepare(s, controller.signal);
+          }
+          if (!['action', 'branch', 'check'].includes(step.kind)) throw new Error('This activity needs a supported event or operator action.');
           await automated(s, step, instance, controller);
         } catch (error) {
           if (!['cancelled', 'paused'].includes(s.flow?.status)) await engine.fail(s, instance, error.message);
         } finally {
+          if (runnerRequired && s.assignment && s.assignment.state !== 'uncertain') {
+            try { await verification.release(s); } finally { await placement.release(s); }
+          }
           jobs.delete(s.id);
           await store.save();
           if (!closing) await dispatch();
@@ -1294,23 +1372,28 @@ export async function createRuntime({
         if (s.projectId)
           await requireProjectPermission(s.projectId, 'project.execute', executionPrincipal);
         await store.save();
+        const activityDescriptor = step?.activity ? activityCatalog.get(step.activity) : null;
+        const activityNeedsRunner = activityDescriptor?.resources.location === 'runner' ||
+          activityDescriptor?.resources.workspace === true;
+        const runnerRequired = Boolean(step?.kind === 'check' || step?.requiresCheck || step?.artifact || activityNeedsRunner);
         const required = [
-          ...new Set(
-            (s.workflow?.nodes ?? s.workflow?.steps ?? []).flatMap((x) => [
-              ...(x.artifact ? ['read_file'] : []),
-              ...(x.kind === 'check' || x.requiresCheck ? ['shell'] : []),
-            ]),
-          ),
+          ...(activityDescriptor?.resources.tools ?? []),
+          ...(step?.artifact ? ['read_file'] : []),
+          ...(step?.kind === 'check' || step?.requiresCheck ? ['shell'] : []),
         ];
         const result = await placement.prepare(s, required, controller.signal);
         if (controller.signal.aborted) throw new Error('Stopped');
-        if (result.reason) {
+        if (runnerRequired && (result.reason || result.textOnly)) {
+          if (step?.operation) throw new Error(result.reason ?? 'This legacy workflow operation requires a configured runner.');
           blocked = true;
           s.status = 'queued';
-          s.queueReason = result.reason;
-          if (instance) s.flow.status = 'ready';
+          s.queueReason = result.reason ?? 'This activity is waiting for an authorized runner placement.';
+          if (instance) {
+            s.flow.status = 'ready';
+            await workflows.markActivityResourceWait(s, { instance, nodeId: step.id, status: 'ready' });
+          }
           else s.queuedInput = input;
-          await store.save();
+          if (!instance) await store.save();
           return;
         }
         await verification.prepare(s, controller.signal);
@@ -1327,7 +1410,10 @@ export async function createRuntime({
         if (!instance || !['paused', 'cancelled'].includes(s.flow.status))
           s.status = controller.signal.aborted ? 'interrupted' : 'failed';
         event(s, 'placement_error', { message: e.message });
-        if (instance) await engine.fail(s, instance);
+        if (instance) {
+          await engine.fail(s, instance);
+          await workflowEffects.workflowRunFailed(s, e);
+        }
       }
     })().finally(async () => {
       // Do not expose an idle slot until the old runner's assignment is released.
@@ -1375,7 +1461,7 @@ export async function createRuntime({
       }
     }
   }
-  async function requestStop(s, interrupt = false) {
+  async function requestStop(s, interrupt = false, { awaitWork = true } = {}) {
     const token = { at: now(), mode: interrupt ? 'interrupt' : 'stop' };
     const job = jobs.get(s.id);
     s.stopRequested = token;
@@ -1393,7 +1479,7 @@ export async function createRuntime({
     job?.controller.abort();
     if (activeFlow(s)) await engine.pause(s);
     await store.save();
-    await job?.promise.catch(() => {});
+    if (awaitWork) await job?.promise.catch(() => {});
     if (s.stopRequested === token) {
       delete s.stopRequested;
       if (!activeFlow(s)) s.status = 'interrupted';
@@ -1533,21 +1619,10 @@ export async function createRuntime({
         });
         return;
       } else if (step.kind === 'action') {
-        let result = null;
-        if (step.operation === 'inspect_changes') {
-          if (!s.workspace) throw new Error('Inspect changes requires an assigned worktree.');
-          result = {
-            ...(await runners.execute(
-              runnerFor(s),
-              { action: 'diff', ...(s.executionGrant?.profileId === 'verify' ? {execution: sessionExecution.descriptor(s)} : {}), workspace: s.workspace.path },
-              controller.signal,
-            )),
-            at: now(),
-          };
-          s.review = result;
-        } else result = await engine.executeAction(s, instance);
+        const result = await engine.executeAction(s, instance, null, controller.signal);
         if (controller.signal.aborted) throw new Error('Stopped.');
-        if (result?.awaitingDelivery) await engine.holdAction(s, instance, result);
+        if (step.operation === 'inspect_changes') s.review = result;
+        if (result?.awaitingDelivery || result?.activityWaiting) await engine.holdAction(s, instance, result.output ?? result);
         else await engine.finishAutomated(s, instance, 'success', result);
         return;
       } else if (step.kind === 'branch') {
@@ -1606,11 +1681,23 @@ export async function createRuntime({
       s.pending = null;
       event(s, 'workflow_error', { message: error.message });
       await engine.fail(s, instance);
+      await workflowEffects.workflowRunFailed(s, error);
     }
   }
   function validateWorkflowBindings(workflow) {
     capabilities.validateWorkflow(workflow);
+    validateWorkflowResultBindings(workflow, activityCatalog);
     for (const node of workflow.nodes ?? []) {
+      if (node.activity) {
+        validateActivityBindings(node, workflow, activityCatalog);
+        const descriptor = activityCatalog.get(node.activity);
+        if (descriptor?.approval.required && descriptor.approval.policy === 'workflow-gate') {
+          const incoming = workflow.edges.filter(edge => edge.to === node.id);
+          if (workflow.entryNode === node.id || !incoming.length || incoming.some(edge => edge.outcome !== 'approved' ||
+              workflow.nodes.find(source => source.id === edge.from)?.kind !== 'human'))
+            throw new Error(`${node.name}: this activity requires an explicit human approval edge.`);
+        }
+      }
       const input = node.input ?? {};
       if (node.operation === 'create_ticket' && input.projectId !== undefined) catalog.project(input.projectId);
       if (node.operation === 'move_ticket' && catalog.boards) {
@@ -1648,6 +1735,9 @@ export async function createRuntime({
     requestStop,
     automations,
     defaultPrincipal: localPrincipal,
+    activityCatalog,
+    activityAvailable: (ref) => workflowEffects.hasActivity(ref),
+    prepareActivityIntent: (...args) => workflowEffects.prepareActivityIntent(...args),
   });
   configuration = createSessionConfiguration({
     engine,
@@ -1681,6 +1771,7 @@ export async function createRuntime({
   snapshot = createSnapshotQuery({
     guidanceView: workspaceGuidance.view,
     state,
+    workflowEffectSummaries: projectIds => workflows?.effectSummaries(projectIds) ?? [],
     getSession: get,
     jobs,
     capabilities,
@@ -1911,12 +2002,12 @@ export async function createRuntime({
     if (action === 'startWorkflowRun') {
       await requireProjectPermission(command.projectId, 'project.execute', actor);
       const project = state.projects.find((candidate) => candidate.id === command.projectId);
-      const workflow = workflowForProject(state, command.workflowId, command.workflowVersion, command.projectId);
+      const workflow = workflowForProject(state, command.workflowId, command.workflowVersion, command.projectId, { raw: true });
       if (command.activeTicketId !== undefined) {
         const ticket = catalog.ticket(command.activeTicketId);
         if (!ticket || ticket.projectId !== command.projectId) throw new Error('Ticket is not available for this project.');
       }
-      const run = await workflows.startRun({ projectId: project.id, organizationId: project.organizationId, principal: actor, workflow, activeTicketId: command.activeTicketId ?? null });
+      const run = await workflows.startRun({ projectId: project.id, organizationId: project.organizationId, principal: actor, workflow, activeTicketId: command.activeTicketId ?? null, runInput: command.runInput ?? {} });
       await store.save();
       await dispatch();
       return { workflowRunId: run.id };
@@ -1926,6 +2017,25 @@ export async function createRuntime({
       if (!run?.projectId) throw new Error('Workflow run does not exist.');
       await requireProjectPermission(run.projectId, 'project.read', actor);
       return workflows.readRun(run.id);
+    }
+    if (action === 'prepareWorkflowActivity') {
+      const run = workflows.run(command.workflowRunId);
+      if (!run?.projectId || !run.flow) throw new Error('Workflow run does not exist.');
+      await requireProjectPermission(run.projectId, 'project.execute', actor);
+      if (!run.principal) throw new Error('Workflow run has no governed execution principal.');
+      await identity.assertPrincipalActive(run.principal);
+      await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+      if (run.independentRun) {
+        workflows.requireRunLease(run, { client: command.client, actorKey: principalKey(actor) });
+      } else {
+        const session = run.sessionId && state.sessions[run.sessionId];
+        if (!session || session.workflowRunId !== run.id) throw new Error('Session-backed workflow control is unavailable.');
+        await own(session, command.client, actor);
+      }
+      const reservation = await workflows.reserveActivityIntent({ runId: run.id,
+        gateNodeId: run.flow.nodeId, gateInstance: command.gateInstance, targetNodeId: command.targetNodeId });
+      await store.save();
+      return reservation;
     }
     if (['claimWorkflowRun', 'releaseWorkflowRun', 'decideWorkflowRun', 'continueWorkflowRun', 'cancelWorkflowRun', 'reconcileWorkflowRun'].includes(action)) {
       const run = workflows.run(command.workflowRunId);

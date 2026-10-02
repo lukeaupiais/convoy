@@ -1,11 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createBoards } from './boards.mjs';
 import { requiredText as text } from '../../shared/validation.mjs';
 export const phases = ['Backlog', 'Ready', 'In progress', 'In review', 'Done'];
 export function createCatalog({ state, save, execution, externalTickets, contextFiles, referencedColumn, referencedBoard, validateRuntimeSelection = () => { throw new Error('Runtime selection unavailable.'); }, replyContext = () => ({}) }) {
-  state.projects ??= [{ id: 'agent-platform', organizationId: 'personal', name: 'Agent platform', description: '', revision: 1, placement: { mode: 'none' }, executionProfile: 'ask' }];
+  state.projects ??= [{ id: 'agent-platform', organizationId: 'personal', name: 'Workspace', description: '', revision: 1, placement: { mode: 'none' }, executionProfile: 'ask' }];
   for (const value of state.projects) value.organizationId ??= 'personal';
   state.ticketRelations ??= [];
+  state.workflowMutationReceipts ??= {};
   state.tickets ??= []; state.ticketRequests ??= {};
   state.ticketImportFacts ??= [];
   state.workFacts ??= [];
@@ -26,6 +27,27 @@ export function createCatalog({ state, save, execution, externalTickets, context
   }
   const project = id => { const p = state.projects.find(p => p.id === id); if (!p) throw new Error('Project not found.'); return p; };
   const ticket = id => state.tickets.find(t => String(t.id) === String(id));
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const commandDigest = command => createHash('sha256').update(JSON.stringify(canonical(command))).digest('hex');
+  const workflowMutationKey = command => command?.workflowRunId && command?.workflowInstance && command?.idempotencyKey
+    ? `${command.workflowRunId}:${command.workflowInstance}:${command.action}` : null;
+  function existingWorkflowMutation(command) {
+    const key = workflowMutationKey(command);
+    const receipt = key && state.workflowMutationReceipts[key];
+    if (!receipt) return null;
+    if (receipt.commandDigest !== commandDigest(command)) throw new Error('Workflow command identity was reused with different Work input.');
+    return structuredClone(receipt.result);
+  }
+  async function recordWorkflowMutation(command, result) {
+    const key = workflowMutationKey(command);
+    if (!key) return;
+    if (Buffer.byteLength(JSON.stringify(command)) > 24_000 || Buffer.byteLength(JSON.stringify(result ?? null)) > 32_000)
+      throw new Error('Workflow Work receipt exceeds its bounded size.');
+    state.workflowMutationReceipts[key] = { key, action: command.action, workflowRunId: command.workflowRunId,
+      workflowInstance: command.workflowInstance, idempotencyKey: command.idempotencyKey,
+      commandDigest: commandDigest(command), result: structuredClone(result), at: new Date().toISOString() };
+  }
   const relationKind = value => {
     const kind = text(value ?? 'related', 'Relation kind', 80);
     if (!/^[\w-]+$/.test(kind)) throw new Error('Relation kind must use letters, numbers, hyphens or underscores.');
@@ -365,6 +387,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (old) Object.assign(old, value); else state.projects.push(value); await save(); return value;
       }
       if (c.action === 'createTicket') {
+        const cached = existingWorkflowMutation(c); if (cached) return cached;
         const request = text(c.requestId, 'Request ID', 100); if (!/^[\w-]+$/.test(request)) throw new Error('Invalid request ID.');
         if (Object.hasOwn(state.ticketRequests, request)) return ticket(state.ticketRequests[request]);
         const owner = project(c.projectId); const values = fields(c);
@@ -385,9 +408,13 @@ export function createCatalog({ state, save, execution, externalTickets, context
         if (board) boards.assertTicketVisible(board.id, value);
         boards.validateNewTicket(value);
         state.tickets.push(value); state.ticketRequests[request] = id; boards.ensureTicket(value); await save();
-        return source ? publish(value, source, request) : value;
+        const result = source ? await publish(value, source, request) : value;
+        await recordWorkflowMutation(c, result);
+        await save();
+        return result;
       }
       if (c.action === 'createRelatedTicket') {
+        const cached = existingWorkflowMutation(c); if (cached) return cached;
         const request = text(c.requestId, 'Request ID', 100);
         if (!/^[\w-]+$/.test(request)) throw new Error('Invalid request ID.');
         const kind = relationKind(c.kind);
@@ -410,6 +437,8 @@ export function createCatalog({ state, save, execution, externalTickets, context
         state.ticketRequests[request] = id;
         boards.ensureTicket(value);
         linkTickets(source, value, kind);
+        await save();
+        await recordWorkflowMutation(c, value);
         await save();
         return value;
       }
@@ -697,6 +726,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
         return pushContent(t, externalLink);
       }
       if (c.action === 'updateTicket') {
+        const cached = existingWorkflowMutation(c); if (cached) return cached;
         const t = ticket(c.taskId); if (!t) throw new Error('Ticket not found.'); if (c.revision !== t.revision) throw new Error('Ticket changed in another client. Reload before saving.');
         const patch = c.patch ?? {};
         if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !['title', 'description', 'status', 'label', 'agent', 'priority', 'customFields'].includes(k))) throw new Error('Unsupported ticket fields. Use placement and workflow commands for execution settings.');
@@ -712,7 +742,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
         boards.ensureTicket(t);
         execution.syncTicket(t); await save();
         const outgoing = contentChanged ? t.externalLinks?.find(item => item.fieldOwnership?.title === 'convoy' && item.fieldOwnership?.description === 'convoy') : null;
-        return outgoing ? pushContent(t, outgoing) : t;
+        const result = outgoing ? await pushContent(t, outgoing) : t;
+        await recordWorkflowMutation(c, result);
+        await save();
+        return result;
       }
       if (c.action === 'attachTicketFile') {
         const t = ticket(c.taskId); if (!t) throw new Error('Ticket not found.');
@@ -760,8 +793,21 @@ export function createCatalog({ state, save, execution, externalTickets, context
         }
         await save(); return { imported, conflicts };
       }
-      if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate', 'setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) return boards.command(c);
+      if (['saveBoard', 'deleteBoard', 'saveBoardTemplate', 'deleteBoardTemplate', 'createBoardFromTemplate'].includes(c.action)) return boards.command(c);
+      if (['setBoardPlacement', 'clearBoardPlacement'].includes(c.action)) {
+        const cached = existingWorkflowMutation(c); if (cached) return cached;
+        const result = await boards.command(c);
+        await recordWorkflowMutation(c, result);
+        await save();
+        return result;
+      }
       throw new Error('Unknown catalog command.');
+    },
+    workflowMutationReceipt(command) {
+      const key = workflowMutationKey(command);
+      const receipt = key && state.workflowMutationReceipts[key];
+      if (!receipt || receipt.commandDigest !== commandDigest(command)) return null;
+      return structuredClone(receipt);
     },
     snapshot() { return { projects: state.projects, tickets: state.tickets.map(t => ({ ...t, status: t.status, ...execution.projection(t) })), ticketConnections: state.ticketConnections, ticketImportBindings: state.ticketImportBindings, ticketImportMemberships: state.ticketImportMemberships, ticketThreads: state.ticketThreads, ticketReplies: state.ticketReplies, ticketStatusChanges: state.ticketStatusChanges, ticketRelations: state.ticketRelations, ...boards.snapshot() }; },
   };

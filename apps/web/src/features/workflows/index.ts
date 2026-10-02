@@ -13,4 +13,5 @@ export {
   workflowNeedsRecovery,
   workflowRunOutput,
   workflowStatusLabel,
+  requiredGateActivityTarget,
 } from './workflow-interaction';

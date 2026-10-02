@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
+import { normalizeWorkflow } from './workflows.mjs';
 
 const idPattern = /^[A-Za-z0-9][\w-]{0,79}$/;
-export function workflowForProject(state, id, version, projectId) {
+export function workflowForProject(state, id, version, projectId, { raw = false } = {}) {
   const project = state.projects?.find(item => item.id === projectId);
   const workflow = state.workflows?.find(item => item.id === id && item.version === version);
-  if (!project || !workflow || workflow.organizationId !== project.organizationId ||
+  if (!project || !workflow || (workflow.organizationId ?? 'personal') !== project.organizationId ||
       workflow.projectId && workflow.projectId !== projectId || workflow.teamId && workflow.teamId !== project.teamId)
     throw new Error('Workflow is not available for this project.');
-  return workflow;
+  return raw ? structuredClone(workflow) : { ...normalizeWorkflow(workflow), organizationId: workflow.organizationId ?? 'personal', ...(workflow.teamId ? { teamId: workflow.teamId } : {}), ...(workflow.projectId ? { projectId: workflow.projectId } : {}), version: workflow.version ?? 1 };
 }
 
 export function initializeAutomations(state) {

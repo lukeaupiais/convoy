@@ -5,7 +5,7 @@ import './runtime.css';
 import './session-monitor.css';
 import { liveModel, sessionProjectId, sessionStatus } from './sessionMonitor';
 import { SessionCapabilities } from '../library';
-import { WorkflowActivityHistory, WorkflowRunDetails, WorkflowRunInteraction } from '../workflows';
+import { WorkflowActivityHistory, WorkflowRunDetails, WorkflowRunInteraction, requiredGateActivityTarget } from '../workflows';
 
 export function SessionControls({
   session: s,
@@ -32,6 +32,9 @@ export function SessionControls({
   const busy = ['running', 'waiting_approval', 'waiting_question'].includes(s.status);
   const owned = owns(s);
   const activeNodeId = s.flow?.nodeId;
+  const approvalTargetNodeId = requiredGateActivityTarget(s, state.workflowActivities);
+  const preparedActivityReservation = s.flow && state.workflowRuns?.find(run => run.id === s.flow?.id)?.activityReservations?.find(value =>
+    value.gateNodeId === s.flow?.nodeId && value.gateInstance === s.flow?.instance && value.targetNodeId === approvalTargetNodeId && !value.consumedAt);
   async function act(action: RuntimeAction, extra = {}) {
     setWorking(true);
     setError('');
@@ -273,9 +276,16 @@ export function SessionControls({
       {showWorkflowInteraction && s.flow ? (
         <WorkflowRunInteraction
           session={s}
+          activityReservation={preparedActivityReservation}
           working={working || !owned || !runtimeAvailable}
           actions={{
-            approveGate: () => void act('approveGate', { instance: s.flow!.instance }),
+            requiresActivityReservation: !!approvalTargetNodeId,
+            canPrepareActivityApproval: owned && runtimeAvailable,
+            prepareActivityApproval: approvalTargetNodeId ? async () => (await command('prepareWorkflowActivity', {
+              workflowRunId: s.flow!.id, gateInstance: s.flow!.instance, targetNodeId: approvalTargetNodeId,
+            })).result : undefined,
+            approveGate: (reservation) => void act('approveGate', { instance: s.flow!.instance,
+              ...(reservation ? { activityReservationId: reservation.id, activityReservationDigest: reservation.digest } : {}) }),
             requestChanges: (revisionFeedback) =>
               void act('requestChanges', {
                 instance: s.flow!.instance,
