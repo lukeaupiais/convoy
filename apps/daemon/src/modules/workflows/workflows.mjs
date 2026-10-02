@@ -61,7 +61,7 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (node.args !== undefined || node.payload !== undefined || node.boardAction !== undefined || node.action !== undefined) throw new Error('Use canonical action input.');
     const input = node.input;
     if (operation !== 'inspect_changes' && (!input || typeof input !== 'object' || Array.isArray(input))) throw new Error(`${node.name}: board action input is required.`);
-    if (operation === 'create_ticket' && (typeof input.title !== 'string' || !input.title.trim() || typeof input.projectId !== 'string' || !input.projectId.trim())) throw new Error(`${node.name}: create_ticket needs title and projectId.`);
+    if (operation === 'create_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.projectId !== undefined && (typeof input.projectId !== 'string' || !input.projectId.trim()))) throw new Error(`${node.name}: create_ticket needs a title and an optional projectId.`);
     if (operation === 'create_related_ticket' && (typeof input.title !== 'string' || !input.title.trim() || input.kind !== undefined && !safeId(input.kind))) throw new Error(`${node.name}: create_related_ticket needs a title and an optional safe relation kind.`);
     if (operation === 'update_ticket' && input.ticketSource !== 'active_ticket' && input.ticketSource !== 'last_created' && input.ticketId === undefined && input.taskId === undefined) throw new Error(`${node.name}: update_ticket needs a ticket target.`);
     if (operation === 'move_ticket' && (typeof input.boardId !== 'string' || !input.placement?.columnId || input.columnId !== undefined)) throw new Error(`${node.name}: move_ticket needs boardId and columnId.`);

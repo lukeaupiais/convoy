@@ -1035,9 +1035,13 @@ export async function createRuntime({
     workCommand: async (command, runContext) => {
       const owner = runContext?.workflowRunId ? state.workflowRuns?.[runContext.workflowRunId] : runContext?.independentRun ? runContext : null;
       const principal = owner ? owner.principal : runContext?.executionPrincipal ?? localPrincipal;
-      const projectId = owner?.projectId ?? runContext?.projectId ?? command.projectId ??
-        (runContext?.activeTicketId != null ? catalog.ticket(runContext.activeTicketId)?.projectId : null);
+      const hasRunIdentity = Boolean(owner || runContext?.workflowRunId || runContext?.independentRun);
+      const projectId = owner?.projectId ?? runContext?.projectId ??
+        (runContext?.activeTicketId != null ? catalog.ticket(runContext.activeTicketId)?.projectId : null) ??
+        (!hasRunIdentity ? command.projectId : null);
       if (!projectId) throw new Error('Workflow run has no authorized project.');
+      if (command.projectId !== undefined && command.projectId !== projectId)
+        throw new Error('Workflow action project is not available in the run project.');
       await identity.assertPrincipalActive(principal);
       await requireProjectPermission(projectId, 'project.write', principal);
       for (const id of [command.ticketId, command.taskId, command.sourceTicketId].filter((value) => value !== undefined)) {
@@ -1046,7 +1050,15 @@ export async function createRuntime({
       }
       if (command.boardId && !catalog.boards?.board(command.boardId)?.projectIds.includes(projectId))
         throw new Error('Workflow action board is not available in the run project.');
-      return work.command(command, { principal, projectId });
+      if (command.action === 'createTicket' && command.requestId && Object.hasOwn(state.ticketRequests ?? {}, command.requestId)) {
+        const existing = catalog.ticket(state.ticketRequests[command.requestId]);
+        if (!existing || existing.projectId !== projectId)
+          throw new Error('Workflow action request is not available in the run project.');
+      }
+      const governedCommand = command.action === 'createTicket' && command.projectId === undefined
+        ? { ...command, projectId }
+        : command;
+      return work.command(governedCommand, { principal, projectId });
     },
     makeSession,
     pinInstructions,
@@ -1600,7 +1612,7 @@ export async function createRuntime({
     capabilities.validateWorkflow(workflow);
     for (const node of workflow.nodes ?? []) {
       const input = node.input ?? {};
-      if (node.operation === 'create_ticket') catalog.project(input.projectId);
+      if (node.operation === 'create_ticket' && input.projectId !== undefined) catalog.project(input.projectId);
       if (node.operation === 'move_ticket' && catalog.boards) {
         const board = catalog.boards.board(input.boardId);
         const columnId = input.placement?.columnId;
