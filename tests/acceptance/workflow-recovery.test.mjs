@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createPersistence } from '../../apps/daemon/src/adapters/persistence/index.mjs';
@@ -17,10 +17,13 @@ async function until(read, predicate) {
     }
     throw new Error('Timed out waiting for workflow recovery.');
 }
-test('uncertain workflow board effects are not replayed on restart and require explicit recovery', async () => {
+test('uncertain workflow board effects are not replayed on restart and require explicit recovery', async (t) => {
     const directory = await mkdtemp(join(tmpdir(), 'convoy-workflow-recovery-'));
     const options = { directory, models: [{ id: 'fixture' }], auth: { token: async () => 'fixture', status: async () => ({ connected: true }) }, generate: async function* () { } };
-    let runtime = await createRuntime(options);
+    let runtime;
+    const closeRuntime = async () => { if (runtime) { const current = runtime; runtime = null; await current.close(); } };
+    t.after(async () => { await closeRuntime(); await rm(directory, { recursive: true, force: true }); });
+    runtime = await createRuntime(options);
     const act = (action, input = {}) => runtime.command({ action, client: 'recovery-client', ...input });
     const chat = await act('createConversation', { requestId: 'recovery-chat' });
     const scope = { sessionId: chat.sessionId };
@@ -35,7 +38,7 @@ test('uncertain workflow board effects are not replayed on restart and require e
     const effectKey = `${failed.flow.id}:${failed.flow.instance}:create`;
     assert.equal(snapshot.workflowEffects.find(effect => effect.effectKey === effectKey).status, 'uncertain');
     assert.equal(snapshot.tickets.filter(ticket => ticket.title === 'Recovered').length, 0);
-    await runtime.close();
+    await closeRuntime();
     runtime = await createRuntime(options);
     snapshot = await runtime.snapshot();
     const resumed = snapshot.sessions[0];
@@ -48,7 +51,7 @@ test('uncertain workflow board effects are not replayed on restart and require e
     await runtime.command({ action: 'heartbeat', sessionId: resumed.id, client: 'recovery-client' });
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal((await runtime.snapshot()).sessions[0].flow.status, 'paused');
-    await runtime.close();
+    await closeRuntime();
     runtime = await createRuntime(options);
     const paused = (await runtime.snapshot()).sessions[0];
     assert.equal(paused.flow.status, 'paused');
@@ -56,11 +59,14 @@ test('uncertain workflow board effects are not replayed on restart and require e
     await runtime.command({ action: 'continueWorkflow', sessionId: paused.id, client: 'recovery-client', instance: paused.flow.instance });
     const completed = await until(() => runtime.snapshot(), value => value.sessions[0]?.flow?.status === 'completed');
     assert.equal(completed.tickets.filter(ticket => ticket.title === 'Recovered').length, 1);
-    await runtime.close();
+    await closeRuntime();
 });
-test('applied reconciliation accepts only an existing ticket result and never replays the effect', async () => {
+test('applied reconciliation accepts only an existing ticket result and never replays the effect', async (t) => {
     const directory = await mkdtemp(join(tmpdir(), 'convoy-workflow-applied-'));
     let loseCanonicalResponse = false;
+    let runtime;
+    const closeRuntime = async () => { if (runtime) { const current = runtime; runtime = null; await current.close(); } };
+    t.after(async () => { await closeRuntime(); await rm(directory, { recursive: true, force: true }); });
     async function openRuntime() {
         const persistence = await createPersistence({ directory, initialState: initialControlPlaneState(defaultWorkflowDefinition) });
         const store = persistence.store;
@@ -80,7 +86,7 @@ test('applied reconciliation accepts only an existing ticket result and never re
         return createControlPlaneRuntime({ persistence, models: [{ id: 'fixture' }],
             auth: { token: async () => 'fixture', status: async () => ({ connected: true }) }, generate: async function* () { } });
     }
-    let runtime = await openRuntime();
+    runtime = await openRuntime();
     const act = (action, input = {}) => runtime.command({ action, client: 'applied-client', ...input });
     const chat = await act('createConversation', { requestId: 'applied-chat' });
     const scope = { sessionId: chat.sessionId };
@@ -96,19 +102,28 @@ test('applied reconciliation accepts only an existing ticket result and never re
     const persistedTicket = failed.tickets.find(ticket => ticket.title === 'Persisted result');
     assert.ok(persistedTicket, 'the canonical Work write must be persisted before its acknowledgement is lost');
     assert.equal(failed.workflowEffects.find(effect => effect.effectKey === effectKey).status, 'uncertain');
-    await runtime.close();
+    await closeRuntime();
     const persistedState = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
     const requestId = `${failed.sessions[0].flow.id}-${instance}`;
     assert.equal(persistedState.ticketRequests[requestId], persistedTicket.id);
     loseCanonicalResponse = false;
     runtime = await openRuntime();
+    const afterRestart = await runtime.snapshot();
+    const recovered = afterRestart.sessions.find(session => session.id === sessionId);
+    assert.ok(['failed', 'interrupted'].includes(recovered.flow.status));
+    assert.equal(afterRestart.workflowEffects.find(effect => effect.effectKey === effectKey).status, 'uncertain');
+    assert.equal(afterRestart.tickets.filter(ticket => ticket.title === 'Persisted result').length, 1);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const idleAfterRestart = await runtime.snapshot();
+    assert.equal(idleAfterRestart.sessions.find(session => session.id === sessionId).flow.status, recovered.flow.status);
+    assert.equal(idleAfterRestart.tickets.filter(ticket => ticket.title === 'Persisted result').length, 1);
     await runtime.command({ action: 'claim', sessionId, client: 'applied-client' });
     await assert.rejects(runtime.command({ action: 'reconcileWorkflowEffect', sessionId, client: 'applied-client', instance, effectKey, resolution: 'applied', result: { id: 100 } }), /existing ticket/i);
     await runtime.command({ action: 'reconcileWorkflowEffect', sessionId, client: 'applied-client', instance, effectKey, resolution: 'applied', result: { id: persistedTicket.id, title: persistedTicket.title } });
     const completed = await until(() => runtime.snapshot(), value => value.sessions[0]?.flow?.status === 'completed');
     assert.equal(completed.tickets.filter(ticket => ticket.title === 'Persisted result').length, 1);
     assert.equal(completed.tickets.find(ticket => ticket.id === persistedTicket.id).title, 'Persisted result');
-    await runtime.close();
+    await closeRuntime();
 });
 test('failed board trigger can be retried with its pinned version without replaying the move', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'convoy-trigger-retry-'));
