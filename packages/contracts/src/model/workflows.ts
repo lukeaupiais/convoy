@@ -1,5 +1,32 @@
 export type WorkflowNodeKind = 'agent' | 'human' | 'check' | 'action' | 'branch' | 'wait';
 
+export type WorkflowHumanOutcome = { id: string; label: string; effect?: 'approve_activity' };
+export type WorkflowHumanTask = {
+  outcomes: WorkflowHumanOutcome[];
+  form?: { fields: Array<{
+    id: string; label: string; type: 'text' | 'number' | 'boolean' | 'choice' | 'date';
+    required?: boolean; options?: Array<{ value: string; label: string }>;
+    minLength?: number; maxLength?: number; minimum?: number; maximum?: number;
+  }> };
+  reviewerPolicy?: { userIds?: string[]; permission?: 'project.execute' | 'project.write' };
+  dueAfterSeconds?: number;
+};
+export type WorkflowHumanResponse = {
+  id: string; runId: string; workflowId: string; workflowVersion: number;
+  nodeId: string; instance: string; values: Record<string, unknown>;
+  digest: string; at: string; evidenceIds?: string[];
+};
+export type WorkflowEvidenceRef = {
+  id: string; digest: string; mediaType: string; byteLength: number;
+  name: string; source: { nodeId: string; attemptInstance: string; producer: 'document' | 'api_snapshot' | 'activity_receipt' | 'legacy_artifact' };
+};
+export type WorkflowHumanReview = {
+  response: WorkflowHumanResponse;
+  evidence: WorkflowEvidenceRef[];
+  materialDigest: string;
+  reservation?: WorkflowActivityReservation;
+};
+
 export type WorkflowReference = {
   workflowId: string;
   workflowVersion: number;
@@ -44,6 +71,13 @@ export type WorkflowRun = {
   updatedAt?: string;
   runInputDigest?: string;
   resultDigest?: string;
+  humanResponses?: WorkflowHumanResponse[];
+  humanResponsesTotal?: number;
+  evidence?: WorkflowEvidenceRef[];
+  evidenceTotal?: number;
+  humanTaskDueAt?: string;
+  humanTaskDue?: boolean;
+  humanTaskReviewerEligible?: boolean;
   activityReservations?: (WorkflowActivityReservation & { gateNodeId: string; gateInstance: string; targetNodeId: string; targetInstance: string; activityRef: WorkflowActivityRef; inputDigest: string; intentDigest: string; consumedAt?: string })[];
   attempt?: WorkflowActivityAttempt;
   activityAttempts?: WorkflowActivityAttempt[];
@@ -54,10 +88,12 @@ export type WorkflowRun = {
     at?: string;
     to?: string | null;
     summary?: string;
+    humanResponseId?: string;
+    humanMaterialDigest?: string;
   }[];
   historyTotal?: number;
   historyTruncated?: boolean;
-  decisions?: { instance: string; decision: 'approve' | 'requestChanges'; actor: string; principal: Record<string, unknown>; at: string }[];
+  decisions?: { instance: string; decision: string; outcomeId?: string; responseId?: string; materialDigest?: string; actor: string; principal: Record<string, unknown>; at: string }[];
   decisionsTotal?: number;
   decisionsTruncated?: boolean;
   lease: null | {
@@ -145,7 +181,8 @@ export type WorkflowJsonSchema = {
 export type WorkflowActivityBinding =
   | { literal: unknown }
   | { from: { kind: 'run_input'; path: string[] } }
-  | { from: { kind: 'activity_output'; nodeId: string; path: string[] } };
+  | { from: { kind: 'activity_output'; nodeId: string; path: string[] } }
+  | { from: { kind: 'human_response'; nodeId: string; path: string[] } };
 export type WorkflowActivityDescriptor = {
   ref: WorkflowActivityRef;
   /** Canonical digest of the registered descriptor metadata at this revision. */
@@ -207,6 +244,9 @@ export type WorkflowStep = {
   advance: WorkflowAdvance;
   /** Optional human-facing labels for canonical decision outcomes; no route or authority effect. */
   decisionLabels?: WorkflowDecisionLabels;
+  humanTask?: WorkflowHumanTask;
+  /** Owner-derived compatibility marker for pre-configuration gates. */
+  legacyHumanTask?: boolean;
   artifact?: WorkflowArtifact;
   requiresCheck?: boolean;
   checkCommand?: string;

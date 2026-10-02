@@ -285,7 +285,12 @@ export const runtimeCommandContracts = {
   claimWorkflowRun: contract(['workflowRunId'], ['label']),
   releaseWorkflowRun: contract(['workflowRunId']),
   prepareWorkflowActivity: contract(['workflowRunId', 'gateInstance', 'targetNodeId']),
-  decideWorkflowRun: contract(['workflowRunId', 'instance', 'decision'], ['feedback', 'activityReservationId', 'activityReservationDigest']),
+  submitWorkflowHumanResponse: contract(['workflowRunId', 'instance', 'values']),
+  prepareWorkflowHumanReview: contract(['workflowRunId', 'instance', 'responseId', 'outcomeId'], ['targetNodeId']),
+  captureWorkflowEvidence: contract(['workflowRunId', 'instance', 'producer', 'name', 'mime', 'data'], ['nodeId', 'attemptInstance']),
+  captureWorkflowActivityReceipt: contract(['workflowRunId', 'nodeId', 'attemptInstance']),
+  readWorkflowEvidence: contract(['workflowRunId', 'evidenceId']),
+  decideWorkflowRun: contract(['workflowRunId', 'instance'], ['decision', 'outcomeId', 'responseId', 'reviewedMaterialDigest', 'feedback', 'activityReservationId', 'activityReservationDigest']),
   continueWorkflowRun: contract(['workflowRunId', 'instance']),
   cancelWorkflowRun: contract(['workflowRunId']),
   stop: session(),
@@ -332,6 +337,15 @@ const primitiveShapes = {
   attachmentId: 'string',
   ruleId: 'string',
   instance: 'string',
+  workflowRunId: 'string',
+  nodeId: 'string',
+  attemptInstance: 'string',
+  responseId: 'string',
+  outcomeId: 'string',
+  evidenceId: 'string',
+  producer: 'string',
+  values: 'object',
+  reviewedMaterialDigest: 'string',
   path: 'string',
   name: 'string',
   mime: 'string',
@@ -493,6 +507,14 @@ export function validateRuntimeCommand(input) {
     throw new Error(`Invalid field for ${input.action}: workflow.`);
   if (input.action === 'saveAutomation' && !matches(input.rule, 'object'))
     throw new Error('Invalid field for saveAutomation: rule.');
+  if (input.action === 'decideWorkflowRun' && (Boolean(input.decision) === Boolean(input.outcomeId) ||
+      input.decision !== undefined && !['approve', 'requestChanges', 'request_changes'].includes(input.decision)))
+    throw new Error('Choose exactly one configured human outcome or legacy decision.');
+  if (input.action === 'submitWorkflowHumanResponse' && Buffer.byteLength(JSON.stringify(input.values)) > 16_000)
+    throw new Error('Human response is too large.');
+  if (input.action === 'captureWorkflowEvidence' && (input.data.length > 5_600_000 || input.name.length > 180 || input.mime.length > 100 ||
+      !['document', 'api_snapshot', 'activity_receipt'].includes(input.producer)))
+    throw new Error('Workflow evidence is too large or has an unsupported producer.');
   if (
     input.action === 'setPlacement' &&
     input.taskId === undefined &&

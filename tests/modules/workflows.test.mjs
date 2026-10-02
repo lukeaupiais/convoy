@@ -327,6 +327,42 @@ test('human decision labels normalize, pin with a run, and reject invalid metada
   ] }), /supported human outcomes/);
 });
 
+test('configured human outcomes, bounded forms, reviewer selectors, and deadlines normalize without outcome-name authority', () => {
+  const workflow = normalizeWorkflow({ id: 'configured-review', name: 'Configured review', nodes: [
+    { id: 'review', name: 'Procurement review', kind: 'human', humanTask: {
+      outcomes: [{ id: 'authorize_purchase', label: 'Authorize purchase' }, { id: 'request_revision', label: 'Request revision' }],
+      form: { fields: [
+        { id: 'total', label: 'Total', type: 'number', required: true, minimum: 1, maximum: 100_000 },
+        { id: 'delivery', label: 'Delivery date', type: 'date' },
+      ] },
+      reviewerPolicy: { permission: 'project.write', userIds: ['finance-1'] }, dueAfterSeconds: 3600,
+    } },
+  ], edges: [] }, { publishing: true });
+  const task = workflow.nodes[0].humanTask;
+  assert.deepEqual(task.outcomes, [{ id: 'authorize_purchase', label: 'Authorize purchase' }, { id: 'request_revision', label: 'Request revision' }]);
+  assert.equal(task.outcomes[0].effect, undefined, 'effect authority is explicit, never derived from a label or identifier');
+  assert.deepEqual(task.form.fields.map(field => field.type), ['number', 'date']);
+  assert.deepEqual(task.reviewerPolicy, { permission: 'project.write', userIds: ['finance-1'] });
+  assert.equal(task.dueAfterSeconds, 3600);
+  assert.equal(workflow.nodes[0].legacyHumanTask, undefined);
+  const legacy = normalizeWorkflow({ id: 'legacy-review', name: 'Legacy review', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', decisionLabels: { approved: 'Accept estimate' } },
+  ] }, { publishing: true });
+  assert.equal(legacy.nodes[0].legacyHumanTask, true);
+  assert.deepEqual(legacy.nodes[0].humanTask.outcomes.map(value => value.id), ['approved', 'changes_requested']);
+  for (const humanTask of [
+    { outcomes: [{ id: 'same', label: 'One' }, { id: 'same', label: 'Two' }] },
+    { outcomes: [{ id: 'yes', label: 'Yes', effect: 'approve_activity' }, { id: 'no', label: 'No' }], form: { fields: [{ id: 'amount', label: 'Amount', type: 'number', minimum: 2, maximum: 1 }] } },
+    { outcomes: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }], reviewerPolicy: {} },
+  ]) assert.throws(() => normalizeWorkflow({ id: 'invalid-review', name: 'Invalid review', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', humanTask },
+  ] }), /outcome|field|reviewer|bounds/i);
+  assert.throws(() => normalizeWorkflow({ id: 'bad-route', name: 'Bad route', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', humanTask: { outcomes: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }] } },
+    { id: 'next', name: 'Next', kind: 'human', humanTask: { outcomes: [{ id: 'done', label: 'Done' }, { id: 'stop', label: 'Stop' }] } },
+  ], edges: [{ from: 'review', to: 'next', outcome: 'unconfigured' }] }), /not configured/i);
+});
+
 test('approval preserves the captured draft and rejects a missing draft without advancing', async () => {
   const session = { id: 'reply', messages: [], checks: [], events: [], workspace: null, workflow: normalizeWorkflow({ id: 'reply', name: 'Reply', nodes: [
     { id: 'draft', name: 'Draft', kind: 'agent', submissionRequirements: { success: { fields: ['message'], minReferences: 0 } } },

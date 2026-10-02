@@ -12,7 +12,7 @@ import {
 import { Select } from '../../shared/ui/Select';
 import { ExecutionProfileEditor, PlacementEditor } from '../projects';
 import { WorkflowArtifactContent as MarkdownDocument } from '../workflows';
-import { WorkflowActivityHistory, WorkflowRunInteraction, requiredGateActivityTarget } from '../workflows';
+import { WorkflowActivityHistory, WorkflowRunInteraction, requiredGateActivityTarget, workflowHumanTaskActions } from '../workflows';
 import { ticketWorkflowActions } from './workflow-actions';
 import {
   clearSubmittedTicketReplyDraft,
@@ -514,6 +514,7 @@ export function TicketDetails({
                   onRecovery={onRun}
                   actions={{
                     ...ticketWorkflowActions(session, (action, input) => void actWorkflow(action, input)),
+                    ...workflowHumanTaskActions(session),
                     requiresActivityReservation: !!approvalTargetNodeId,
                     canPrepareActivityApproval: !!session && runtimeAvailable,
                     canShowPreparedActivityApproval: !!session && owns(session) && runtimeAvailable,

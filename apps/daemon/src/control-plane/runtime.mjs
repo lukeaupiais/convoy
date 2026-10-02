@@ -102,6 +102,11 @@ const orchestrationCommands = [
   'heartbeat',
   'openTicketConversation',
   'prepareWorkflowActivity',
+  'submitWorkflowHumanResponse',
+  'prepareWorkflowHumanReview',
+  'captureWorkflowEvidence',
+  'captureWorkflowActivityReceipt',
+  'readWorkflowEvidence',
   'reconcileAssignment',
   'release',
   'releaseWorkflowRun',
@@ -612,6 +617,26 @@ export async function createRuntime({
     });
     if (decision.effect !== 'allow') throw new Error('Not authorized.');
     return context;
+  }
+  async function requireWorkflowReviewer(run, actor) {
+    const workflow = normalizeWorkflow(run.workflow);
+    const node = workflow.nodes.find(value => value.id === run.flow?.nodeId);
+    if (node?.kind !== 'human') throw new Error('The active workflow step is not a human task.');
+    if (!await workflowReviewerEligible(run, actor, node.id, workflow)) throw new Error('Not authorized to review this workflow task.');
+    return node;
+  }
+  async function workflowReviewerEligible(run, actor, nodeId, normalized = normalizeWorkflow(run.workflow)) {
+    const node = normalized.nodes.find(value => value.id === nodeId);
+    if (node?.kind !== 'human') return false;
+    const policy = node.humanTask?.reviewerPolicy;
+    const userSelected = policy?.userIds ? policy.userIds.includes(actor?.userId) && actor?.kind === 'user' : true;
+    const permission = policy?.permission ?? (policy?.userIds ? null : 'project.execute');
+    let permissionSelected = false;
+    if (permission) {
+      try { await requireProjectPermission(run.projectId, permission, actor); permissionSelected = true; }
+      catch { permissionSelected = false; }
+    }
+    return Boolean(userSelected && (!permission || permissionSelected));
   }
   async function provisionResolvedExternalIdentity(
     organizationId,
@@ -1143,9 +1168,12 @@ export async function createRuntime({
       if (!run?.principal || !run.projectId) throw new Error('Workflow activity has no governed project identity.');
       await identity.assertPrincipalActive(run.principal);
       await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+      const reservationWorkflow = approvalReservation ? normalizeWorkflow(run.workflow) : null;
+      const reservationGate = reservationWorkflow?.nodes.find(candidate => candidate.id === approvalReservation.gateNodeId);
       const reservedRoute = approvalReservation && run.flow?.status === 'waiting_gate' &&
         run.flow.nodeId === approvalReservation.gateNodeId && run.flow.instance === approvalReservation.gateInstance &&
-        normalizeWorkflow(run.workflow).edges.some(edge => edge.from === approvalReservation.gateNodeId && edge.to === node.id && edge.outcome === 'approved');
+        reservationWorkflow.edges.some(edge => edge.from === approvalReservation.gateNodeId && edge.to === node.id &&
+          reservationGate?.humanTask?.outcomes?.some(outcome => outcome.id === edge.outcome && outcome.effect === 'approve_activity'));
       const consumedReservation = approvalReservation && run.attempt?.reservationId === approvalReservation.id &&
         run.attempt?.instance === approvalReservation.targetInstance && run.attempt?.nodeId === node.id &&
         approvalReservation.targetNodeId === node.id;
@@ -1786,8 +1814,10 @@ export async function createRuntime({
         const descriptor = activityCatalog.get(node.activity);
         if (descriptor?.approval.required && descriptor.approval.policy === 'workflow-gate') {
           const incoming = workflow.edges.filter(edge => edge.to === node.id);
-          if (workflow.entryNode === node.id || !incoming.length || incoming.some(edge => edge.outcome !== 'approved' ||
-              workflow.nodes.find(source => source.id === edge.from)?.kind !== 'human'))
+          if (workflow.entryNode === node.id || !incoming.length || incoming.some(edge => {
+            const source = workflow.nodes.find(candidate => candidate.id === edge.from);
+            return source?.kind !== 'human' || !(source.humanTask?.outcomes?.some(outcome => outcome.id === edge.outcome && outcome.effect === 'approve_activity') || source.legacyHumanTask && edge.outcome === 'approved');
+          }))
             throw new Error(`${node.name}: this activity requires an explicit human approval edge.`);
         }
       }
@@ -2209,7 +2239,54 @@ export async function createRuntime({
       const run = workflows.run(command.workflowRunId);
       if (!run?.projectId) throw new Error('Workflow run does not exist.');
       await requireProjectPermission(run.projectId, 'project.read', actor);
-      return workflows.readRun(run.id, { client: command.client, actorKey: principalKey(actor) });
+      let humanTaskReviewerEligible = false;
+      const workflow = normalizeWorkflow(run.workflow);
+      if (run.flow?.status === 'waiting_gate' && run.flow?.nodeId) {
+        humanTaskReviewerEligible = await workflowReviewerEligible(run, actor, run.flow.nodeId, workflow);
+      }
+      const visibleHumanResponseIds = [];
+      for (const response of (run.humanResponses ?? []).slice(-50)) {
+        if (await workflowReviewerEligible(run, actor, response.nodeId, workflow)) visibleHumanResponseIds.push(response.id);
+      }
+      return workflows.readRun(run.id, { client: command.client, actorKey: principalKey(actor) }, { humanTaskReviewerEligible, visibleHumanResponseIds });
+    }
+    if (['submitWorkflowHumanResponse', 'prepareWorkflowHumanReview', 'captureWorkflowEvidence', 'captureWorkflowActivityReceipt'].includes(action)) {
+      const run = workflows.run(command.workflowRunId);
+      if (!run?.projectId) throw new Error('Workflow run does not exist.');
+      await requireProjectPermission(run.projectId, 'project.read', actor);
+      if (run.independentRun) workflows.requireRunLease(run, { client: command.client, actorKey: principalKey(actor) });
+      else {
+        const session = run.sessionId && state.sessions[run.sessionId];
+        if (!session || session.workflowRunId !== run.id) throw new Error('Session-backed workflow control is unavailable.');
+        await own(session, command.client, actor);
+      }
+      const gate = await requireWorkflowReviewer(run, actor);
+      let result;
+      if (action === 'submitWorkflowHumanResponse')
+        result = workflows.submitHumanResponse(run, { instance: command.instance, values: command.values });
+      else if (action === 'prepareWorkflowHumanReview') {
+        const selectedOutcome = gate.humanTask?.outcomes?.find(outcome => outcome.id === command.outcomeId);
+        if (selectedOutcome?.effect === 'approve_activity') {
+          if (!run.principal) throw new Error('Workflow run has no governed execution principal.');
+          await identity.assertPrincipalActive(run.principal);
+          await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+        }
+        result = await workflows.prepareHumanReview(run, command);
+      } else if (action === 'captureWorkflowActivityReceipt')
+        result = await workflows.captureEvidence(run, { instance: run.flow?.instance, producer: 'activity_receipt', nodeId: command.nodeId, attemptInstance: command.attemptInstance }, contextFiles);
+      else {
+        if (command.producer !== 'document') throw new Error('Workflow evidence uploads must be documents; activity receipts are captured from completed owner records.');
+        result = await workflows.captureEvidence(run, command, contextFiles);
+      }
+      if (gate.id !== run.flow.nodeId) throw new Error('The active workflow step changed.');
+      await store.save();
+      return result;
+    }
+    if (action === 'readWorkflowEvidence') {
+      const run = workflows.run(command.workflowRunId);
+      if (!run?.projectId) throw new Error('Workflow run does not exist.');
+      await requireProjectPermission(run.projectId, 'project.read', actor);
+      return workflows.readEvidence(run, command.evidenceId, contextFiles);
     }
     if (action === 'prepareWorkflowActivity') {
       const run = workflows.run(command.workflowRunId);
@@ -2226,14 +2303,30 @@ export async function createRuntime({
         await own(session, command.client, actor);
       }
       const reservation = await workflows.reserveActivityIntent({ runId: run.id,
-        gateNodeId: run.flow.nodeId, gateInstance: command.gateInstance, targetNodeId: command.targetNodeId });
+        gateNodeId: run.flow.nodeId, gateInstance: command.gateInstance, targetNodeId: command.targetNodeId, responseId: command.responseId });
       await store.save();
       return reservation;
     }
     if (['claimWorkflowRun', 'releaseWorkflowRun', 'decideWorkflowRun', 'continueWorkflowRun', 'cancelWorkflowRun', 'reconcileWorkflowRun'].includes(action)) {
       const run = workflows.run(command.workflowRunId);
-      if (!run?.independentRun || !run.projectId) throw new Error('Workflow run does not exist.');
-      await requireProjectPermission(run.projectId, action === 'claimWorkflowRun' ? 'project.read' : 'project.execute', actor);
+      if (!run?.projectId) throw new Error('Workflow run does not exist.');
+      if (action === 'decideWorkflowRun' && !run.independentRun) {
+        const session = run.sessionId && state.sessions[run.sessionId];
+        if (!session || session.workflowRunId !== run.id) throw new Error('Session-backed workflow control is unavailable.');
+        if (command.outcomeId) await requireWorkflowReviewer(run, actor);
+        else await requireProjectPermission(run.projectId, 'project.execute', actor);
+        if (!run.principal) throw new Error('Workflow run has no governed execution principal.');
+        await identity.assertPrincipalActive(run.principal);
+        await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+        await own(session, command.client, actor);
+        const result = await workflows.decideRun(run, { ...command, actor: actor.kind === 'user' ? actor.userId : actor.kind, principal: structuredClone(actor) });
+        await store.save(); await dispatch();
+        return { workflowRunId: result.id, status: result.flow.status };
+      }
+      if (!run.independentRun) throw new Error('This workflow run command requires an independent run.');
+      if (action === 'claimWorkflowRun') await requireProjectPermission(run.projectId, 'project.read', actor);
+      else if (action === 'decideWorkflowRun' && command.outcomeId) await requireWorkflowReviewer(run, actor);
+      else await requireProjectPermission(run.projectId, 'project.execute', actor);
       const executionActions = ['decideWorkflowRun', 'continueWorkflowRun'];
       let storedPrincipalCanExecute = true;
       if (executionActions.includes(action)) {

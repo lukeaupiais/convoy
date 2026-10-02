@@ -37,6 +37,7 @@ export type GraphNode = {
   y: number;
   advance?: 'automatic' | 'manual';
   decisionLabels?: DecisionLabels;
+  humanTask?: WorkflowStep['humanTask'];
   artifact?: Artifact;
   presentationBindings?: PresentationBinding[];
   requiresCheck?: boolean;
@@ -106,7 +107,7 @@ export const outcomesFor = (node: GraphNode): string[] =>
         ? node.outcomes
         : ['yes', 'no']
     : node.type === 'approval'
-      ? ['approved', 'changes_requested']
+      ? node.humanTask?.outcomes?.length ? node.humanTask.outcomes.map((outcome) => outcome.id) : ['approved', 'changes_requested']
       : node.type === 'check'
         ? ['success', 'failed']
         : ['success'];
@@ -333,6 +334,8 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     !Array.isArray(value.decisionLabels)
       ? (structuredClone(value.decisionLabels) as DecisionLabels)
       : undefined;
+  const humanTask = type === 'approval' && value.humanTask && typeof value.humanTask === 'object' && !Array.isArray(value.humanTask)
+    ? structuredClone(value.humanTask as WorkflowStep['humanTask']) : undefined;
   const rawActivity = value.activity as Record<string, unknown> | undefined;
   const activity = rawActivity && typeof rawActivity === 'object' && typeof rawActivity.id === 'string' && Number.isInteger(rawActivity.revision)
     ? structuredClone(rawActivity as unknown as WorkflowActivityRef) : undefined;
@@ -391,6 +394,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     y: Number.isFinite(Number(value.y)) ? Number(value.y) : node.y,
     advance: value.advance === 'manual' ? 'manual' : 'automatic',
     decisionLabels,
+    humanTask,
     artifact: artifact
       ? {
           path: String(artifact.path ?? ''),
@@ -737,10 +741,12 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
       workflow.edges.some(
         (edge) =>
           edge.from === node.id &&
-          !['approved', 'changes_requested', '*', 'default'].includes(edge.outcome),
+          !(node.humanTask
+            ? node.humanTask.outcomes.some((outcome) => outcome.id === edge.outcome) || ['*', 'default'].includes(edge.outcome)
+            : ['approved', 'changes_requested', '*', 'default'].includes(edge.outcome)),
       )
     )
-      errors.push(`${node.name}: human outcomes support approved and changes_requested only.`);
+      errors.push(`${node.name}: route outcome is not configured for this human task.`);
     if (node.decisionLabels !== undefined) {
       const labels = node.decisionLabels as Record<string, unknown>;
       if (

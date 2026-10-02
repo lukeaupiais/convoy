@@ -7,6 +7,7 @@ export {
   WorkflowRunDetails,
   WorkflowRunInteraction,
   WorkflowArtifactContent,
+  workflowHumanTaskActions,
 } from './WorkflowRunInteraction';
 export type { WorkflowInteractionActions } from './WorkflowRunInteraction';
 export {

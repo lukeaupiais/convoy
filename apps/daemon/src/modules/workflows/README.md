@@ -151,3 +151,21 @@ Event waits persist their descriptor and resource scope, correlation,
 predicate, eligibility cursor, and optional deadline before yielding. A bounded
 owner scan cursor prevents unrelated journal traffic from starving a matching
 event, and timeout/event races are serialized through the runtime queue.
+
+Configured human tasks pin stable outcome IDs and labels, bounded typed response
+fields, reviewer selectors, and an optional relative deadline in the published
+graph. Responses are immutable proposals tied to one run, workflow revision,
+human node, and attempt; only a separate decision records an outcome. Labels do
+not grant authority. An outcome can authorize a registered effect only when its
+published policy says so, and the reviewer decision binds the exact response,
+captured evidence, and Workflows-reserved intent digest. Legacy gates keep their
+`approved` / `changes_requested` behavior and `decisionLabels` projection.
+
+Human task deadlines are due-time metadata computed once when the pinned gate
+attempt activates. Restart and unrelated run metadata changes preserve that
+timestamp; passing the deadline never chooses an outcome or advances a run.
+Generic document evidence and completed activity receipts use the existing
+content-addressed context-files persistence adapter under the WorkflowRun scope.
+The WorkflowRun owns immutable evidence references and review history; captured
+documents need no session, repository, or workspace. Evidence reads recheck the
+stored digest and are authorized against the run's current project context.
