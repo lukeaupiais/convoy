@@ -53,3 +53,12 @@ blank template must have empty nodes/edges and no entry; adding a stage explicit
 kind through existing controls. Preserve explicit development templates and stored workflows.
 An empty draft may be saved but cannot be published. Test round-trip data contract preservation
 and empty draft behavior, and verify no agent is seeded by entering an unconfigured editor.
+
+## Nested source visibility
+
+The source picker must represent a stored binding's actual declared path. Enumerate
+bounded nested object paths from run-input and prior activity output schemas; arrays
+may remain whole-value sources. Preserve an existing selected deeper/configured path
+with an explicit selected option when it is not enumerated. Never display it as a
+literal or silently choose a replacement. Use schema/path data only and safe own
+properties; no expression language or dynamic indexing is introduced.

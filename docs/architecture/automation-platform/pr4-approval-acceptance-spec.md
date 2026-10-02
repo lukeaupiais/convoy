@@ -35,3 +35,11 @@ preview assertion and a reply beyond 2,000 characters; the reviewed value must m
 what dispatch receives. Keep normal states free of redundant explanatory alerts.
 Session-backed preparation must await actual current session control authority and
 reject unauthorized/stale callers before saving a reservation.
+
+Exact prepared values remain private owner evidence. Generic project-read snapshots,
+run DTOs, session compatibility flows and decision/history DTOs expose bounded
+identities/digests only. The execute-authorized prepare command, protected by the
+current run/session lease, returns the complete review material. A project viewer
+must be able to read status without receiving those raw values or preparing them.
+The UI must discard a preparation response when its run/gate/context/control has
+changed while the request was pending; current permission loss clears its preview.

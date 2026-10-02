@@ -142,3 +142,14 @@ Cross-owner acceptance through the production bootstrap/runtime façade:
 - migration fixture tests as listed above, plus double-run idempotence and preserved legacy command responses.
 
 Run architecture check, build, focused workflow module tests, and the targeted acceptance groups from the PR series. Do not start implementation or select exact tests until root supplies and reviews the PR 3 head.
+
+## Named output references during bounded revision loops
+
+A declared `activity_output` reference names a specific source node and path. At
+the consumer's preparation boundary it resolves that named node's latest completed
+execution in the same run that precedes the consumer. This is an explicit named
+reference, not an unqualified last-result lookup. Preserve every previous attempt's
+immutable output; the node lookup is a derived current-output index. The consumer's
+validated input digest, prepared intent and approval reservation pin the exact
+resolved value. A rework loop with distinct source outputs must prove that the new
+consumer uses the current named source while the old receipt stays unchanged.

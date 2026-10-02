@@ -52,3 +52,29 @@ weaken checks. Do not add filler UI copy. Do not push, merge, deploy, or message
 root will review commits, publish draft PRs, and verify remote CI. Commit only scoped changes.
 Each handoff identifies base/head commits, spec path, changed ownership, tests/results,
 compatibility behavior, and known limitations. Ask root about genuine specification conflicts.
+
+## Final genericity audit
+
+Inspect shared defaults/migration and generic UI after integration, not only the
+new composition nodes. Remove the old migration that silently publishes an arbitrary
+workflow with an invented `npm test` check command; a missing explicit command must
+remain visibly unavailable/fail closed, while configured development templates and
+old immutable run pins retain their own declared settings. Do not change stored
+workflow bytes or active approval material to infer a coding task.
+
+Generic review presentation must use declared bindings/captured material rather
+than inspecting the next operation code to manufacture reply-specific detail
+bindings or suppress summary layout. Preserve legacy reviewed reply visibility
+through an explicit compatibility decoder or configured presentation seam. Keep
+Work protocol rules in its owning adapter/domain, and generic lifecycle in Workflows.
+Review every remaining helper paragraph against the user's minimal UI requirement.
+
+Audit fresh-install and new-session defaults as well: development delivery graphs may
+remain explicitly selected templates, but core migration/session construction must not
+silently select or continually seed a coding workflow as the platform's universal default.
+Preserve stored configured default IDs, existing published templates and active run pins.
+An unconfigured fresh project starts with a clean authoring surface; operations requiring a
+workflow or check command request the missing explicit configuration and fail closed.
+Verify both a fresh inventory project and a document project without agent/session/runner
+creation, alongside an explicitly configured legacy delivery workflow. Document intentional
+fresh-default behavior separately from migration compatibility.

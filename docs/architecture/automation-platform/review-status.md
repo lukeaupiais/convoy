@@ -154,3 +154,60 @@ body or Work-field heuristics selecting a generic integration's effect summary.
 The supplemental exact-approval spec records these requirements. UI browser proof
 currently accepts ordinary payload JSON invalid-edit protection and empty drafts;
 run-input schema persistence and the corrected enum/prompt UI remain pending.
+
+## PR4 final-review checkpoint
+
+Activities/data remains uncommitted pending immutable two-axis review. The owner reports all
+focused cases passing: legacy boards/workflows 34 and recovery 5, activity rules 13 and
+attempts 8, registered activities 3, exact approvals and project-viewer privacy 1, lifecycle
+fault/cancellation/recovery 10, output reentry 1, active-resource requirements 1, runner/grant
+acceptance 4, authoring 6 and codec 19. Architecture, build and diff checks pass. These owner
+results still require parent verification on the frozen head and exact-head remote CI.
+
+Parent independently verified local/SSH/no-placement runner activities and canonical no-agent
+inspection grants (4 cases), together with provider-only agent entry before a future runner
+check (5 cases total). Logs: pr4-parent-runner-grant-proof.log and
+pr4-parent-final-resource-fix.log under /tmp/convoy-automation-series. The legacy regression
+failures above were diagnostic checkpoints; they are not the final acceptance result.
+
+Disposable browser authoring evidence confirms invalid JSON remains visible, saving is blocked
+until repair, typed values and an explicit run-input schema survive publication and reload,
+a blank workflow has no implicit agent, and Action does not display agent instructions.
+Artifacts: pr4-ui-authoring-evidence.json, pr4-ui-authoring-browser-snapshot.txt and
+pr4-parent-schema-readback.json. Fixture resources and the synthetic browser page were removed;
+no customer state or running services were changed. Nested declared object bindings preserve
+existing unavailable references instead of silently replacing them.
+
+The additional lifecycle cases exercise real process loss after persisted completion but before
+graph advancement, approved intent reconciliation after lost acknowledgement, exact not-applied
+retry with one application, and cancellation through a waiting applied receipt. Unknown durable
+effects may not be replayed. Generic read DTOs omit private prepared input/intent and archived
+reservation material; current project execution permission and run control are required to
+prepare and disclose exact approval material.
+
+## PR4 immutable review at bdaf31d
+
+The first frozen activity implementation is bdaf31d9c194f164aaf2e1a7bb4341d1a9e0bdd5,
+base ebca318c8f330176fa21d1780a06960e3aec9986. Immutable Spec review found one blocker:
+a standalone registered action declaring agent resources never enters the canonical lazy
+provider-session acquisition path, so it waits indefinitely. Root accepted this finding;
+documenting that limitation is insufficient for the advertised capability. The saved spec04
+now records positive and denied-authority runtime acceptance for the corrected active-resource
+path. Pure, integration and runner activities must still create no provider session.
+
+Root UI review also requires clearing all cached preparation material immediately on control
+loss while preserving a functional first-claim preparation path. A later scoped delta and
+immutable review are required before publication. Parent architecture/build pass on bdaf31d;
+the 414-test combined run has 413 passes and one parent-authored fixture status mismatch
+(awaiting_continue versus the actual paused resource-wait state). The isolated corrected
+fixture passes but only proves the unsupported wait boundary, so it is superseded by the
+required functional provider acquisition/denial proof and is not acceptance of the missing
+capability. Log: /tmp/convoy-automation-series/pr4-parent-frozen-tests.log.
+
+Immutable Standards review also found one ownership blocker: the new control-plane Work
+activity adapter directly classifies status/reply/create/relation outcomes from raw Work
+state. Root accepted this finding and requires Work-owned public receipt/confirmation queries,
+including exact latest-reply selection. Both axis reports have no other confirmed backend
+blocker. Corrective work is assigned in pr4-review-fixes-spec.md: owner4 backend, agent3 resource
+acceptance, agent6 UI control-loss/first-claim correction and browser proof. Root re-reviews the
+UI independently; the helper reviewers remain independent of the backend they review.

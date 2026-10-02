@@ -35,3 +35,18 @@ Supplemental Spec-review crash gaps, assigned to the same Luna high helper:
   its graph transition is saved. Restart must finish the same run/attempt using
   that immutable receipt without redispatch. Exercise the actual checkpoint with
   a child process and bounded fault barrier rather than editing status strings.
+
+Required-approval continuation proof, assigned to the same lifecycle helper:
+- A required-gate integration returns waiting after dispatch, then confirmation on
+  authorized Continue completes the same reserved attempt without dispatch replay.
+- A first dispatch loses acknowledgement before actual application. It stays unknown
+  until the adapter canonically establishes not-applied. Authorized Continue retries
+  the exact same instance/key/reservation; two dispatch calls apply the effect once.
+Consumed reservation identity remains usable proof for these continuations and
+reconciliation. A label or an unrelated earlier approval is insufficient.
+
+Cancellation remains a run lifecycle decision while effect confirmation progresses.
+A cancelled durable activity may later receive canonical applied-but-still-waiting
+evidence, then a complete receipt; neither reconciliation may reactivate its run
+or start downstream work. Record truthful attempt evidence, preserve cancellation,
+and never replay the original effect. Add the public command acceptance case.

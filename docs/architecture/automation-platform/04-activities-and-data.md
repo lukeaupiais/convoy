@@ -67,3 +67,25 @@ weaken checks. Do not add filler UI copy. Do not push, merge, deploy, or message
 root will review commits, publish draft PRs, and verify remote CI. Commit only scoped changes.
 Each handoff identifies base/head commits, spec path, changed ownership, tests/results,
 compatibility behavior, and known limitations. Ask root about genuine specification conflicts.
+
+## Named output references during bounded revision loops
+
+A declared `activity_output` reference names a specific source node and path. At
+the consumer's preparation boundary it resolves that named node's latest completed
+execution in the same run that precedes the consumer. This is an explicit named
+reference, not an unqualified last-result lookup. Preserve every previous attempt's
+immutable output; the node lookup is a derived current-output index. The consumer's
+validated input digest, prepared intent and approval reservation pin the exact
+resolved value. A rework loop with distinct source outputs must prove that the new
+consumer uses the current named source while the old receipt stays unchanged.
+
+## Registered agent resource acceptance
+
+A registered action explicitly declaring agent resources is an active provider participant,
+so it must acquire a real authorized provider Session through the existing lazy acquisition
+seam when its node becomes active. An advertised resource type cannot remain permanently
+unsupported by requiring a session that the run can never acquire. This is different from
+creating a fake session for pure, integration or runner activities: those continue with zero
+provider sessions. Verify standalone agent-resource action dispatch with the current permitted
+model/provider/tools, and fail closed when provider/model authority is unavailable or revoked.
+Future agent/runner requirements may not allocate resources before their own node activates.
