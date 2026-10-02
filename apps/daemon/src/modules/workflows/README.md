@@ -29,15 +29,18 @@ at publication and again when resolved for dispatch.
 An activity acquires resources only when it becomes active. Daemon transforms do
 not create agent sessions or require a workspace; runner activities recheck the
 current execution grant and exact workspace before dispatch. A registered activity
-that declares an agent resource waits for an already active, authorized provider
-session; its descriptor does not create one. Legacy agent nodes still create their
-session when activated. Each effect attempt
-pins its activity revision, resolved input digest, idempotency identity, and prepared
-intent before invoking its adapter. Workflows remains the sole owner of attempts and
-compatibility effect evidence. Completed receipts are immutable; waiting effects
-can be confirmed against their owner, while uncertain durable effects require
-adapter reconciliation and are never replayed automatically. Current project grants
-and required exact human-gate approvals are checked for dispatch and reconciliation.
+that declares an agent resource lazily attaches a real provider session when its
+node becomes active, using the stored run principal. Its exact node model, current
+provider grant, and declared tools are checked before each adapter prepare/dispatch,
+including when a run already has a linked session. Provider-only activities do not
+acquire a runner just because the project has a runner placement. Legacy agent nodes
+still create their session when activated. Each effect attempt pins its activity
+revision, resolved input digest, idempotency identity, and prepared intent before
+invoking its adapter. Workflows remains the sole owner of attempts and compatibility
+effect evidence. Completed receipts are immutable; waiting effects can be confirmed
+against their owner, while uncertain durable effects require adapter reconciliation
+and are never replayed automatically. Current project grants and required exact
+human-gate approvals are checked for dispatch and reconciliation.
 
 Agent submissions capture every declared artifact as an immutable, content-addressed
 review package. Human decisions apply to that captured submission; the mutable
