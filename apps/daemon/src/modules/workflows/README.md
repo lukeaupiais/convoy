@@ -26,10 +26,22 @@ review package. Human decisions apply to that captured submission; the mutable
 workspace remains separately checked for stale evidence before advancement.
 
 Workflow definition publication and draft commands are registered through the
-control-plane module command registry. Active-run controls remain coordinator
-operations because they require a session lease and can span Work and Execution.
-After that lease gate, active-run start, stop, decisions, trigger retries, and
-effect reconciliation are Workflow session commands.
+control-plane module command registry. Workflows owns canonical run identities,
+pinned definitions, activity attempts, run history, run leases, migration from
+legacy `session.flow`/`pastRuns`, and the bounded run read model. A session's
+`flow` and `pastRuns` are compatibility projections of that owner. The
+control-plane checks current project grants and the stored run principal at each
+runtime command and dispatch boundary, then delegates run transitions here.
+
+`startWorkflowRun` can execute branch, Work action, human gate, and wait graphs
+without creating a session, conversation, provider turn, repository, or runner.
+An agent node lazily creates and links its conversation/session when it becomes
+active. `getWorkflowRun` reads one run by its stored project scope when it is
+outside the bounded snapshot page. Run decisions record the authenticated
+principal with the actor label; stale instances fail closed. An uncertain Work
+effect stays uncertain through cancellation and restart until its exact effect
+key is explicitly reconciled. Restart clears live run leases while retaining
+actor and decision evidence.
 
 The built-in **Team delivery** template is an editable, additive starting graph:
 plan ticket → approve plan → implement → verify → human review. Failed checks

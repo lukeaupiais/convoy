@@ -47,14 +47,14 @@ export function createSessionConfiguration({
     if (change.clearPlacement) delete session.placement;
     refreshInstructions(session);
     if (change.workflow) {
+      if (session.workflowRunId) workflows.archiveSessionRun(session);
       session.workflow = change.workflow;
       session.step = 0;
     }
     if (change.clearWorkflow) {
       session.workflow = null;
       if (session.flow) {
-        session.pastRuns ??= [];
-        session.pastRuns.push(session.flow);
+        workflows.archiveSessionRun(session);
         session.flow = null;
       }
       session.status = 'idle';

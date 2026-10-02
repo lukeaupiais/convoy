@@ -12,10 +12,12 @@ export function migrateWorkflowEffectState(state) {
  * written before mutation so restarts fail closed instead of replaying an
  * uncertain create/update/move.
  */
-export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, makeSession, pinInstructions, normalizeWorkflow, event, save, now, getEngine, requireText, automations, authorizeStart }) {
+export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, workCommand, makeSession, pinInstructions, normalizeWorkflow, event, save, now, getEngine, requireText, automations, authorizeStart }) {
   migrateWorkflowEffectState(state);
-  async function boardCommand(command) {
-    const result = await (boards?.command ?? catalog.command)(command);
+  async function boardCommand(command, session) {
+    const result = workCommand
+      ? await workCommand(command, session)
+      : await (boards?.command ?? catalog.command)(command);
     return observeBoardCommand(command, result);
   }
 
@@ -146,7 +148,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     }
     if (effect.status !== 'succeeded') {
       try {
-        effect.result = structuredClone(await boardCommand(command));
+        effect.result = structuredClone(await boardCommand(command, session));
         effect.status = 'succeeded';
         delete effect.message;
         delete effect.blockingReplyRequestId;
@@ -165,7 +167,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         await save(); throw error;
       }
     }
-    const thread = await boardCommand({ action: 'syncExternalTicketThread', ticketId, connectionId: input.connectionId });
+    const thread = await boardCommand({ action: 'syncExternalTicketThread', ticketId, connectionId: input.connectionId }, session);
     const reply = state.ticketReplies.find(reply => reply.id === command.requestId && reply.ticketId === ticketId &&
       reply.connectionId === input.connectionId && reply.body === body && reply.workflowRunId === session.flow.id);
     const delivered = thread.messages.some(message => message.remoteId === reply?.remoteId && message.body === body &&
@@ -204,7 +206,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       command.ticketId ??= session.activeTicketId;
       command.requestId ??= command.requestKey ?? `${session.flow.id}-${instance}`;
       if (command.evidenceReply === 'latest_delivered') {
-        await boardCommand({ action: 'syncExternalTicketThread', ticketId: command.ticketId, connectionId: command.connectionId });
+        await boardCommand({ action: 'syncExternalTicketThread', ticketId: command.ticketId, connectionId: command.connectionId }, session);
         const candidates = (state.ticketReplies ?? []).filter(reply =>
           reply.ticketId === command.ticketId && reply.connectionId === command.connectionId &&
           reply.status === 'queued' && reply.deliveryStatus === 'delivered' &&
@@ -236,7 +238,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     };
     await save();
     try {
-      const result = await boardCommand(command);
+      const result = await boardCommand(command, session);
       if (['create_ticket', 'create_related_ticket'].includes(node.operation) && result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = result.id; }
       state.workflowEffectLedger[effectKey] = {
         ...state.workflowEffectLedger[effectKey],
@@ -254,30 +256,40 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
 
   async function reconcile(session, command) {
     const engine = getEngine();
-    if (!session.flow || !['failed', 'interrupted'].includes(session.flow.status)) throw new Error('No failed workflow effect needs reconciliation.');
+    if (!session.flow || !['failed', 'interrupted', 'cancelled'].includes(session.flow.status)) throw new Error('No failed workflow effect needs reconciliation.');
     if (typeof command.instance !== 'string' || session.flow.instance !== command.instance) throw new Error('Workflow step instance has changed. Refresh before reconciling.');
     const node = engine.current(session); const effectKey = `${session.flow.id}:${command.instance}:${node.id}`;
     if (command.effectKey !== effectKey) throw new Error('Provide the exact workflow effect key.');
     const effect = state.workflowEffectLedger[effectKey];
-    if (!effect || !['pending', 'uncertain'].includes(effect.status)) throw new Error('Workflow effect is not awaiting reconciliation.');
+    if (!effect || !['pending', 'uncertain', 'succeeded'].includes(effect.status)) throw new Error('Workflow effect is not awaiting reconciliation.');
     if (!['applied', 'not_applied'].includes(command.resolution)) throw new Error('Confirm applied or not_applied explicitly.');
+    if (effect.status === 'succeeded' && command.resolution !== 'applied') throw new Error('A recorded successful workflow effect cannot be discarded.');
+    const cancelled = session.flow.status === 'cancelled';
     if (command.resolution === 'applied') {
+      const cachedSuccess = effect.status === 'succeeded';
+      if (cachedSuccess && (!effect.result || typeof effect.result !== 'object')) throw new Error('Recorded successful workflow effect has no result receipt.');
       const recorded = effect.command ?? {}; const targetId = recorded.ticketId ?? recorded.taskId;
-      const reportedId = command.result?.id ?? command.result?.ticketId ?? command.result?.taskId;
-      if (!command.result || typeof command.result !== 'object' || Array.isArray(command.result)) throw new Error('Applied effect confirmation must include the real command result.');
-      if (node.operation === 'send_external_reply') {
+      const appliedResult = cachedSuccess ? structuredClone(effect.result) : command.result;
+      const reportedId = appliedResult?.id ?? appliedResult?.ticketId ?? appliedResult?.taskId;
+      if (!appliedResult || typeof appliedResult !== 'object' || Array.isArray(appliedResult)) throw new Error('Applied effect confirmation must include the real command result.');
+      if (!cachedSuccess && node.operation === 'send_external_reply') {
         const reply = state.ticketReplies.find(reply => reply.id === recorded.requestId && reply.ticketId === recorded.ticketId && reply.connectionId === recorded.connectionId && reply.body === recorded.body && reply.status === 'queued');
         if (!reply || command.result.id !== reply.id) throw new Error('Reconcile the matching external reply first and provide its request ID.');
-        command.result = structuredClone(reply);
+        effect.result = structuredClone(reply);
       }
-      else if (['create_ticket', 'create_related_ticket'].includes(node.operation)) { if (reportedId === undefined || !catalog.ticket(reportedId)) throw new Error('Applied create result must reference an existing ticket.'); }
-      else if (targetId !== undefined) {
+      else if (!cachedSuccess && ['create_ticket', 'create_related_ticket'].includes(node.operation)) { if (reportedId === undefined || !catalog.ticket(reportedId)) throw new Error('Applied create result must reference an existing ticket.'); }
+      else if (!cachedSuccess && targetId !== undefined) {
         if (!catalog.ticket(targetId)) throw new Error('Applied effect target ticket no longer exists.');
         if (reportedId === undefined || String(reportedId) !== String(targetId)) throw new Error('Applied effect result must reference its recorded target ticket.');
       }
-      effect.status = 'succeeded'; effect.result = command.result; effect.reconciledAt = now();
+      effect.status = 'succeeded'; effect.result ??= appliedResult; effect.reconciledAt = now();
+      if (cancelled) {
+        event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'applied', flowCancelled: true, cachedSuccess });
+        await save();
+        return;
+      }
       if (['create_ticket', 'create_related_ticket'].includes(node.operation) && effect.result?.id !== undefined) { session.flow.ticketBindings ??= {}; session.flow.ticketBindings.last_created = effect.result.id; }
-      session.flow.status = 'running'; session.status = 'running'; event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'applied' });
+      session.flow.status = 'running'; session.status = 'running'; event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'applied', cachedSuccess });
       try {
         const result = node.operation === 'send_external_reply' ? await sendApprovedReply(session, node, command.instance) : effect.result;
         if (result?.awaitingDelivery) await engine.holdAction(session, command.instance, result);
@@ -287,8 +299,9 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     } else {
       if (node.operation === 'send_external_reply' && state.ticketReplies.some(reply => reply.id === effect.command?.requestId))
         throw new Error('Reconcile the existing external reply; do not discard its send identity.');
-      delete state.workflowEffectLedger[effectKey]; session.flow.resumeStatus = 'ready'; session.flow.status = 'paused'; session.status = 'paused';
-      event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'not_applied' });
+      delete state.workflowEffectLedger[effectKey];
+      if (!cancelled) { session.flow.resumeStatus = 'ready'; session.flow.status = 'paused'; session.status = 'paused'; }
+      event(session, 'workflow_effect_reconciled', { effectKey, resolution: 'not_applied', ...(cancelled ? { flowCancelled: true } : {}) });
     }
     await save();
   }

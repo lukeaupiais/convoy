@@ -104,6 +104,17 @@ test('decision labels survive draft codec round trips and invalid metadata is re
   assert.match(validateWorkflow(draft).join(' '), /supported human outcomes/);
 });
 
+test('an empty create-ticket project uses the run project when encoded', () => {
+  const editor = fromWorkflow({ id: 'run-project-create', name: 'Run project create', nodes: [
+    { id: 'create', kind: 'action', name: 'Create work', operation: 'create_ticket', input: {
+      projectId: '', title: 'Work in the run project',
+    } },
+  ], edges: [] });
+  const encoded = toWorkflow(editor);
+  assert.equal('projectId' in encoded.nodes[0].input, false);
+  assert.deepEqual(validateWorkflow(editor), []);
+});
+
 test('workflow editor validation catches unreachable nodes and invalid numeric branches before publication', () => {
   const editor = fromWorkflow({
     id: 'bad',

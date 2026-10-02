@@ -61,15 +61,23 @@ export function createSnapshotQuery({
       (session) => !scope || scope.projectIds.includes(session.projectId),
     );
     const publicSessions = sessions.map(
-      ({ messages, requests, steeringRequests, agentSessions, executionPrincipal, ...session }) => {
+      ({ messages, requests, steeringRequests, agentSessions, executionPrincipal, flow, workflowRunId, pastRuns, ...session }) => {
+        if (flow) session.flow = flow;
+        if (workflowRunId) session.workflowRunId = workflowRunId;
+        const runHistory = pastRuns ?? [];
         const activeAgentStep =
-          session.flow && !['completed', 'cancelled'].includes(session.flow.status)
+          flow && !['completed', 'cancelled'].includes(flow.status)
             ? (session.workflow?.nodes ?? session.workflow?.steps ?? []).find(
-                (node) => node.id === session.flow.nodeId && node.kind === 'agent',
+                (node) => node.id === flow.nodeId && node.kind === 'agent',
               )
             : undefined;
         return {
           ...session,
+          workflowRunId: workflowRunId ?? flow?.id,
+          pastRuns: runHistory.slice(-50),
+          pastRunsTotal: runHistory.length,
+          pastRunsTruncated: runHistory.length > 50,
+          flow,
           workspaceGuidance: guidanceView(session),
           ...(jobs.has(session.id) && session.status === 'awaiting_review'
             ? { status: 'running' }

@@ -7,6 +7,38 @@ export type WorkflowReference = {
   ruleRevision?: number;
   nodeId?: string;
 };
+export type WorkflowActivityAttempt = {
+  instance: string;
+  nodeId: string;
+  status: 'ready' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'uncertain';
+  startedAt?: string;
+  completedAt?: string;
+  outcome?: string;
+};
+export type WorkflowRun = {
+  id: string;
+  organizationId: string;
+  projectId: string;
+  sessionId?: string;
+  independent?: boolean;
+  workflowId: string;
+  workflowVersion: number;
+  status: string;
+  nodeId?: string | null;
+  instance?: string | null;
+  activeTicketId?: number | null;
+  startedAt: string;
+  updatedAt?: string;
+  attempt?: WorkflowActivityAttempt;
+  activityAttempts?: WorkflowActivityAttempt[];
+  history: { nodeId: string; instance?: string; outcome: string; at?: string; to?: string | null }[];
+  historyTotal?: number;
+  historyTruncated?: boolean;
+  decisions?: { instance: string; decision: 'approve' | 'requestChanges'; actor: string; principal: Record<string, unknown>; at: string }[];
+  decisionsTotal?: number;
+  decisionsTruncated?: boolean;
+  lease: null | { id: string; client: string; label: string; expiresAt: number };
+};
 type BoardAutomationReference = WorkflowReference & {
   scope: 'column' | 'board' | 'project';
   workflowName?: string;
