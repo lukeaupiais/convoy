@@ -44,9 +44,12 @@ human-gate approvals are checked for dispatch and reconciliation. Preparing an
 approval reservation is resource independent: it checks the active run principal,
 project permission, and selected provider model, then pins that model with the exact
 intent. It does not allocate a future provider session, runner, workspace, or tool
-grant. Those resource and Library checks run again when the approved activity becomes
-active; a grant revoked after review blocks dispatch without replaying or changing the
-approved intent.
+grant. Adapter `prepare` receives `session: null` and a bounded run projection without
+session IDs, workspace paths, runner assignments, or execution grants; an adapter
+that needs those values cannot prepare an approval intent and fails the command.
+Resource and Library checks run again when the approved activity becomes active; a
+grant revoked after review blocks dispatch without replaying or changing the approved
+intent.
 
 Agent submissions capture every declared artifact as an immutable, content-addressed
 review package. Human decisions apply to that captured submission; the mutable

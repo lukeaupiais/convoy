@@ -8,6 +8,7 @@ import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.m
 test('session-backed activity preparation requires the current session owner before adapter preparation', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'convoy-session-activity-prepare-'));
   let prepareCalls = 0;
+  let preparedContext;
   const registration = {
     descriptor: {
       ref: { id: 'records.publish', revision: 1 },
@@ -19,7 +20,7 @@ test('session-backed activity preparation requires the current session owner bef
       presentation: { label: 'Publish record' },
     },
     implementation: {
-      async prepare(input) { prepareCalls++; return { recordId: input.recordId }; },
+      async prepare(input, _identity, context) { prepareCalls++; preparedContext = context; return { recordId: input.recordId }; },
       async dispatch() { return { state: 'completed', output: { receiptId: 'record-1' } }; },
       async confirm() { return { state: 'completed', output: { receiptId: 'record-1' } }; },
       async reconcile() { return { state: 'unknown' }; },
@@ -50,6 +51,7 @@ test('session-backed activity preparation requires the current session owner bef
   await act('startWorkflow', { sessionId: chat.sessionId });
   const snapshot = await runtime.snapshot(chat.sessionId);
   const flow = snapshot.sessions.find(value => value.id === chat.sessionId).flow;
+  assert.ok(snapshot.sessions.some(value => value.id === chat.sessionId), 'the run already has a linked session');
   assert.equal(flow.status, 'waiting_gate');
   const reservationCommand = { workflowRunId: flow.id, gateInstance: flow.instance, targetNodeId: 'publish' };
   await assert.rejects(runtime.command({ action: 'prepareWorkflowActivity', client: 'other-client', ...reservationCommand }), /controlled|lease|control/i);
@@ -57,4 +59,7 @@ test('session-backed activity preparation requires the current session owner bef
   const prepared = await act('prepareWorkflowActivity', reservationCommand);
   assert.equal(prepared.preview.input.recordId, 'record-1');
   assert.equal(prepareCalls, 1);
+  assert.equal(preparedContext.session, null);
+  assert.equal(preparedContext.run.sessionId, undefined);
+  assert.equal(preparedContext.owner, undefined);
 });

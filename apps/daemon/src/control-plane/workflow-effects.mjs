@@ -373,8 +373,33 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     const input = owner.resolveActivityInput(run, node);
     const identity = { runId: run.id, organizationId: run.organizationId, projectId: run.projectId,
       principal: structuredClone(run.principal), nodeId: node.id, instance, idempotencyKey: `${run.id}:${instance}` };
-    const session = run.sessionId ? state.sessions?.[run.sessionId] : null;
-    const context = { run, session, node, instance, owner, ...(approvalReservation ? { activityReservation: approvalReservation } : {}) };
+    const sourceRef = run.flow?.decisionSubmissionRef;
+    const sourceEntry = sourceRef && run.flow?.history?.find(value => value.nodeId === sourceRef.nodeId &&
+      value.instance === sourceRef.instance && value.to === approvalReservation?.gateNodeId);
+    const submission = sourceEntry?.submission ? structuredClone(sourceEntry.submission) : undefined;
+    if (submission && Buffer.byteLength(JSON.stringify(submission)) > 16_000)
+      throw new Error('Captured submission is too large for resource-independent activity preparation.');
+    const runContext = {
+      id: run.id,
+      organizationId: run.organizationId,
+      projectId: run.projectId,
+      principal: structuredClone(run.principal),
+      ...(run.activeTicketId != null ? { activeTicketId: run.activeTicketId } : {}),
+      ...(run.ticketId != null ? { ticketId: run.ticketId } : {}),
+      flow: {
+        status: run.flow?.status,
+        nodeId: run.flow?.nodeId,
+        instance: run.flow?.instance,
+        ...(run.flow?.decisionSubmissionRef ? { decisionSubmissionRef: structuredClone(run.flow.decisionSubmissionRef) } : {}),
+        ...(sourceEntry ? { history: [{
+          nodeId: sourceEntry.nodeId, instance: sourceEntry.instance, to: sourceEntry.to, outcome: sourceEntry.outcome,
+          ...(submission ? { submission } : {}),
+        }] } : {}),
+        ...(run.flow?.ticketBindings?.last_created != null ? { ticketBindings: { last_created: run.flow.ticketBindings.last_created } } : {}),
+      },
+    };
+    const context = { run: runContext, session: null, node: structuredClone(node), instance,
+      ...(approvalReservation ? { activityReservation: structuredClone(approvalReservation) } : {}) };
     // Preparation computes a bounded immutable intent for review. It must not
     // allocate the node's provider, runner, or workspace resources; dispatch
     // rechecks all active grants after that node becomes active.
