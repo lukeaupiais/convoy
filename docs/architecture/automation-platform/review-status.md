@@ -42,45 +42,48 @@ Parent architecture/build, all 57 module/web files and 28 workflow/board accepta
 After stacking, architecture/build and the five directly affected test files pass again.
 Remote checks, system and desktop pass at the published PR 2 head.
 
-## PR 3 — Independent durable runs (in review)
+## PR 3 — Independent durable runs
 
-Initial immutable implementation: 881c1865ffe9d8e3697d104128f039b2edef3e32,
-base 515e8e157decf7bbce44bc22ecb19fc5ab0bb839. Not published yet.
-Parent architecture/build pass. Broader module/web/affected acceptance run: 332 tests,
-331 pass, one capability ticket-tool approval regression. Baseline capability suite passes;
-PR 3 failure reproduces separately. Correction required before publication.
-Parent authority tests cover scoped reads/control, actor-bound leases, stale attempts,
-restart claims, revision pins, exact user/workload decision principal and grant revocation.
-Four tests pass at the initial implementation.
+Draft PR: https://github.com/lukeaupiais/convoy/pull/30
+Published and reviewed head: ebca318c8f330176fa21d1780a06960e3aec9986.
+Implementation base: PR 2 head 38301ef7bc6ba01fee273aba5ba85d3b4111a4b8.
 
 ### Standards review
 
-Prior wait-state recovery, run-scoped reconciliation and double-counted capacity findings fixed.
-Remaining: confirmed effect saved before graph transition can become stuck after crash;
-cancellation in that window must retain truthful applied-effect/attempt evidence.
-No clear genericity, dependency or domain ownership violation found.
+Final product review accepted after correcting confirmed-effect crash recovery/cancellation,
+project-scope authorization and foreign create-request replay. Work dispatch uses the canonical
+owner command; omitted create project is derived from governed run scope. Existing target-ticket
+and board checks remain. Parent accepts the final tests-only fixture corrections: actual Work
+and injected persistence adapters exercise production public facades, with no product test hook.
 
 ### Spec review
 
-Prior exact actor, lease, history and query requirements fixed.
-Remaining: actual cancelWorkflowRun command/abort behavior needs runtime acceptance;
-injected cancelled-state reconciliation alone is insufficient.
+Accepted. Runtime evidence covers no-session starts, migration, exact actors and principal-bound
+leases, tenant-scoped reads/control, stale attempts, revision pins, fresh restart claims, grant
+revocation, live agent cancellation/abort, truthful cancelled-effect receipts and exact recovery.
+Final recovery tests preserve actual writes, lose an acknowledgement through the persistence
+port, remain uncertain/blocked across restart, reject a fabricated result, and resolve the real
+persisted receipt without automatic graph advance or duplicate writes.
 
-### Parent findings
+### Parent verification
 
-Clone bounded exact-read DTOs before returning public commands. Permit currently authorized
-operators to release/cancel/reconcile after original execution authority is revoked, while
-retaining fail-closed checks on further execution. Preserve all durable approval history.
-These fixes and review of the revised immutable head remain pending.
+Architecture/build pass. Final combined module/web/acceptance run (apart from two separately
+reproduced occupied-port desktop cases): 480 tests, 478 pass, 2 explicit prerequisite skips,
+zero failures. Log: /tmp/convoy-automation-series/pr3-final-port-independent-tests.log.
+The earlier full combined run exposed two recovery fixture gaps; these were corrected and the
+full relevant groups repeated. No failing check was weakened or counted as passing evidence.
 
-Local command-supervisor comparison on unchanged baseline and PR 3 both times out at 50s,
-with nine subtests passing and one explicit packaged-worker prerequisite skip, followed by
-pending-harness cancellation. This current local limitation is not counted as passing evidence.
-Remote CI on the final published head is required. Docker race tests require unavailable image.
+Desktop development fails on occupied port 5173 on unchanged code. Built Electron startup
+fails on occupied port 4317; the unchanged built plan baseline reproduces that same error
+(baseline-electron-entry.log). Neither service was stopped. Local command-supervisor comparison
+on unchanged baseline and PR 3 both times out at 50s, with nine passing subtests and one explicit
+packaged-worker skip followed by pending-harness cancellation. Docker race tests require an
+unavailable immutable image. These are pending evidence; exact published-head remote checks,
+system and desktop CI must pass before delivery acceptance.
 
 ## Remaining PRs
 
-Independent runs is in implementation. Activities/data and human/evidence have delegated
-written interface design phases while their implementation dependencies are reviewed.
-Events/waits and composition await delegation and reviewed dependencies.
+Activities/data implementation is delegated on the reviewed PR 3 head. Human/evidence has
+a concrete written seam map and awaits reviewed activities/data.
+Events/waits and composition have delegated written proposals; code awaits reviewed dependencies.
 No implementation PR has been merged or deployed.
