@@ -524,6 +524,131 @@ test('acceptance: a conversation can execute and approve a workflow without crea
     assert.equal(session.currentAgentSessionId, identity);
     assert.equal(state.tickets.length, 0);
 });
+test('acceptance: an independent workflow run branches and waits for a governed human decision without a session', async (t) => {
+    const f = await fixture(t);
+    const projectId = 'agent-platform';
+    const ticket = await f.act('createTicket', { requestId: 'procurement-ticket', projectId, title: 'Procurement request', description: 'Review purchase' });
+    await f.act('saveWorkflow', { projectId, workflow: { id: 'procurement-review', name: 'Procurement review', nodes: [
+        { id: 'route', kind: 'branch', name: 'Route request', condition: { source: 'context', field: 'category', equals: 'standard', trueOutcome: 'standard', falseOutcome: 'review' } },
+        { id: 'record', kind: 'action', name: 'Record review state', operation: 'update_ticket', input: { ticketSource: 'active_ticket', patch: { status: 'In review' } } },
+        { id: 'review', kind: 'human', name: 'Review request', prompt: 'Review this request.' },
+    ], edges: [{ from: 'route', to: 'review', outcome: 'standard' }, { from: 'route', to: 'record', outcome: 'review' }, { from: 'record', to: 'review', outcome: 'success' }] } });
+    const started = await f.act('startWorkflowRun', { projectId, workflowId: 'procurement-review', workflowVersion: 1, activeTicketId: ticket.id });
+    let state = await until(async () => {
+        const snapshot = await f.snapshot();
+        return snapshot.workflowRuns.find(value => value.id === started.workflowRunId)?.status === 'waiting_gate' ? snapshot : null;
+    });
+    let run = state.workflowRuns.find(value => value.id === started.workflowRunId);
+    assert.equal(run.status, 'waiting_gate');
+    assert.equal(run.nodeId, 'review');
+    assert.equal(state.tickets.find(value => value.id === ticket.id).status, 'In review');
+    assert.equal(state.sessions.some(session => session.id === started.workflowRunId), false);
+    assert.equal(run.attempt.status, 'waiting');
+    await f.act('claimWorkflowRun', { workflowRunId: run.id });
+    await f.act('decideWorkflowRun', { workflowRunId: run.id, instance: run.instance, decision: 'approve' });
+    await f.restart();
+    state = await f.snapshot();
+    run = state.workflowRuns.find(value => value.id === started.workflowRunId);
+    assert.equal(run.status, 'completed');
+    assert.equal(run.history.length, 3);
+    assert.equal(state.sessions.some(session => session.id === started.workflowRunId), false);
+});
+test('acceptance: an independent mixed run creates one agent session only when its agent node activates', async (t) => {
+    let generations = 0;
+    const f = await fixture(t, { generate: async function* () {
+        generations++;
+        yield { type: 'result', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'submit-independent', name: 'submit_step', arguments: { summary: 'Assessment complete', outcome: 'success', artifacts: [] } }], stopReason: 'stop', timestamp: Date.now() } };
+    } });
+    const projectId = 'agent-platform';
+    const ticket = await f.act('createTicket', { requestId: 'mixed-run-ticket', projectId, title: 'Mixed run effect' });
+    await f.act('saveWorkflow', { projectId, workflow: { id: 'mixed-assessment', name: 'Mixed assessment', nodes: [
+        { id: 'assess', kind: 'agent', name: 'Assess request', prompt: 'Assess the request.' },
+        { id: 'approve', kind: 'human', name: 'Approve assessment', prompt: 'Review the assessment.' },
+        { id: 'record', kind: 'action', name: 'Record outcome', operation: 'update_ticket', input: { ticketSource: 'active_ticket', patch: { status: 'Approved' } } },
+    ], edges: [{ from: 'assess', to: 'approve', outcome: 'success' }, { from: 'approve', to: 'record', outcome: 'approved' }] } });
+    const started = await f.act('startWorkflowRun', { projectId, workflowId: 'mixed-assessment', workflowVersion: 1, activeTicketId: ticket.id });
+    let state = await until(async () => {
+        const snapshot = await f.snapshot();
+        const run = snapshot.workflowRuns.find(value => value.id === started.workflowRunId);
+        if (run?.status === 'failed') throw new Error(JSON.stringify({ generations, run, sessions: snapshot.sessions.map(session => ({ id: session.id, status: session.status, workspace: session.workspace, placement: session.placement, queueReason: session.queueReason, partial: session.partial, pending: session.pending, events: session.events.slice(-8) })) }));
+        return run?.status === 'waiting_gate' ? snapshot : null;
+    });
+    const linked = state.sessions.filter(session => session.workflowRunId === started.workflowRunId);
+    assert.equal(linked.length, 1);
+    assert.equal(linked[0].agentSessions.length, 1);
+    assert.equal(generations, 1);
+    let run = state.workflowRuns.find(value => value.id === started.workflowRunId);
+    assert.equal(run.nodeId, 'approve');
+    const instance = run.instance;
+    await f.restart();
+    state = await f.snapshot();
+    run = state.workflowRuns.find(value => value.id === started.workflowRunId);
+    assert.equal(run.status, 'waiting_gate');
+    assert.equal(run.instance, instance);
+    assert.equal(state.sessions.filter(session => session.workflowRunId === started.workflowRunId).length, 1);
+    await f.act('claimWorkflowRun', { workflowRunId: run.id });
+    const linkedSession = state.sessions.find(session => session.workflowRunId === started.workflowRunId);
+    await assert.rejects(f.act('claim', { sessionId: linkedSession.id, client: 'different-client' }), /Claim workflow run control first/);
+    await f.act('claim', { sessionId: linkedSession.id });
+    await assert.rejects(f.act('approveGate', { sessionId: linkedSession.id, instance, client: 'different-client' }), /controlled|Claim workflow run control first/);
+    await f.act('decideWorkflowRun', { workflowRunId: run.id, instance, decision: 'approve' });
+    state = await until(async () => {
+        const snapshot = await f.snapshot();
+        return snapshot.workflowRuns.find(value => value.id === started.workflowRunId)?.status === 'completed' ? snapshot : null;
+    });
+    assert.equal(state.tickets.find(value => value.id === ticket.id).status, 'Approved');
+    assert.equal(state.sessions.filter(session => session.workflowRunId === started.workflowRunId).length, 1);
+});
+test('acceptance: a cancelled standalone run keeps an uncertain Work effect until exact run reconciliation', async (t) => {
+    const f = await fixture(t);
+    const projectId = 'agent-platform';
+    const ticket = await f.act('createTicket', { requestId: 'uncertain-run-ticket', projectId, title: 'Uncertain effect' });
+    await f.act('saveWorkflow', { projectId, workflow: { id: 'uncertain-run', name: 'Uncertain run', nodes: [
+        { id: 'review', kind: 'human', name: 'Review', prompt: 'Review before update.' },
+        { id: 'update', kind: 'action', name: 'Update ticket', operation: 'update_ticket', input: { ticketSource: 'active_ticket', patch: { status: 'Approved' } } },
+    ], edges: [{ from: 'review', to: 'update', outcome: 'approved' }] } });
+    const { workflowRunId } = await f.act('startWorkflowRun', { projectId, workflowId: 'uncertain-run', workflowVersion: 1, activeTicketId: ticket.id });
+    let run = (await f.snapshot()).workflowRuns.find(value => value.id === workflowRunId);
+    const instance = 'uncertain-after-response-loss';
+    const effectKey = `${workflowRunId}:${instance}:update`;
+    await f.restartLegacy(state => {
+        const owner = state.workflowRuns[workflowRunId];
+        owner.flow.status = 'cancelled';
+        owner.flow.nodeId = 'update';
+        owner.flow.instance = instance;
+        owner.attempt = { instance, nodeId: 'update', status: 'uncertain', startedAt: new Date().toISOString() };
+        state.workflowEffectLedger[effectKey] = { status: 'uncertain', operation: 'update_ticket', command: { ticketId: ticket.id }, projectId, organizationId: 'personal' };
+    });
+    run = (await f.snapshot()).workflowRuns.find(value => value.id === workflowRunId);
+    assert.equal(run.status, 'cancelled');
+    assert.equal(run.attempt.status, 'uncertain');
+    await f.act('claimWorkflowRun', { workflowRunId });
+    await assert.rejects(f.act('reconcileWorkflowRun', { workflowRunId, instance, effectKey: 'wrong-effect-key', resolution: 'not_applied' }), /exact workflow effect key/i);
+    assert.equal((await f.snapshot()).workflowRuns.find(value => value.id === workflowRunId).attempt.status, 'uncertain');
+    await f.act('reconcileWorkflowRun', { workflowRunId, instance, effectKey, resolution: 'not_applied' });
+    run = (await f.snapshot()).workflowRuns.find(value => value.id === workflowRunId);
+    assert.equal(run.status, 'cancelled');
+    assert.equal(run.attempt.status, 'cancelled');
+    await assert.rejects(f.act('continueWorkflowRun', { workflowRunId, instance }), /cancelled|not waiting|changed/i);
+    const second = await f.act('startWorkflowRun', { projectId, workflowId: 'uncertain-run', workflowVersion: 1, activeTicketId: ticket.id });
+    const secondInstance = 'applied-effect-after-cancellation';
+    const secondEffectKey = `${second.workflowRunId}:${secondInstance}:update`;
+    await f.restartLegacy(state => {
+        const owner = state.workflowRuns[second.workflowRunId];
+        owner.flow.status = 'cancelled';
+        owner.flow.nodeId = 'update';
+        owner.flow.instance = secondInstance;
+        owner.attempt = { instance: secondInstance, nodeId: 'update', status: 'uncertain', startedAt: new Date().toISOString() };
+        state.workflowEffectLedger[secondEffectKey] = { status: 'uncertain', operation: 'update_ticket', command: { ticketId: ticket.id }, projectId, organizationId: 'personal' };
+    });
+    await f.act('claimWorkflowRun', { workflowRunId: second.workflowRunId });
+    await f.act('reconcileWorkflowRun', { workflowRunId: second.workflowRunId, instance: secondInstance, effectKey: secondEffectKey, resolution: 'applied', result: { id: ticket.id, status: 'Backlog' } });
+    run = (await f.snapshot()).workflowRuns.find(value => value.id === second.workflowRunId);
+    assert.equal(run.status, 'cancelled');
+    assert.equal(run.attempt.status, 'cancelled');
+    assert.equal(run.nodeId, 'update');
+    assert.equal((await f.snapshot()).sessions.some(session => session.workflowRunId === second.workflowRunId), false);
+});
 test('acceptance: board-local placement, renamed columns and active approvals remain independent across restart', async (t) => {
     const f = await fixture(t);
     const ticket = await f.act('createTicket', { requestId: 'shared-ticket', title: 'One ticket, two boards', projectId: 'agent-platform' });
@@ -594,6 +719,9 @@ test('acceptance: a persisted legacy approval migrates without replacing its pen
     const before = (await f.snapshot()).sessions.find(s => s.id === chat.sessionId);
     await f.restartLegacy(state => {
         const session = state.sessions[chat.sessionId];
+        session.flow = state.workflowRuns[session.workflowRunId].flow;
+        delete state.workflowRuns[session.workflowRunId];
+        delete session.workflowRunId;
         session.workflow = { id: 'legacy-review', name: 'Legacy review', schemaVersion: 2, version: 1, steps: [{ id: 'review', kind: 'human', name: 'Review', prompt: 'Approve', phase: 'In review' }] };
         delete session.flow.nodeId;
         delete session.flow.history;
@@ -604,6 +732,18 @@ test('acceptance: a persisted legacy approval migrates without replacing its pen
     await f.act('claim', scope);
     await f.act('approveGate', { ...scope, instance: before.flow.instance });
     assert.equal((await f.snapshot()).sessions.find(s => s.id === chat.sessionId).flow.status, 'completed');
+    await f.act('startWorkflow', scope);
+    await f.restart();
+    const after = await f.snapshot();
+    const session = after.sessions.find(s => s.id === chat.sessionId);
+    assert.notEqual(session.workflowRunId, before.flow.id);
+    assert.equal(session.pastRuns.length, 1);
+    assert.equal(session.pastRuns[0].id, before.flow.id);
+    assert.equal(session.pastRuns[0].instance, before.flow.instance);
+    assert.equal(session.pastRuns[0].workflow.version, 1);
+    const archived = after.workflowRuns.find(run => run.id === before.flow.id);
+    assert.equal(archived.status, 'completed');
+    assert.equal(archived.workflowVersion, 1);
 });
 test('acceptance: approval rejects changed submission evidence even across an intervening branch', async () => {
     let hash = 'original';

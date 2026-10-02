@@ -92,6 +92,9 @@ export type RuntimeSnapshot = {
   runnerPools: RunnerPool[];
   scheduler: { maxConcurrent: number };
   workflowDrafts?: Record<string, { workflow: WorkflowDefinition; revision: number }>;
+  workflowRuns?: import('./model/workflows').WorkflowRun[];
+  workflowRunsTotal?: number;
+  workflowRunsTruncated?: boolean;
   automationCapabilities?: AutomationCapabilities;
   automations?: AutomationRule[];
   boardAutomations?: Record<string, BoardAutomationView>;

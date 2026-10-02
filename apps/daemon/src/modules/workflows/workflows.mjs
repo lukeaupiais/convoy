@@ -231,16 +231,19 @@ export function ensureAgentSessions(s) {
   return s.agentSessions[s.currentAgentSessionId];
 }
 
-export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, sealEvidence = async () => null, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {} }) {
+export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, sealEvidence = async () => null, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {}, bindRun = () => {}, attachAgent = async () => { throw new Error('Agent activity requires an attached conversation.'); } }) {
   let pumping = false; let pumpAgain = false;
-  const nodes = s => s.workflow.nodes ?? s.workflow.steps;
+  const runOwner = s => s.independentRun ? s : state.workflowRuns?.[s.workflowRunId];
+  const attemptStatus = (s, status) => { const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow?.instance) { owner.attempt.status = status; owner.attempt.updatedAt = new Date().toISOString(); } };
+  const definition = s => runOwner(s)?.workflow ?? s.workflow;
+  const nodes = s => definition(s).nodes ?? definition(s).steps;
   const current = s => { const list = nodes(s); return list.find(n => n.id === s.flow?.nodeId) ?? list[s.step]; };
   function requireInstance(s, instance) { if (!s.flow || s.flow.instance !== instance) throw new Error('This workflow step has changed. Refresh before acting.'); }
   function active(s) { return s.flow && !['completed', 'cancelled'].includes(s.flow.status); }
-  function edgeFor(s, outcome) { const node = current(s); const edges = s.workflow.edges.filter(e => e.from === node.id); return edges.find(e => e.outcome === outcome) ?? edges.find(e => e.outcome === '*') ?? edges.find(e => e.outcome === 'default') ?? null; }
+  function edgeFor(s, outcome) { const node = current(s); const edges = definition(s).edges.filter(e => e.from === node.id); return edges.find(e => e.outcome === outcome) ?? edges.find(e => e.outcome === '*') ?? edges.find(e => e.outcome === 'default') ?? null; }
   function assertOutcome(s, outcome) {
     const node = current(s);
-    const {outcomes} = submissionContract(s.workflow, node);
+    const {outcomes} = submissionContract(definition(s), node);
     if (outcomes === null || outcomes.includes(outcome)) return;
     throw new Error(`No workflow edge handles outcome ${outcome} from ${node.name}. Choose a configured outcome: ${outcomes.join(', ')}.`);
   }
@@ -251,9 +254,11 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     delete s.flow.decisionSubmissionRef;
     if (list[index].operation !== 'send_external_reply') delete s.flow.approvedSubmission;
     const node = list[index]; s.flow.status = node.kind === 'human' ? 'waiting_gate' : node.kind === 'wait' ? 'waiting_event' : 'ready'; s.status = s.flow.status;
+    const owner = runOwner(s); if (owner) { owner.activityAttempts ??= []; if (owner.attempt) owner.activityAttempts.push(structuredClone(owner.attempt)); owner.attempt = { instance: s.flow.instance, nodeId: node.id, status: s.flow.status === 'waiting_gate' || s.flow.status === 'waiting_event' ? 'waiting' : 'ready', startedAt: new Date().toISOString() }; }
     event(s, 'step_activated', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance: s.flow.instance, name: node.name, outcome });
   }
   function transition(s, outcome) {
+    attemptStatus(s, ['failed', 'changes_requested'].includes(outcome) ? 'failed' : 'completed');
     assertOutcome(s, outcome);
     const node = current(s); const edge = edgeFor(s, outcome); const latestEvidence = s.flow.evidenceTrail?.at(-1)?.evidence;
     if (latestEvidence) s.flow.previousEvidence = latestEvidence;
@@ -271,7 +276,8 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     } : undefined;
     const reviewedSubmissionRef = node.kind === 'human' && s.flow.decisionSubmissionRef ? structuredClone(s.flow.decisionSubmissionRef) : undefined;
     s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: completedInstance, outcome, at: new Date().toISOString(), to: edge?.to ?? null, ...(submission ? { submission } : {}), ...(sourceEvidence ? { sourceEvidence } : {}), ...(reviewedSubmissionRef ? { decisionSubmissionRef: reviewedSubmissionRef } : {}) });
-    if (!edge) { s.flow.status = 'completed'; s.status = 'accepted'; event(s, 'workflow_completed', { runId: s.flow.id }); return; }
+    const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === completedInstance) { owner.attempt.status = 'completed'; owner.attempt.outcome = outcome; owner.attempt.completedAt = new Date().toISOString(); }
+    if (!edge) { s.flow.status = 'completed'; s.status = 'accepted'; attemptStatus(s, 'completed'); event(s, 'workflow_completed', { runId: s.flow.id }); return; }
     activate(s, edge.to, outcome);
     if (current(s).kind === 'human') {
       const source = [...s.flow.history].reverse().find(entry => entry.submission?.nodeId && entry.submission?.instance && entry.submission?.revision === s.flow.revision + 1);
@@ -342,7 +348,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
   async function finish(s, summary, artifacts, outcome = 'success', submissionEvidence = null) {
     const instance = s.flow.instance; const status = s.flow.status; const node = current(s); if (node.artifact && !artifacts.includes(node.artifact.path)) throw new Error(`Include ${node.artifact.path} in the submission.`);
     assertOutcome(s, outcome);
-    if (['changes_requested', 'failed'].includes(outcome) && s.flow.revision >= s.workflow.maxRevisions) throw new Error('Workflow revision limit reached.');
+    if (['changes_requested', 'failed'].includes(outcome) && s.flow.revision >= definition(s).maxRevisions) throw new Error('Workflow revision limit reached.');
     const evidence = { ...await validate(s, outcome), ...(node.kind === 'agent' ? { ...(submissionEvidence ?? {}), sourceNodeId: node.id, sourceInstance: instance } : {}) }; if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed during validation. Submission was not accepted.');
     const verification = node.kind === 'agent' ? await sealEvidence(s, submissionEvidence, artifacts) : null;
     if (s.flow.instance !== instance || s.flow.status !== status) throw new Error('Workflow changed while sealing evidence.');
@@ -363,7 +369,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     if (node.kind === 'agent' || evidence.artifact || evidence.digest || evidence.details) { s.flow.evidenceTrail ??= []; s.flow.evidenceTrail.push({ nodeId: node.id, instance, evidence }); s.flow.evidenceTrail = s.flow.evidenceTrail.slice(-50); }
     event(s, 'step_submitted', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance, summary, evidence, outcome });
     if (['changes_requested', 'failed'].includes(outcome)) { s.flow.revision++; s.flow.evidenceTrail = []; event(s, 'evidence_invalidated', { fromNode: node.id, revision: s.flow.revision, outcome }); }
-    if (node.advance === 'manual' && outcome === 'success') { s.flow.status = 'awaiting_continue'; s.status = 'awaiting_continue'; }
+    if (node.advance === 'manual' && outcome === 'success') { s.flow.status = 'awaiting_continue'; s.status = 'awaiting_continue'; attemptStatus(s, 'waiting'); }
     else { event(s, 'step_completed', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance, evidence, outcome }); transition(s, outcome); }
     await save(); return { accepted: true, next: s.flow.status, message: 'Submission validated. The orchestrator controls further execution; stop this turn.' };
   }
@@ -390,23 +396,27 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       return true;
     },
     async start(s, options = {}) {
-      if (active(s) || busy(s)) throw new Error('A workflow is already active.'); if (!s.workflow) throw new Error('Select and apply a workflow first.');
-      s.workflow = { ...normalizeWorkflow(s.workflow), version: s.workflow.version }; if (s.workflow.nodes.some(node => node.artifact || node.kind === 'check' || node.kind === 'action' && node.operation === 'inspect_changes' || node.requiresCheck) && !s.workspace && !canProvision(s)) throw new Error('This workflow requires a worktree. Select a runner or placement pool first.');
-      prepareStart(s, options);
-      const main = ensureAgentSessions(s); if (s.flow) { s.pastRuns ??= []; s.pastRuns.push(structuredClone(s.flow)); }
+      if (active(s) || busy(s)) throw new Error('A workflow is already active.'); if (!definition(s)) throw new Error('Select and apply a workflow first.');
+      s.workflow = { ...normalizeWorkflow(s.workflow), version: s.workflow.version };
+      if (!s.independentRun && definition(s).nodes.some(node => node.artifact || node.kind === 'check' || node.kind === 'action' && node.operation === 'inspect_changes' || node.requiresCheck) && !s.workspace && !canProvision(s)) throw new Error('This workflow requires a worktree. Select a runner or placement pool first.');
+      if (!s.independentRun) prepareStart(s, options);
+      const main = s.independentRun ? null : ensureAgentSessions(s);
       delete s.boardPhase;
-      s.flow = { id: randomUUID(), workflowId: s.workflow.id, workflowVersion: s.workflow.version, model: s.model, status: 'ready', nodeId: null, instance: null, aliases: { main: main.id }, bindings: {}, lastAgent: main.id, agentSessionId: null, revision: 0, history: [], startedAt: new Date().toISOString() };
-      event(s, 'workflow_started', { runId: s.flow.id, workflowId: s.workflow.id, version: s.workflow.version }); activate(s, s.workflow.entryNode); await save();
+      const pinned = definition(s);
+      const flow = { id: s.independentRun ? s.id : randomUUID(), workflowId: pinned.id, workflowVersion: pinned.version, ...(s.model ? { model: s.model } : {}), status: 'ready', nodeId: null, instance: null, ...(!s.independentRun ? { aliases: { main: main.id }, bindings: {}, lastAgent: main.id, agentSessionId: null } : { aliases: {}, bindings: {}, lastAgent: null, agentSessionId: null }), revision: 0, history: [], startedAt: new Date().toISOString() };
+      if (!s.independentRun) bindRun(s, flow);
+      s.flow = flow;
+      event(s, 'workflow_started', { runId: s.flow.id, workflowId: pinned.id, version: pinned.version }); activate(s, pinned.entryNode); await save();
     },
     async pump() {
       if (pumping) { pumpAgain = true; return; } pumping = true;
-      try { do { pumpAgain = false; for (const s of Object.values(state.sessions)) { if (s.flow?.status !== 'ready' || busy(s)) continue; const node = current(s); try { if (node.kind === 'agent') resolveSession(s); s.flow.status = 'running'; s.status = 'running'; await save(); if (s.flow.status !== 'running') continue; if (!launch(s, node, s.flow.instance)) { s.flow.status = 'ready'; s.status = 'queued'; await save(); } } catch (e) { s.flow.status = 'failed'; s.status = 'failed'; event(s, 'workflow_failed', { message: e.message }); await save(); } } } while (pumpAgain); } finally { pumping = false; }
+      try { do { pumpAgain = false; const contexts = [...Object.values(state.sessions), ...Object.values(state.workflowRuns ?? {}).filter(run => run.independentRun && !run.sessionId)]; for (let s of contexts) { if (s.flow?.status !== 'ready' || busy(s)) continue; let node = current(s); try { if (node.kind === 'agent') { if (s.independentRun) s = await attachAgent(s); resolveSession(s); node = current(s); } s.flow.status = 'running'; s.status = 'running'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance) { owner.attempt.status = 'running'; owner.attempt.startedAt = new Date().toISOString(); } await save(); if (s.flow.status !== 'running') continue; if (!launch(s, node, s.flow.instance)) { s.flow.status = 'ready'; s.status = 'queued'; if (owner?.attempt && owner.attempt.instance === s.flow.instance) owner.attempt.status = 'ready'; await save(); } } catch (e) { s.flow.status = 'failed'; s.status = 'failed'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance) owner.attempt.status = 'failed'; event(s, 'workflow_failed', { message: e.message }); await save(); } } } while (pumpAgain); } finally { pumping = false; }
     },
     async submit(s, instance, args) {
       requireInstance(s, instance); const node = current(s); if (s.flow.status !== 'running' || node.kind !== 'agent') throw new Error('This agent cannot submit the current step.'); const summary = required(args.summary, 'Completion summary', 4000);
       let outcome;
       try {
-        outcome = validateSubmissionContract(submissionContract(s.workflow, node), args);
+        outcome = validateSubmissionContract(submissionContract(definition(s), node), args);
         for (const heading of node.summaryHeadings ?? []) {
           const lines = summary.split('\n');
           const index = lines.findIndex(line => line.replace(/^#{1,6}\s+/, '').trim().toLowerCase() === heading.toLowerCase() && /^#{1,6}\s+/.test(line));
@@ -425,7 +435,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     async holdAction(s, instance, result) {
       requireInstance(s, instance);
       if (current(s).kind !== 'action' || s.flow.status !== 'running') throw new Error('Only a running action can await delivery.');
-      s.flow.resumeStatus = 'ready'; s.flow.status = 'paused'; s.status = 'paused'; s.flow.actionResult = result;
+      s.flow.resumeStatus = 'ready'; s.flow.status = 'paused'; s.status = 'paused'; attemptStatus(s, 'waiting'); s.flow.actionResult = result;
       event(s, 'workflow_action_waiting', { nodeId: current(s).id, instance, message: result.message });
       await save();
     },
@@ -438,7 +448,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       const node = current(s);
       if (command.action === 'reviseSubmission' && s.flow.status === 'awaiting_continue') { event(s, 'evidence_invalidated', { instance: s.flow.instance }); activate(s, node.id, 'revision'); await save(); return; }
       if (s.flow.status === 'waiting_gate') {
-        if (command.action === 'requestChanges') { delete s.flow.approvedSubmission; const feedback = required(command.feedback, 'Review feedback'); if (!edgeFor(s, 'changes_requested')) throw new Error('This gate has no revision path. Configure an outcome edge for changes_requested.'); s.flow.feedback = feedback; await finish(s, `Changes requested: ${feedback}`, [], 'changes_requested'); return; }
+        if (command.action === 'requestChanges') { delete s.flow.approvedSubmission; const feedback = required(command.feedback, 'Review feedback'); if (!edgeFor(s, 'changes_requested')) throw new Error('This gate has no revision path. Configure an outcome edge for changes_requested.'); event(s, 'gate_changes_requested', { instance: command.instance, actor: command.actor ?? s.lease?.label, principal: command.principal, feedback }); s.flow.feedback = feedback; await finish(s, `Changes requested: ${feedback}`, [], 'changes_requested'); return; }
         if (command.action !== 'approveGate') throw new Error('This step needs a human workflow decision.');
         const decisionSource = resolveDecisionSubmission(s, node);
         if (s.flow.decisionSubmissionRef && !decisionSource)
@@ -455,7 +465,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
             if (s.flow.status !== 'waiting_gate' || !file || file.sha256 !== evidence.artifact.hash) throw new Error('Submitted evidence changed. Request a fresh submission before approving.');
           }
           for (const ref of evidence.references ?? []) {
-            const origin = (s.workflow.nodes ?? s.workflow.steps).find(n => n.id === evidence.sourceNodeId);
+            const origin = (definition(s).nodes ?? definition(s).steps).find(n => n.id === evidence.sourceNodeId);
             if (!origin || origin.kind !== 'agent') throw new Error('Source evidence has no originating agent step. Request a fresh submission.');
             const file = await readReference(s, ref, origin);
             requireInstance(s, command.instance);
@@ -479,14 +489,14 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
             throw new Error('The reply needs a captured draft from the configured source step. Request changes before approving.');
           s.flow.approvedSubmission = { reviewNodeId: node.id, reviewInstance: command.instance, sourceSubmissionRef: structuredClone(sourceRef), submission: structuredClone(submission) };
         }
-        await finish(s, 'Human approved', [], 'approved'); event(s, 'gate_approved', { instance: command.instance, actor: command.actor ?? s.lease?.label }); await save(); return;
+        await finish(s, 'Human approved', [], 'approved'); event(s, 'gate_approved', { instance: command.instance, actor: command.actor ?? s.lease?.label, principal: command.principal }); await save(); return;
       }
       if (command.action !== 'continueWorkflow') throw new Error('There is no pending workflow gate.');
       if (s.flow.status === 'awaiting_continue') { const instance = s.flow.instance; const expectedStatus = s.flow.status; const evidence = await validate(s); requireInstance(s, instance); if (s.flow.status !== expectedStatus || JSON.stringify(evidence.artifact) !== JSON.stringify(s.flow.validation?.artifact) || evidence.digest !== s.flow.validation?.digest) throw new Error('Submitted evidence changed. Request a fresh submission before advancing.'); event(s, 'step_completed', { instance, actor: s.lease?.label, evidence, outcome: 'success' }); transition(s, 'success'); }
-      else if (['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status)) { const resume = s.flow.resumeStatus; s.flow.status = ['awaiting_continue', 'waiting_gate', 'waiting_event'].includes(resume) ? resume : 'ready'; s.flow.resumeStatus = null; s.status = s.flow.status; }
+      else if (['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status)) { const resume = s.flow.resumeStatus; s.flow.status = ['awaiting_continue', 'waiting_gate', 'waiting_event'].includes(resume) ? resume : 'ready'; s.flow.resumeStatus = null; s.status = s.flow.status; attemptStatus(s, ['ready', 'awaiting_continue', 'waiting_gate', 'waiting_event'].includes(s.flow.status) ? 'ready' : 'waiting'); }
       else throw new Error('This workflow is not waiting to continue.'); await save();
     },
-    async pause(s, cancel = false) { if (!active(s) && !(cancel && s.flow?.status === 'cancelled')) throw new Error('No active workflow.'); if (cancel) { delete s.queuedInput; delete s.queueReason; } if (s.flow.status === 'paused' && !cancel) return; s.flow.resumeStatus = s.flow.status; s.flow.status = cancel ? 'cancelled' : 'paused'; s.status = s.flow.status; event(s, cancel ? 'workflow_cancelled' : 'workflow_paused', { instance: s.flow.instance }); abort(s); await save(); },
+    async pause(s, cancel = false) { if (!active(s) && !(cancel && s.flow?.status === 'cancelled')) throw new Error('No active workflow.'); if (cancel) { delete s.queuedInput; delete s.queueReason; } if (s.flow.status === 'paused' && !cancel) return; s.flow.resumeStatus = s.flow.status; s.flow.status = cancel ? 'cancelled' : 'paused'; s.status = s.flow.status; attemptStatus(s, cancel ? 'cancelled' : 'waiting'); event(s, cancel ? 'workflow_cancelled' : 'workflow_paused', { instance: s.flow.instance }); abort(s); await save(); },
     async finishIncomplete(s, instance, args, budget) {
       requireInstance(s, instance);
       if (s.flow.status !== 'running' || current(s).kind !== 'agent' || s.pending || s.pendingQuestion)
@@ -500,7 +510,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
         nextAction: required(args.nextAction, 'Next internal action', 2000),
         reason: args.reason,
       };
-      s.flow.status = 'awaiting_submission'; s.status = 'awaiting_submission';
+      s.flow.status = 'awaiting_submission'; s.status = 'awaiting_submission'; attemptStatus(s, 'waiting');
       event(s, 'workflow_incomplete', {instance, ...report});
       await save();
       return {accepted: true, complete: false, next: 'awaiting_submission', message: 'Incomplete work recorded. The workflow has not advanced and no continuation is scheduled. Stop this execution.'};
@@ -525,13 +535,14 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       }
       s.flow.status = 'awaiting_submission';
       s.status = 'awaiting_submission';
+      attemptStatus(s, 'waiting');
       event(s, 'submission_required', {
         reason, message: 'Investigation incomplete: no submit_step was accepted. The workflow has not advanced.',
       });
       await save();
       return { stop: true };
     },
-    async fail(s, instance) { if (s.flow?.instance === instance && !['paused', 'cancelled', 'completed'].includes(s.flow.status)) { s.flow.status = s.status === 'interrupted' ? 'interrupted' : 'failed'; await save(); } },
+    async fail(s, instance) { if (s.flow?.instance === instance && !['paused', 'cancelled', 'completed'].includes(s.flow.status)) { s.flow.status = s.status === 'interrupted' ? 'interrupted' : 'failed'; attemptStatus(s, s.flow.status === 'interrupted' ? 'uncertain' : 'failed'); await save(); } },
     async executeAction(s, instance, result = null) { requireInstance(s, instance); if (actionExecutor) return actionExecutor(s, current(s), instance, result); return null; },
   };
 }

@@ -84,15 +84,23 @@ const orchestrationCommands = [
   'advance',
   'attachContext',
   'claim',
+  'claimWorkflowRun',
   'configure',
+  'continueWorkflowRun',
+  'cancelWorkflowRun',
+  'decideWorkflowRun',
   'diff',
   'ensure',
+  'getWorkflowRun',
   'heartbeat',
   'openTicketConversation',
   'reconcileAssignment',
   'release',
+  'releaseWorkflowRun',
+  'reconcileWorkflowRun',
   'runTicket',
   'start',
+  'startWorkflowRun',
   'stop',
   'selectActiveContext',
   'createOrganization',
@@ -605,6 +613,9 @@ export async function createRuntime({
             organizationId),
     );
     const activeJobs = [];
+    const affectedRuns = Object.values(state.workflowRuns ?? {}).filter((run) =>
+      run.principal && principalKey(run.principal) === principalKey(principal) &&
+      (!organizationId || run.organizationId === organizationId));
     for (const session of affected) {
       delete session.queuedInput;
       for (const message of session.pendingMessages ?? []) {
@@ -617,6 +628,11 @@ export async function createRuntime({
         activeJobs.push(job.promise.catch(() => {}));
       }
     }
+    for (const run of affectedRuns) {
+      const contextId = run.sessionId ?? run.id;
+      const job = jobs.get(contextId);
+      if (job) { job.controller.abort(); activeJobs.push(job.promise.catch(() => {})); }
+    }
     await Promise.all(activeJobs);
     for (const session of affected) {
       delete session.queuedInput;
@@ -625,6 +641,14 @@ export async function createRuntime({
       event(session, 'identity_authority_revoked', {
         message: 'Identity authority was revoked before further dispatch.',
       });
+    }
+    for (const run of affectedRuns) {
+      run.flow.resumeStatus = run.flow.status;
+      run.flow.status = 'interrupted';
+      run.status = 'interrupted';
+      if (run.attempt?.status === 'running') run.attempt.status = 'uncertain';
+      else if (run.attempt && !['completed', 'cancelled'].includes(run.attempt.status)) run.attempt.status = 'failed';
+      event(run, 'identity_authority_revoked', { message: 'Identity authority was revoked before further dispatch.' });
     }
     await store.save();
   }
@@ -710,11 +734,11 @@ export async function createRuntime({
     };
   }
   function migrateRun(s) {
-    if (!s.workflow) return;
+    if (!s.workflow) { if (s.workflowRunId || s.pastRuns) workflows?.adoptSessionRun(s, localPrincipal); return; }
     try {
       const normalized = normalizeWorkflow(s.workflow);
       s.workflow = { ...normalized, version: s.workflow.version ?? 1 };
-      if (!s.flow) return;
+      if (!s.flow) { if (s.workflowRunId || s.pastRuns) workflows?.adoptSessionRun(s, localPrincipal); return; }
       const list = s.workflow.nodes;
       s.flow.workflowId ??= s.workflow.id;
       s.flow.workflowVersion ??= s.workflow.version;
@@ -728,6 +752,7 @@ export async function createRuntime({
           0,
           list.findIndex((node) => node.id === s.flow.nodeId),
         );
+      if (s.flow || s.pastRuns) workflows?.adoptSessionRun(s, localPrincipal);
       if (s.pastRuns)
         for (const run of s.pastRuns)
           if (run.workflow)
@@ -761,6 +786,7 @@ export async function createRuntime({
     await store.save();
   }
   let engine;
+  let workflows;
   let configuration;
   const conversations = createConversations({
     state,
@@ -798,6 +824,7 @@ export async function createRuntime({
         ...command,
         ...(s.flow ? { workflowRunId: s.flow.id, workflowInstance: s.flow.instance } : {}),
       }),
+    archiveWorkflowRun: (session, details) => workflows?.archiveSessionRun(session, details),
     validateBinding(s, t) {
       if (
         s.workspace ||
@@ -829,8 +856,6 @@ export async function createRuntime({
       }
     },
   });
-  recoverSessions({ state, ensureAgentSessions, migrateRun, steering, event });
-  await store.save();
   function get(id) {
     const key = taskId(id);
     const s = workExecution.sessionFor(catalog.ticket(key)) ?? state.sessions[key];
@@ -838,8 +863,18 @@ export async function createRuntime({
     return s;
   }
   let snapshot;
-  function own(s, client) {
+  async function requireLinkedWorkflowLease(s, client, actor) {
+    const run = s.workflowRunId ? state.workflowRuns?.[s.workflowRunId] : null;
+    if (!run?.independentRun) return;
+    if (!run.principal || principalKey(run.principal) !== principalKey(actor))
+      throw new Error('The linked workflow run is controlled by its stored execution principal.');
+    await identity.assertPrincipalActive(run.principal);
+    await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+    workflows.requireRunLease(run, { client, actorKey: principalKey(actor) });
+  }
+  async function own(s, client, actor) {
     clientId(client);
+    await requireLinkedWorkflowLease(s, client, actor);
     if (!s.lease || s.lease.expiresAt < Date.now() || s.lease.client !== client)
       throw new Error('Claim session control first. Another terminal or tab may own it.');
     s.lease.expiresAt = Date.now() + 90000;
@@ -989,6 +1024,21 @@ export async function createRuntime({
     conversations,
     sessionFor: workExecution.sessionFor,
     boards,
+    workCommand: async (command, runContext) => {
+      const owner = runContext?.workflowRunId ? state.workflowRuns?.[runContext.workflowRunId] : runContext?.independentRun ? runContext : null;
+      const principal = owner ? owner.principal : runContext?.executionPrincipal ?? localPrincipal;
+      const projectId = owner?.projectId ?? runContext?.projectId;
+      if (!projectId) throw new Error('Workflow run has no authorized project.');
+      await identity.assertPrincipalActive(principal);
+      await requireProjectPermission(projectId, 'project.write', principal);
+      for (const id of [command.ticketId, command.taskId, command.sourceTicketId].filter((value) => value !== undefined)) {
+        const ticket = catalog.ticket(id);
+        if (!ticket || ticket.projectId !== projectId) throw new Error('Workflow action ticket is not available in the run project.');
+      }
+      if (command.boardId && !catalog.boards?.board(command.boardId)?.projectIds.includes(projectId))
+        throw new Error('Workflow action board is not available in the run project.');
+      return work.command(command, { principal, projectId });
+    },
     makeSession,
     pinInstructions,
     normalizeWorkflow,
@@ -1033,6 +1083,24 @@ export async function createRuntime({
     sealEvidence: (s, evidence, artifacts) => verification.seal(s, evidence, artifacts),
     save: () => store.save(),
     event,
+    bindRun: (session, flow) => workflows?.bindSessionRun(session, flow, localPrincipal),
+    attachAgent: async (run) => {
+      const principal = run.principal;
+      await identity.assertPrincipalActive(principal);
+      await requireProjectPermission(run.projectId, 'project.execute', principal);
+      const created = await conversations.create({ requestId: `workflow-agent:${run.id}`, projectId: run.projectId, title: run.workflow.name });
+      const session = state.sessions[created.sessionId];
+      ensureAgentSessions(session);
+      workflows.attachAgentSession(run, session);
+      const node = (run.workflow.nodes ?? run.workflow.steps).find((candidate) => candidate.id === run.flow.nodeId);
+      if (node.model) session.model = node.model;
+      if (run.activeTicketId) conversations.bindForWorkflow(session, run.activeTicketId);
+      await authorizeSessionModel(session, session.model);
+      capabilities.pin(session, capabilities.resolveForWorkflow(session, run.workflow, {}));
+      verification.pin(session);
+      await store.save();
+      return session;
+    },
     canProvision: (s) => placement.effective(s).mode !== 'none',
     inspectArtifact: (s, path) => tool(s, 'read_file', { path }),
     readReference: (s, ref, node) => {
@@ -1117,6 +1185,55 @@ export async function createRuntime({
     now,
   });
   function launch(s, input, step, instance) {
+    if (s.independentRun) {
+      if (!step || step.kind === 'agent') return false;
+      const project = state.projects.find((candidate) => candidate.id === s.projectId);
+      const organizationId = project?.organizationId ?? 'personal';
+      const scheduler = state.schedulers?.[organizationId] ?? state.scheduler;
+      const active = [...jobs.keys()].filter((id) => {
+        const projectId = state.sessions[id]?.projectId ?? state.workflowRuns?.[id]?.projectId;
+        return state.projects.find((candidate) => candidate.id === projectId)?.organizationId === organizationId;
+      }).length;
+      const uncertainIds = new Set(Object.values(state.sessions).filter((session) =>
+        state.projects.find((candidate) => candidate.id === session.projectId)?.organizationId === organizationId &&
+        session.assignment?.state === 'uncertain' && !jobs.has(session.id)).map((session) => session.id));
+      for (const run of Object.values(state.workflowRuns ?? {}))
+        if (run.independentRun && run.organizationId === organizationId && run.attempt?.status === 'uncertain')
+          uncertainIds.add(run.sessionId ?? run.id);
+      const uncertain = uncertainIds.size;
+      if (active + uncertain >= scheduler.maxConcurrent) return false;
+      if (step.kind === 'check' || step.requiresCheck || step.artifact || step.kind === 'action' && step.operation === 'inspect_changes') {
+        s.flow.status = 'failed'; s.status = 'failed';
+        if (s.attempt?.instance === instance) s.attempt.status = 'failed';
+        event(s, 'workflow_failed', { message: 'This activity requires a repository runner.' });
+        void store.save();
+        return true;
+      }
+      const controller = new AbortController();
+      const job = { controller };
+      jobs.set(s.id, job);
+      job.promise = (async () => {
+        try {
+          const principal = s.principal ?? s.executionPrincipal;
+          if (!principal) throw new Error('Workflow run has no governed principal.');
+          await identity.assertPrincipalActive(principal);
+          await requireProjectPermission(s.projectId, 'project.execute', principal);
+          if (step.kind !== 'action' && step.kind !== 'branch') throw new Error('This activity needs a supported event or operator action.');
+          await automated(s, step, instance, controller);
+        } catch (error) {
+          if (!['cancelled', 'paused'].includes(s.flow?.status)) await engine.fail(s, instance, error.message);
+        } finally {
+          jobs.delete(s.id);
+          await store.save();
+          if (!closing) await dispatch();
+        }
+      })();
+      job.promise.catch(() => {});
+      return true;
+    }
+    const runOwner = s.workflowRunId ? state.workflowRuns?.[s.workflowRunId] : null;
+    if (runOwner && (!runOwner.principal || runOwner.sessionId !== s.id))
+      throw new Error('The workflow run lacks a valid governed session principal.');
     const project = state.projects.find((candidate) => candidate.id === s.projectId);
     const organizationId = project?.organizationId ?? 'personal';
     const organizationSessionIds = new Set(
@@ -1128,11 +1245,17 @@ export async function createRuntime({
         )
         .map((session) => session.id),
     );
-    const uncertain = Object.values(state.sessions).filter(
-      (t) =>
-        organizationSessionIds.has(t.id) && t.assignment?.state === 'uncertain' && !jobs.has(t.id),
-    ).length;
-    const active = [...jobs.keys()].filter((id) => organizationSessionIds.has(id)).length;
+    const uncertainIds = new Set(Object.values(state.sessions).filter(
+      (t) => organizationSessionIds.has(t.id) && t.assignment?.state === 'uncertain' && !jobs.has(t.id),
+    ).map((session) => session.id));
+    for (const run of Object.values(state.workflowRuns ?? {}))
+      if (run.independentRun && run.organizationId === organizationId && run.attempt?.status === 'uncertain')
+        uncertainIds.add(run.sessionId ?? run.id);
+    const uncertain = uncertainIds.size;
+    const active = [...jobs.keys()].filter((id) => {
+      const projectId = state.sessions[id]?.projectId ?? state.workflowRuns?.[id]?.projectId;
+      return state.projects.find((candidate) => candidate.id === projectId)?.organizationId === organizationId;
+    }).length;
     const scheduler = state.schedulers?.[organizationId] ?? state.scheduler;
     if (active + uncertain >= scheduler.maxConcurrent || jobs.has(s.id)) {
       s.queueReason = 'Organization capacity is occupied by active or unresolved assignments.';
@@ -1145,7 +1268,7 @@ export async function createRuntime({
     let blocked = false;
     job.promise = (async () => {
       try {
-        const executionPrincipal = s.executionPrincipal ?? localPrincipal;
+        const executionPrincipal = runOwner?.principal ?? s.executionPrincipal ?? localPrincipal;
         await identity.assertPrincipalActive(executionPrincipal);
         if (s.projectId)
           await requireProjectPermission(s.projectId, 'project.execute', executionPrincipal);
@@ -1493,7 +1616,7 @@ export async function createRuntime({
     continueInput: CONTINUE_INPUT,
   });
   const conversationModule = createConversationModule({ conversations, messaging });
-  const workflows = createWorkflows({
+  workflows = createWorkflows({
     state,
     save: () => store.save(),
     defaultWorkflow: defaultWorkflowDefinition,
@@ -1503,6 +1626,7 @@ export async function createRuntime({
     effects: workflowEffects,
     requestStop,
     automations,
+    defaultPrincipal: localPrincipal,
   });
   configuration = createSessionConfiguration({
     engine,
@@ -1515,6 +1639,9 @@ export async function createRuntime({
     event,
     save: () => store.save(),
   });
+  workflows.recoverRuns();
+  recoverSessions({ state, ensureAgentSessions, migrateRun, steering, event });
+  await store.save();
   const sessionCommands = createSessionCommandRegistry([
     conversationModule,
     workflows,
@@ -1760,6 +1887,55 @@ export async function createRuntime({
       command = { ...command, organizationId: selected.organizationId };
     }
     const { action } = command;
+    if (action === 'startWorkflowRun') {
+      await requireProjectPermission(command.projectId, 'project.execute', actor);
+      const project = state.projects.find((candidate) => candidate.id === command.projectId);
+      const workflow = workflowForProject(state, command.workflowId, command.workflowVersion, command.projectId);
+      if (command.activeTicketId !== undefined) {
+        const ticket = catalog.ticket(command.activeTicketId);
+        if (!ticket || ticket.projectId !== command.projectId) throw new Error('Ticket is not available for this project.');
+      }
+      const run = await workflows.startRun({ projectId: project.id, organizationId: project.organizationId, principal: actor, workflow, activeTicketId: command.activeTicketId ?? null });
+      await store.save();
+      await dispatch();
+      return { workflowRunId: run.id };
+    }
+    if (action === 'getWorkflowRun') {
+      const run = workflows.run(command.workflowRunId);
+      if (!run?.projectId) throw new Error('Workflow run does not exist.');
+      await requireProjectPermission(run.projectId, 'project.read', actor);
+      return workflows.readRun(run.id);
+    }
+    if (['claimWorkflowRun', 'releaseWorkflowRun', 'decideWorkflowRun', 'continueWorkflowRun', 'cancelWorkflowRun', 'reconcileWorkflowRun'].includes(action)) {
+      const run = workflows.run(command.workflowRunId);
+      if (!run?.independentRun || !run.projectId) throw new Error('Workflow run does not exist.');
+      await requireProjectPermission(run.projectId, action === 'claimWorkflowRun' ? 'project.read' : 'project.execute', actor);
+      if (action !== 'claimWorkflowRun') {
+        if (!run.principal) throw new Error('Workflow run has no governed execution principal.');
+        await identity.assertPrincipalActive(run.principal);
+        await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+      }
+      if (action === 'claimWorkflowRun') {
+        clientId(command.client);
+        workflows.claimRun(run, { client: command.client, actorKey: principalKey(actor), label: text(command.label ?? 'Client', 60) });
+        await store.save();
+        return;
+      }
+      const leaseIdentity = { client: command.client, actorKey: principalKey(actor) };
+      workflows.requireRunLease(run, leaseIdentity);
+      if (action === 'releaseWorkflowRun') { workflows.releaseRun(run, leaseIdentity); await store.save(); return; }
+      const runContext = state.sessions[run.sessionId] ?? run;
+      let result;
+      if (action === 'cancelWorkflowRun') { await workflows.cancelRun(run, runContext); result = run; }
+      else if (action === 'reconcileWorkflowRun') { await workflows.reconcileRun(run, runContext, command); result = run; }
+      else if (action === 'continueWorkflowRun') {
+        await workflows.continueRun(run, runContext, command);
+        result = run;
+      } else result = await workflows.decideRun(run, { ...command, actor: actor.kind === 'user' ? actor.userId : actor.kind, principal: structuredClone(actor) });
+      await store.save();
+      await dispatch();
+      return { workflowRunId: result.id, status: result.flow.status };
+    }
     if (action === 'querySecurityAudit' || action === 'exportSecurityAudit') {
       await organizations.requireOrganizationPermission(
         actor,
@@ -2181,6 +2357,7 @@ export async function createRuntime({
     await requireProjectPermission(s.projectId, 'project.write', actor);
     if (action === 'claim') {
       clientId(command.client);
+      await requireLinkedWorkflowLease(s, command.client, actor);
       if (s.lease && s.lease.expiresAt > Date.now() && s.lease.client !== command.client)
         throw new Error(
           `Session controlled by ${s.lease.label}. Release it there or wait for the 90-second lease to expire.`,
@@ -2194,7 +2371,7 @@ export async function createRuntime({
       await store.save();
       return;
     }
-    own(s, command.client);
+    await own(s, command.client, actor);
     if (
       [
         'start',

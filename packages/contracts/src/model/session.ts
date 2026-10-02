@@ -216,6 +216,10 @@ export type Session = {
   executionGrant?: ResolvedExecutionGrant;
   workspaceRequest?: string;
   workflow: WorkflowDefinition | null;
+  workflowRunId?: string;
+  pastRuns?: Record<string, unknown>[];
+  pastRunsTotal?: number;
+  pastRunsTruncated?: boolean;
   step: number;
   boardPhase?: string;
   queueReason?: string;
