@@ -599,6 +599,115 @@ test('acceptance: an independent mixed run creates one agent session only when i
     assert.equal(state.tickets.find(value => value.id === ticket.id).status, 'Approved');
     assert.equal(state.sessions.filter(session => session.workflowRunId === started.workflowRunId).length, 1);
 });
+test('acceptance: an operator can cancel a claimed standalone workflow run through the public runtime command', async (t) => {
+    const f = await fixture(t);
+    const projectId = 'agent-platform';
+    await f.act('saveWorkflow', { projectId, workflow: { id: 'cancel-run', name: 'Cancel run', nodes: [
+        { id: 'review', kind: 'human', name: 'Review', prompt: 'Review before proceeding.' },
+    ], edges: [] } });
+    const { workflowRunId } = await f.act('startWorkflowRun', { projectId, workflowId: 'cancel-run', workflowVersion: 1 });
+    const waiting = (await f.act('getWorkflowRun', { workflowRunId }));
+    assert.equal(waiting.status, 'waiting_gate');
+    await f.act('claimWorkflowRun', { workflowRunId });
+    const cancelled = await f.act('cancelWorkflowRun', { workflowRunId });
+    assert.equal(cancelled.status, 'cancelled');
+    const final = await f.act('getWorkflowRun', { workflowRunId });
+    assert.equal(final.status, 'cancelled');
+    assert.equal(final.attempt.status, 'cancelled');
+    assert.equal((await f.snapshot()).sessions.some(session => session.workflowRunId === workflowRunId), false);
+});
+test('acceptance: cancelling a claimed agent run aborts its live provider attempt', async (t) => {
+    let providerStarted = 0;
+    let resolveProviderStarted;
+    const started = new Promise(resolve => { resolveProviderStarted = resolve; });
+    const f = await fixture(t, { generate: async function* ({ signal }) {
+        providerStarted += 1;
+        resolveProviderStarted();
+        await new Promise(resolve => {
+            if (signal.aborted) resolve();
+            else signal.addEventListener('abort', resolve, { once: true });
+        });
+    } });
+    const projectId = 'agent-platform';
+    await f.act('saveWorkflow', { projectId, workflow: { id: 'cancel-agent-run', name: 'Cancel agent run', nodes: [
+        { id: 'agent', kind: 'agent', name: 'Working', prompt: 'Wait for cancellation.' },
+    ], edges: [] } });
+    const { workflowRunId } = await f.act('startWorkflowRun', { projectId, workflowId: 'cancel-agent-run', workflowVersion: 1 });
+    await started;
+    await f.act('claimWorkflowRun', { workflowRunId });
+    await f.act('cancelWorkflowRun', { workflowRunId });
+    const run = await f.act('getWorkflowRun', { workflowRunId });
+    assert.equal(providerStarted, 1);
+    assert.equal(run.status, 'cancelled');
+    assert.equal(run.attempt.status, 'cancelled');
+    assert.equal((await f.snapshot()).sessions.filter(session => session.workflowRunId === workflowRunId).length, 1);
+});
+
+test('acceptance: restart reconciles a recorded successful effect receipt without replaying the write', async (t) => {
+    const f = await fixture(t);
+    const projectId = 'agent-platform';
+    const ticket = await f.act('createTicket', { requestId: 'cached-run-ticket', projectId, title: 'Cached effect' });
+    await f.act('saveWorkflow', { projectId, workflow: { id: 'cached-run-effect', name: 'Cached run effect', nodes: [
+        { id: 'review', kind: 'human', name: 'Review', prompt: 'Review before update.' },
+        { id: 'update', kind: 'action', name: 'Update ticket', operation: 'update_ticket', input: { ticketSource: 'active_ticket', patch: { status: 'Approved' } } },
+    ], edges: [{ from: 'review', to: 'update', outcome: 'approved' }] } });
+    const { workflowRunId } = await f.act('startWorkflowRun', { projectId, workflowId: 'cached-run-effect', workflowVersion: 1, activeTicketId: ticket.id });
+    const run = await f.act('getWorkflowRun', { workflowRunId });
+    const instance = 'crash-after-effect-commit';
+    const effectKey = `${workflowRunId}:${instance}:update`;
+    let revision;
+    await f.restartLegacy(state => {
+        const owner = state.workflowRuns[workflowRunId];
+        owner.flow.status = 'running';
+        owner.flow.nodeId = 'update';
+        owner.flow.instance = instance;
+        owner.attempt = { instance, nodeId: 'update', status: 'running', startedAt: new Date().toISOString() };
+        const storedTicket = state.tickets.find(value => value.id === ticket.id);
+        storedTicket.status = 'Approved';
+        storedTicket.revision += 1;
+        revision = storedTicket.revision;
+        state.workflowEffectLedger[effectKey] = { at: new Date().toISOString(), status: 'succeeded', operation: 'update_ticket',
+            sessionId: workflowRunId, projectId, command: { action: 'updateTicket', ticketId: ticket.id, taskId: ticket.id },
+            result: { id: ticket.id, status: 'Approved' } };
+    });
+    const recovered = await f.act('getWorkflowRun', { workflowRunId });
+    assert.equal(recovered.status, 'interrupted');
+    assert.equal(recovered.attempt.status, 'uncertain');
+    await f.act('claimWorkflowRun', { workflowRunId });
+    await f.act('reconcileWorkflowRun', { workflowRunId, instance, effectKey, resolution: 'applied' });
+    const completed = await f.act('getWorkflowRun', { workflowRunId });
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.attempt.status, 'completed');
+    const snapshot = await f.snapshot();
+    const storedTicket = snapshot.tickets.find(value => value.id === ticket.id);
+    assert.equal(storedTicket.status, 'Approved');
+    assert.equal(storedTicket.revision, revision);
+    assert.equal(snapshot.sessions.some(session => session.workflowRunId === workflowRunId), false);
+    assert.equal(run.instance === instance, false);
+
+    const cancelled = await f.act('startWorkflowRun', { projectId, workflowId: 'cached-run-effect', workflowVersion: 1, activeTicketId: ticket.id });
+    const cancelledInstance = 'crash-after-effect-before-cancel';
+    const cancelledKey = `${cancelled.workflowRunId}:${cancelledInstance}:update`;
+    await f.restartLegacy(state => {
+        const owner = state.workflowRuns[cancelled.workflowRunId];
+        owner.flow.status = 'running';
+        owner.flow.nodeId = 'update';
+        owner.flow.instance = cancelledInstance;
+        owner.attempt = { instance: cancelledInstance, nodeId: 'update', status: 'running', startedAt: new Date().toISOString() };
+        state.workflowEffectLedger[cancelledKey] = { at: new Date().toISOString(), status: 'succeeded', operation: 'update_ticket',
+            sessionId: cancelled.workflowRunId, projectId, command: { action: 'updateTicket', ticketId: ticket.id, taskId: ticket.id },
+            result: { id: ticket.id, status: 'Approved' } };
+    });
+    await f.act('claimWorkflowRun', { workflowRunId: cancelled.workflowRunId });
+    await f.act('cancelWorkflowRun', { workflowRunId: cancelled.workflowRunId });
+    const cancelledRun = await f.act('getWorkflowRun', { workflowRunId: cancelled.workflowRunId });
+    assert.equal(cancelledRun.status, 'cancelled');
+    assert.equal(cancelledRun.attempt.status, 'completed');
+    assert.equal(cancelledRun.attempt.outcome, 'success');
+    assert.equal(cancelledRun.attempt.effectKey, cancelledKey);
+    assert.deepEqual(cancelledRun.attempt.effectResult, { id: ticket.id, status: 'Approved' });
+    assert.equal((await f.snapshot()).tickets.find(value => value.id === ticket.id).revision, revision);
+});
 test('acceptance: a cancelled standalone run keeps an uncertain Work effect until exact run reconciliation', async (t) => {
     const f = await fixture(t);
     const projectId = 'agent-platform';
@@ -645,7 +754,9 @@ test('acceptance: a cancelled standalone run keeps an uncertain Work effect unti
     await f.act('reconcileWorkflowRun', { workflowRunId: second.workflowRunId, instance: secondInstance, effectKey: secondEffectKey, resolution: 'applied', result: { id: ticket.id, status: 'Backlog' } });
     run = (await f.snapshot()).workflowRuns.find(value => value.id === second.workflowRunId);
     assert.equal(run.status, 'cancelled');
-    assert.equal(run.attempt.status, 'cancelled');
+    assert.equal(run.attempt.status, 'completed');
+    assert.equal(run.attempt.outcome, 'success');
+    assert.equal(run.attempt.effectKey, secondEffectKey);
     assert.equal(run.nodeId, 'update');
     assert.equal((await f.snapshot()).sessions.some(session => session.workflowRunId === second.workflowRunId), false);
 });

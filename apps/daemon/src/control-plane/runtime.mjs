@@ -632,6 +632,7 @@ export async function createRuntime({
       const contextId = run.sessionId ?? run.id;
       const job = jobs.get(contextId);
       if (job) { job.controller.abort(); activeJobs.push(job.promise.catch(() => {})); }
+      if (run.lease?.principalKey === principalKey(principal)) run.lease = null;
     }
     await Promise.all(activeJobs);
     for (const session of affected) {
@@ -646,7 +647,14 @@ export async function createRuntime({
       run.flow.resumeStatus = run.flow.status;
       run.flow.status = 'interrupted';
       run.status = 'interrupted';
-      if (run.attempt?.status === 'running') run.attempt.status = 'uncertain';
+      const effect = run.attempt && state.workflowEffectLedger?.[`${run.id}:${run.attempt.instance}:${run.attempt.nodeId}`];
+      if (run.attempt?.status === 'running' && effect?.status === 'succeeded') {
+        run.attempt.status = 'completed';
+        run.attempt.outcome = 'success';
+        run.attempt.effectKey = `${run.id}:${run.attempt.instance}:${run.attempt.nodeId}`;
+        run.attempt.effectResult = structuredClone(effect.result);
+        run.attempt.completedAt ??= effect.reconciledAt ?? effect.at;
+      } else if (run.attempt?.status === 'running') run.attempt.status = 'uncertain';
       else if (run.attempt && !['completed', 'cancelled'].includes(run.attempt.status)) run.attempt.status = 'failed';
       event(run, 'identity_authority_revoked', { message: 'Identity authority was revoked before further dispatch.' });
     }
@@ -823,7 +831,7 @@ export async function createRuntime({
       workflowEffects.boardCommand({
         ...command,
         ...(s.flow ? { workflowRunId: s.flow.id, workflowInstance: s.flow.instance } : {}),
-      }),
+      }, s),
     archiveWorkflowRun: (session, details) => workflows?.archiveSessionRun(session, details),
     validateBinding(s, t) {
       if (
@@ -1027,7 +1035,8 @@ export async function createRuntime({
     workCommand: async (command, runContext) => {
       const owner = runContext?.workflowRunId ? state.workflowRuns?.[runContext.workflowRunId] : runContext?.independentRun ? runContext : null;
       const principal = owner ? owner.principal : runContext?.executionPrincipal ?? localPrincipal;
-      const projectId = owner?.projectId ?? runContext?.projectId;
+      const projectId = owner?.projectId ?? runContext?.projectId ?? command.projectId ??
+        (runContext?.activeTicketId != null ? catalog.ticket(runContext.activeTicketId)?.projectId : null);
       if (!projectId) throw new Error('Workflow run has no authorized project.');
       await identity.assertPrincipalActive(principal);
       await requireProjectPermission(projectId, 'project.write', principal);
@@ -1910,10 +1919,18 @@ export async function createRuntime({
       const run = workflows.run(command.workflowRunId);
       if (!run?.independentRun || !run.projectId) throw new Error('Workflow run does not exist.');
       await requireProjectPermission(run.projectId, action === 'claimWorkflowRun' ? 'project.read' : 'project.execute', actor);
-      if (action !== 'claimWorkflowRun') {
+      const executionActions = ['decideWorkflowRun', 'continueWorkflowRun'];
+      let storedPrincipalCanExecute = true;
+      if (executionActions.includes(action)) {
         if (!run.principal) throw new Error('Workflow run has no governed execution principal.');
         await identity.assertPrincipalActive(run.principal);
         await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+      } else if (action === 'reconcileWorkflowRun') {
+        try {
+          if (!run.principal) throw new Error('Workflow run has no governed execution principal.');
+          await identity.assertPrincipalActive(run.principal);
+          await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+        } catch { storedPrincipalCanExecute = false; }
       }
       if (action === 'claimWorkflowRun') {
         clientId(command.client);
@@ -1927,7 +1944,16 @@ export async function createRuntime({
       const runContext = state.sessions[run.sessionId] ?? run;
       let result;
       if (action === 'cancelWorkflowRun') { await workflows.cancelRun(run, runContext); result = run; }
-      else if (action === 'reconcileWorkflowRun') { await workflows.reconcileRun(run, runContext, command); result = run; }
+      else if (action === 'reconcileWorkflowRun') {
+        await workflows.reconcileRun(run, runContext, command);
+        if (!storedPrincipalCanExecute && !['cancelled', 'completed'].includes(run.flow.status)) {
+          run.flow.resumeStatus = run.flow.status;
+          run.flow.status = 'paused';
+          run.status = 'paused';
+          if (run.attempt?.status === 'ready') run.attempt.status = 'waiting';
+        }
+        result = run;
+      }
       else if (action === 'continueWorkflowRun') {
         await workflows.continueRun(run, runContext, command);
         result = run;

@@ -226,6 +226,14 @@ export function createWorkflows({
         key.startsWith(`${run.id}:`) && ['pending', 'uncertain'].includes(effect.status));
       if (run.attempt && unresolved) run.attempt.status = 'uncertain';
       else if (run.attempt && !['completed', 'uncertain'].includes(run.attempt.status)) run.attempt.status = 'cancelled';
+      const completedEffect = run.attempt && state.workflowEffectLedger?.[`${run.id}:${run.attempt.instance}:${run.attempt.nodeId}`];
+      if (completedEffect?.status === 'succeeded') {
+        run.attempt.status = 'completed';
+        run.attempt.outcome = 'success';
+        run.attempt.effectKey = `${run.id}:${run.attempt.instance}:${run.attempt.nodeId}`;
+        run.attempt.effectResult = structuredClone(completedEffect.result);
+        run.attempt.completedAt ??= completedEffect.reconciledAt ?? completedEffect.at;
+      }
     },
     async reconcileRun(run, context, command) {
       if (!run?.independentRun || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
@@ -236,6 +244,16 @@ export function createWorkflows({
         run.attempt.status = 'cancelled';
       if (run.attempt?.instance === command.instance && run.attempt.status === 'uncertain' && !['failed', 'interrupted'].includes(context.flow.status))
         run.attempt.status = 'ready';
+      const effectKey = run.attempt?.instance === command.instance
+        ? `${run.id}:${command.instance}:${run.attempt.nodeId}` : null;
+      const effect = effectKey && state.workflowEffectLedger?.[effectKey];
+      if (effect?.status === 'succeeded') {
+        run.attempt.status = 'completed';
+        run.attempt.outcome = 'success';
+        run.attempt.effectKey = effectKey;
+        run.attempt.effectResult = structuredClone(effect.result);
+        run.attempt.completedAt ??= effect.reconciledAt ?? effect.at;
+      }
     },
     async continueRun(run, context, command) {
       if (!run?.independentRun || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
@@ -248,7 +266,7 @@ export function createWorkflows({
     readRun(id) {
       const run = state.workflowRuns?.[id];
       if (!run) return null;
-      return publicRun(run);
+      return structuredClone(publicRun(run));
     },
     bindSessionRun(session, flow, migrationPrincipal = defaultPrincipal) {
       if (session.independentRun) return;
