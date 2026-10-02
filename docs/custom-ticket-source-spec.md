@@ -126,7 +126,9 @@ remove its controls rather than show a control that always fails.
 The current UI accepts a JSON manifest parsed into one versioned contract.
 Unknown fields fail validation. YAML import/export and published manifest
 revisions remain future configuration tooling. A connection stores one
-validated manifest and cannot replace it after tickets have been linked.
+validated manifest. After tickets have been linked, source identity stays fixed;
+representation mappings and explicit thread direction mappings can be revised
+with the connection revision.
 
 Example:
 
@@ -326,6 +328,18 @@ cannot overwrite a newer customer event. Convoy records the intent before the
 write and accepts the returned ticket only when it confirms the requested
 status. A delivered reply supplied as evidence is checked against the source
 thread before a status write.
+
+Thread messages preserve the source's `authorRole` as display data and also
+carry normalized `direction: inbound | outbound | unknown`. A custom manifest
+can map exact role strings with `threadMapping.directionByAuthorRole`, for
+example `requester: inbound` and `desk-publisher: outbound`, or select a source
+field already containing the canonical values with `threadMapping.direction`.
+An absent or unrecognized mapping stays `unknown`; Convoy does not infer
+direction from role names. Old manifests remain readable and normalize to
+`unknown`. Adding a map to an existing linked connection is supported; already
+recorded remote message IDs remain baseline history and do not create new
+inbound facts when they are re-read. Reply confirmation requires the recorded
+remote message ID, matching body, outbound direction, and source delivery state.
 
 ## Credentials and network safety
 

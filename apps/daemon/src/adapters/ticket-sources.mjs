@@ -14,10 +14,16 @@ export function createTicketSources(adapters) {
       return value.listIssuesPage ? value.listIssuesPage(connection, limit, cursor) : { items: await value.listIssues(connection, limit) };
     },
     getIssue(connection, remoteId) { return adapter(connection).getIssue(connection, remoteId); },
-    listComments(connection, remoteId) {
+    async listComments(connection, remoteId) {
       const value = adapter(connection);
       if (!value.listComments) throw new Error('This ticket source does not provide a thread.');
-      return value.listComments(connection, remoteId);
+      const messages = await value.listComments(connection, remoteId);
+      if (!Array.isArray(messages) || messages.length > 500)
+        throw new Error('Ticket source returned an invalid thread.');
+      return messages.map(message => ({
+        ...message,
+        direction: ['inbound', 'outbound'].includes(message.direction) ? message.direction : 'unknown',
+      }));
     },
     postReply(connection, remoteId, body, requestId) {
       const value = adapter(connection);

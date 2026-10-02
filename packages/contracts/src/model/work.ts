@@ -88,6 +88,8 @@ export type TicketSourceManifest = {
     authorRole: string;
     createdAt: string;
     deliveryStatus?: string;
+    direction?: string;
+    directionByAuthorRole?: Record<string, 'inbound' | 'outbound'>;
   };
   mapping: {
     remoteId: string;
@@ -165,6 +167,7 @@ export type TicketThread = {
     remoteId: string;
     body: string;
     authorRole: string;
+    direction: 'inbound' | 'outbound' | 'unknown';
     createdAt: string;
     deliveryStatus?: string;
   }>;
