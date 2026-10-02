@@ -264,7 +264,7 @@ export const runtimeCommandContracts = {
   ),
   saveWorkflowDraft: contract(['workflow', 'revision'], ['organizationId', 'teamId', 'projectId']),
   saveAutomation: contract(['organizationId', 'rule', 'revision']),
-  submitWorkflowEvent: contract(['descriptorId', 'idempotencyKey', 'payload'], ['projectId']),
+  submitWorkflowEvent: contract(['descriptorId', 'idempotencyKey', 'payload'], ['descriptorRevision', 'projectId']),
   retryWorkflowEventDecision: contract(['decisionKey']),
   saveWorkflowSchedule: contract(['schedule', 'name', 'projectId', 'workflowId', 'workflowVersion', 'missedFirePolicy', 'enabled'], ['id', 'revision']),
   saveWorkflowWebhookBinding: contract(['name', 'descriptorId', 'descriptorRevision', 'projectId', 'servicePrincipalId', 'eventIdPath', 'fieldMap', 'enabled'], ['id', 'revision']),

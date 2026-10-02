@@ -119,3 +119,35 @@ Human nodes may configure plain text labels for the existing `approved` and
 revision and run snapshot; they affect presentation only. Missing labels use
 “Approve” and “Request changes”. They do not add outcomes, select routes, or
 grant authority.
+
+Workflow event descriptors are immutable, revisioned contracts owned by the
+event source. The journal validates typed payload paths and advertised
+correlation keys, binds each source event ID to one tenant/resource envelope,
+and returns the original accepted event for an exact duplicate. Conflicting
+redelivery fails closed. Received time, rather than provider-supplied
+`occurredAt`, controls retention. Payloads are bounded by age, count, and bytes;
+the cursor floor makes old cursors explicit, while compact dedupe tombstones
+keep expired source identities from being accepted again. Event pages advance
+their durable scan cursor even when a bounded page contains no matching event.
+
+The control plane routes accepted events only after the owner has durably
+reserved each matching subscription decision and its canonical run ID.
+Decisions pin the subscription and workflow revisions, source event,
+principal, project, and concurrency outcome. Recovery reuses that same run ID.
+`reject` records a conflict, `hold` remains held until an explicit retry, and
+`independent` starts distinct runs up to its declared limit. Work facts enter
+through Work's durable outbox and use stable source identities; manual events
+are project-authorized, and webhook bindings use an active Identity service
+principal with a fixed project and descriptor revision. Caller payloads cannot
+choose a tenant, run, workflow, or principal.
+
+Schedules pin a workflow revision and persist each `(schedule, revision,
+scheduledFor)` firing before delivery. Interval anchors are UTC. Calendar
+occurrences use validated IANA zones, skip nonexistent local times, and select
+the earlier instant for repeated daylight-saving times. `skip` records an
+aggregate missed range, `coalesce_once` emits one firing for that range, and
+bounded `catchUp` leaves remaining due slots for later scheduler passes.
+Event waits persist their descriptor and resource scope, correlation,
+predicate, eligibility cursor, and optional deadline before yielding. A bounded
+owner scan cursor prevents unrelated journal traffic from starving a matching
+event, and timeout/event races are serialized through the runtime queue.

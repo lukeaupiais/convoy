@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createPersistence } from '../../apps/daemon/src/adapters/persistence/index.mjs';
@@ -125,43 +125,47 @@ test('applied reconciliation accepts only an existing ticket result and never re
     assert.equal(completed.tickets.find(ticket => ticket.id === persistedTicket.id).title, 'Persisted result');
     await closeRuntime();
 });
-test('failed board trigger can be retried with its pinned version without replaying the move', async () => {
+test('a conflicted board event decision retries its reserved run against the pinned workflow version', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'convoy-trigger-retry-'));
-    const runners = { execute: async (_runner, command) => command.action === 'probe' ? { repository: '/fixture', tools: [], shell: false } : command.action === 'provision' ? { path: '/fixture/recovered', branch: 'recovered' } : command.action === 'diff' ? { digest: 'same' } : {} };
-    const options = { directory, models: [{ id: 'fixture' }], auth: { token: async () => 'fixture', status: async () => ({ connected: true }) }, generate: async function* () { }, runners };
+    const options = { directory, models: [{ id: 'fixture' }], auth: { token: async () => 'fixture', status: async () => ({ connected: true }) }, generate: async function* () { } };
     let runtime = await createRuntime(options);
     const act = (action, input = {}) => runtime.command({ action, client: 'trigger-retry-client', ...input });
     const ticket = await act('createTicket', { requestId: 'retry-ticket', projectId: 'agent-platform', title: 'Retry trigger' });
     const board = await act('saveBoard', { name: 'Retry board', projectIds: ['agent-platform'], columns: [{ id: 'inbox', name: 'Inbox' }, { id: 'review', name: 'Review' }] });
     const workflow = { id: 'retry-workflow', name: 'Inspect v1', nodes: [{ id: 'inspect', kind: 'action', name: 'Inspect v1', operation: 'inspect_changes' }] };
     await act('saveWorkflow', { workflow });
-    await act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+    const firstRule = await act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
             name: 'Inspect review', projectId: 'agent-platform', enabled: true,
             when: { event: 'ticket_moved', boardId: board.id, columnId: 'review' },
             if: [],
             then: { action: "start_workflow", workflowId: workflow.id, workflowVersion: 1 }
         } });
+    const secondRule = await act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+            name: 'Conflicting inspect review', projectId: 'agent-platform', enabled: true,
+            when: { event: 'ticket_moved', boardId: board.id, columnId: 'review' },
+            if: [],
+            then: { action: "start_workflow", workflowId: workflow.id, workflowVersion: 1 }
+        } });
     let snapshot = await act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision, placement: { columnId: 'review' } }).then(() => runtime.snapshot());
-    const failed = snapshot.automationDecisions.find(trigger => trigger.workflowId === workflow.id);
-    assert.equal(failed.status, 'failed');
-    assert.equal(failed.workflowVersion, 1);
+    const decision = snapshot.workflowEventDecisions.items.find(trigger => trigger.ruleId === firstRule.id);
+    assert.equal(decision.status, 'conflict');
+    assert.equal(decision.workflowVersion, 1);
     const moveRevision = snapshot.tickets.find(value => value.id === ticket.id).revision;
     await act('saveWorkflow', { workflow: { ...workflow, name: 'Inspect v2', nodes: [{ ...workflow.nodes[0], name: 'Inspect v2' }] }, baseVersion: 1 });
-    await act('registerRunner', { name: 'Recovery runner', kind: 'local', repository: '/fixture' });
-    const runnerId = (await runtime.snapshot()).runners[0].id;
-    const statePath = join(directory, 'state.json');
+    await act('saveAutomation', { organizationId: 'personal', revision: secondRule.revision, rule: {
+        id: secondRule.id, name: secondRule.name, projectId: secondRule.projectId, enabled: false,
+        when: secondRule.when, if: secondRule.if, then: secondRule.then,
+    } });
+    await act('retryWorkflowEventDecision', { decisionKey: decision.key });
+    const retryState = await runtime.snapshot();
+    const retriedDecision = retryState.workflowEventDecisions.items.find(value => value.key === decision.key);
+    assert.equal(retriedDecision.status, 'started');
+    assert.equal(retriedDecision.runId, decision.runId);
+    assert.equal((await act('getWorkflowRun', { workflowRunId: decision.runId })).workflowVersion, 1);
     await runtime.close();
-    const state = JSON.parse(await readFile(statePath, 'utf8'));
-    state.sessions[String(ticket.id)].placement = { mode: 'pinned', runnerId };
-    await writeFile(statePath, JSON.stringify(state));
     runtime = await createRuntime(options);
-    const retrySession = (await runtime.snapshot()).sessions.find(session => session.id === String(ticket.id));
-    await runtime.command({ action: 'claim', taskId: String(ticket.id), client: 'trigger-retry-client' });
-    await runtime.command({ action: 'retryAutomationDecision', taskId: String(ticket.id), client: 'trigger-retry-client', triggerKey: failed.triggerKey });
-    const completed = await until(() => runtime.snapshot(), value => value.sessions.find(session => session.id === retrySession.id)?.flow?.status === 'completed');
-    const result = completed.sessions.find(session => session.id === retrySession.id);
-    assert.equal(result.workflow.nodes[0].name, 'Inspect v1');
-    assert.equal(completed.tickets.find(value => value.id === ticket.id).revision, moveRevision);
+    assert.equal((await act('getWorkflowRun', { workflowRunId: decision.runId })).workflowVersion, 1);
+    assert.equal((await runtime.snapshot()).tickets.find(value => value.id === ticket.id).revision, moveRevision);
     await runtime.close();
 });
 test('agent-created tickets use the board trigger seam, while denied creation has no side effect', async () => {
@@ -189,11 +193,13 @@ test('agent-created tickets use the board trigger seam, while denied creation ha
     await act('decide', { sessionId: chat.sessionId, approvalId: pending.sessions[0].pending.id, allow: true });
     const createdSnapshot = await until(() => runtime.snapshot(), value => value.tickets.find(ticket => ticket.title === 'Agent-created'));
     const created = createdSnapshot.tickets.find(ticket => ticket.title === 'Agent-created');
-    await until(() => runtime.snapshot(), value => value.sessions.find(session => session.id === String(created.id))?.flow?.status === 'waiting_gate');
-    const snapshot = await runtime.snapshot();
-    const triggeredSession = snapshot.sessions.find(session => session.id === String(created.id));
-    assert.equal(triggeredSession.workflow.id, 'created-trigger');
-    assert.equal(snapshot.automationDecisions.filter(value => value.workflowId === 'created-trigger').length, 1);
+    const snapshot = await until(() => runtime.snapshot(), value => value.workflowEventDecisions.items
+        .some(item => item.workflowId === 'created-trigger' && item.status === 'started'));
+    const triggeredDecision = snapshot.workflowEventDecisions.items.find(item => item.workflowId === 'created-trigger');
+    const triggeredRun = await act('getWorkflowRun', { workflowRunId: triggeredDecision.runId });
+    assert.equal(triggeredRun.status, 'waiting_gate');
+    assert.equal('sessionId' in triggeredRun, false, 'a human-only Work automation remains session-free');
+    assert.equal(snapshot.workflowEventDecisions.items.filter(value => value.workflowId === 'created-trigger').length, 1);
     await runtime.close();
     const deniedOptions = { ...options, directory: await mkdtemp(join(tmpdir(), 'convoy-agent-denied-')), generate: async function* () { yield { type: 'result', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'denied-ticket', name: 'create_ticket', arguments: { requestKey: 'denied', projectId: 'agent-platform', title: 'Should not exist', description: 'Denied' } }], stopReason: 'tool', timestamp: Date.now() } }; } };
     const deniedRuntime = await createRuntime(deniedOptions);

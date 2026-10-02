@@ -45,6 +45,7 @@ function normalizeDescriptor(input) {
   if (!input || typeof input !== 'object' || !idPattern.test(input.id) || !Number.isInteger(input.revision) || input.revision < 1 ||
       typeof input.label !== 'string' || !input.label.trim() || input.label.length > 120 ||
       !['organization', 'project', 'resource'].includes(input.tenantScope) || !Array.isArray(input.payload) || input.payload.length > 100 ||
+      input.manual === true && input.tenantScope === 'resource' ||
       !input.source || typeof input.source.owner !== 'string' || input.source.owner.length > 80 ||
       !Number.isInteger(input.maxPayloadBytes) || input.maxPayloadBytes < 1 || input.maxPayloadBytes > 256_000)
     throw new Error('Workflow event descriptor is invalid.');
@@ -101,7 +102,11 @@ export function createWorkflowEventJournal({ state, descriptors = [], save = asy
         .sort((left, right) => right.revision - left.revision)[0];
       return latest ?? null;
     }
-    return byRevision.get(`${ref?.id}@${ref?.revision}`) ?? null;
+    const exact = byRevision.get(`${ref?.id}@${ref?.revision}`);
+    if (exact) return exact;
+    const aliasRef = aliasToRef.get(ref?.id);
+    const alias = aliasRef ? byRevision.get(aliasRef) : null;
+    return alias?.revision === ref?.revision ? alias : null;
   }
 
   function validatePayload(eventDescriptor, payload) {

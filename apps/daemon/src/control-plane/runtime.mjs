@@ -19,6 +19,7 @@ import {
   builtinActivityDescriptors,
   legacyActivityRef,
   activityDigest,
+  workflowEventPath,
 } from '../modules/workflows/index.mjs';
 import { createWork } from '../modules/work/index.mjs';
 import {
@@ -263,18 +264,7 @@ export async function createRuntime({
     if (!workflows) return;
     for (const row of workflows.pendingEventDecisions({ limit: 100 })) {
       try {
-        const decision = state.automationDecisionLedger[row.triggerKey];
-        if (decision?.kind === 'schedule') {
-          const schedule = workflows.schedule(decision.subscriptionId, decision.subscriptionRevision);
-          if (!schedule || activityDigest(schedule.principal) !== activityDigest(decision.principal) || schedule.workflowId !== decision.workflowId ||
-              schedule.workflowVersion !== decision.workflowVersion || schedule.workflowDigest !== decision.workflowDigest)
-            throw new Error('The pinned schedule revision is unavailable or changed.');
-        } else {
-          const rule = state.automations?.find(value => value.id === decision?.ruleId && value.revision === decision?.ruleRevision);
-          if (!rule?.enabled || activityDigest(rule.principal) !== activityDigest(decision.principal))
-            throw new Error('The pinned automation is unavailable or its principal changed.');
-          automations.validate(rule);
-        }
+        const decision = workflows.validateEventDecision(row.triggerKey);
         await identity.assertPrincipalActive(decision.principal);
         await requireProjectPermission(decision.projectId, 'project.execute', decision.principal);
         await workflows.ensureRunForDecision(row.triggerKey);
@@ -305,16 +295,20 @@ export async function createRuntime({
   });
   const catalog = work.catalog;
   initializeAutomations(state);
-  const automationEventCapabilities = workflowEventDescriptors.flatMap(descriptor => {
+  const automationEventCapabilityMap = new Map();
+  for (const descriptor of workflowEventDescriptors) {
     const fields = descriptor.payload.map(field => field.path);
-    const scope = descriptor.tenantScope === 'resource' ? 'binding' : descriptor.tenantScope === 'organization' ? 'project' : 'project';
-    return [descriptor.id, ...(descriptor.aliases ?? [])].map(id => {
+    const scope = descriptor.tenantScope;
+    for (const id of [descriptor.id, ...(descriptor.aliases ?? [])]) {
       const legacy = workAutomationCapabilities.events.find(value => value.id === id);
-      return { id, descriptorId: descriptor.id, revision: descriptor.revision, label: descriptor.label,
+      const existing = automationEventCapabilityMap.get(id);
+      if (existing && existing.revision > descriptor.revision) continue;
+      automationEventCapabilityMap.set(id, { id, descriptorId: descriptor.id, revision: descriptor.revision, label: descriptor.label,
         scope: legacy?.scope ?? scope, fields: [...new Set([...(legacy?.fields ?? []), ...fields])],
-        payload: structuredClone(descriptor.payload), manual: Boolean(descriptor.manual) };
-    });
-  });
+        payload: structuredClone(descriptor.payload), manual: Boolean(descriptor.manual) });
+    }
+  }
+  const automationEventCapabilities = [...automationEventCapabilityMap.values()];
   const automations = createAutomations({
     capabilities: { ...workAutomationCapabilities, events: automationEventCapabilities },
     state,
@@ -2133,30 +2127,33 @@ export async function createRuntime({
       if (!selected?.projectId || selected.projectId !== projectId) throw new Error('Select the event project in the active context.');
       await identity.assertPrincipalActive(actor);
       await requireProjectPermission(projectId, 'project.execute', actor);
-      const descriptor = workflows.eventJournal.descriptor(command.descriptorId);
+      const descriptor = workflows.eventJournal.descriptor(command.descriptorRevision === undefined
+        ? command.descriptorId : { id: command.descriptorId, revision: command.descriptorRevision });
       if (!descriptor?.manual) throw new Error('This workflow event does not allow manual submission.');
+      if (descriptor.tenantScope === 'resource') throw new Error('Resource-scoped events must be accepted by their registered source.');
       if (!['user', 'workload'].includes(actor.kind)) throw new Error('This principal cannot submit a manual workflow event.');
       const key = text(command.idempotencyKey, 160);
       if (!/^[\w.-]+$/.test(key)) throw new Error('Invalid event idempotency key.');
       const project = state.projects.find(value => value.id === projectId);
       const correlationPath = descriptor.correlationPaths[0];
-      const correlationValue = correlationPath && command.payload?.[correlationPath];
+      const correlationValue = correlationPath && workflowEventPath(command.payload, correlationPath);
       const accepted = await workflows.acceptEvent({ descriptor: { id: descriptor.id, revision: descriptor.revision },
         source: { id: `manual.${principalKey(actor)}.${descriptor.id}`, eventId: key },
         organizationId: project.organizationId, projectId, origin: { kind: actor.kind, id: actor.kind === 'user' ? actor.userId : actor.workloadIdentityId },
         payload: command.payload, ...(correlationValue !== undefined ? { correlation: { key: correlationPath, value: String(correlationValue) } } : {}) });
       await processWorkflowEventDecisions();
+      await workflows.deliverPendingWaitEvents();
       return { eventId: accepted.event.id, duplicate: accepted.duplicate };
     }
     if (action === 'retryWorkflowEventDecision') {
       const key = text(command.decisionKey, 500);
-      const decision = state.automationDecisionLedger[key];
+      const decision = workflows.eventDecision(key);
       if (!decision?.projectId) throw new Error('Workflow event decision is not available.');
       await identity.assertPrincipalActive(actor);
       await requireProjectPermission(decision.projectId, 'project.execute', actor);
       await workflows.retryEventDecision(key);
       await processWorkflowEventDecisions();
-      return { workflowRunId: decision.runId, status: state.automationDecisionLedger[key].status };
+      return { workflowRunId: decision.runId, status: workflows.eventDecision(key)?.status };
     }
     if (action === 'saveWorkflowSchedule') {
       const project = state.projects.find(value => value.id === command.projectId);

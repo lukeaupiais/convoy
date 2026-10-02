@@ -173,7 +173,8 @@ export function createWorkflows({
       }
       if (wait.correlation && !descriptor.correlationPaths.includes(wait.correlation.key))
         throw new Error(`${node.name}: correlation key is not declared by the event.`);
-      wait.event = descriptor.id;
+      const workCompatibilityAlias = ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(wait.event);
+      if (!workCompatibilityAlias) wait.event = descriptor.id;
       wait.eventRevision = descriptor.revision;
       wait.scope = descriptor.tenantScope;
     }
@@ -229,11 +230,6 @@ export function createWorkflows({
       }
     });
   };
-  const legacyActiveRun = event => {
-    const ticketId = event.payload?.ticketId;
-    return Object.values(state.sessions).find(session => String(session.activeTicketId) === String(ticketId) &&
-      session.flow && !['completed', 'cancelled'].includes(session.flow.status));
-  };
   function matchedEventRules(accepted) {
     return (state.automations ?? []).filter(rule => decisionMatches(rule, accepted));
   }
@@ -241,17 +237,21 @@ export function createWorkflows({
   function reserveEventDecisions(event) {
     const accepted = { event };
     const decisions = [];
-    for (const rule of matchedEventRules(accepted)) {
+    const matched = matchedEventRules(accepted);
+    for (const rule of matched) {
       const triggerKey = eventDecisionKey(rule, event);
       const existing = state.automationDecisionLedger[triggerKey];
       if (existing) { decisions.push(triggerKey); continue; }
-      const activeSession = !rule.concurrency ? legacyActiveRun(event) : null;
       const concurrency = rule.concurrency ?? { policy: 'hold', maxActiveRuns: 1 };
       const activeRuns = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === rule.id &&
         !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
-      const overCapacity = activeRuns >= (concurrency.maxActiveRuns ?? 1);
-      const hold = Boolean(activeSession) || overCapacity;
-      const status = hold && concurrency.policy === 'reject' ? 'conflict' : hold ? 'held' : 'reserved';
+      const pendingReservations = Object.values(state.automationDecisionLedger).filter(decision =>
+        decision.subscriptionId === rule.id && decision.subscriptionRevision === rule.revision &&
+        ['reserved', 'started'].includes(decision.status) && !state.workflowRuns?.[decision.runId]).length;
+      const overCapacity = activeRuns + pendingReservations >= (concurrency.maxActiveRuns ?? 1);
+      const overflowPolicy = concurrency.policy === 'independent' ? concurrency.overflowPolicy ?? 'hold' : concurrency.policy;
+      const conflictingMatches = matched.length > 1;
+      const status = conflictingMatches || overCapacity && overflowPolicy === 'reject' ? 'conflict' : overCapacity ? 'held' : 'reserved';
       const workflow = state.workflows.find(value => value.id === rule.then.workflowId && (value.version ?? 1) === rule.then.workflowVersion);
       const project = state.projects.find(value => value.id === rule.projectId);
       const runId = randomUUID();
@@ -262,8 +262,9 @@ export function createWorkflows({
         principal: structuredClone(rule.principal), ticketId: event.payload?.ticketId,
         trigger: rule.when.event, sourceEvent: structuredClone(event), eventId: event.id, runId,
         decisionKey: triggerKey, attempts: 0,
-        ...(activeSession ? { activeSessionId: activeSession.id, activeRunId: activeSession.flow.id } : {}),
-        concurrencyPolicy: concurrency.policy, maxActiveRuns: concurrency.maxActiveRuns ?? 1,
+        concurrencyPolicy: concurrency.policy, overflowPolicy: concurrency.policy === 'independent' ? overflowPolicy : undefined,
+        maxActiveRuns: concurrency.maxActiveRuns ?? 1,
+        ...(conflictingMatches ? { message: 'Multiple enabled subscriptions matched this event; no workflow was started.' } : {}),
         ...(workflow ? { workflowDigest: activityDigest(workflow) } : {}),
       };
       state.automationDecisionLedger[triggerKey] = record;
@@ -292,7 +293,7 @@ export function createWorkflows({
         wait.eventRevision !== undefined && wait.eventRevision !== accepted.descriptor.revision ||
         tenantScope !== descriptor.tenantScope ||
         accepted.organizationId !== run.organizationId ||
-        descriptor.tenantScope === 'project' && accepted.projectId !== run.projectId ||
+        ['project', 'resource'].includes(descriptor.tenantScope) && accepted.projectId !== run.projectId ||
         descriptor.tenantScope === 'resource' && (!wait.resourceRef ||
           wait.resourceRef.kind !== accepted.resourceRef?.kind || wait.resourceRef.id !== accepted.resourceRef?.id)) return false;
     const expected = wait.correlation?.from?.startsWith('runInput.')
@@ -315,8 +316,9 @@ export function createWorkflows({
   function registerWait(runContext, node, instance) {
     const run = runContext?.independentRun ? runContext : state.workflowRuns?.[runContext?.workflowRunId];
     if (!run || run.flow?.instance !== instance || run.flow?.nodeId !== node.id) return;
-    const descriptor = eventJournal.descriptor(node.waitFor.event);
-    if (!descriptor || node.waitFor.eventRevision !== undefined && descriptor.revision !== node.waitFor.eventRevision)
+    const descriptor = eventJournal.descriptor(node.waitFor.eventRevision === undefined
+      ? node.waitFor.event : { id: node.waitFor.event, revision: node.waitFor.eventRevision });
+    if (!descriptor)
       throw new Error(`${node.name}: pinned workflow event descriptor is unavailable.`);
     const tenantScope = node.waitFor.scope ?? descriptor.tenantScope;
     if (tenantScope !== descriptor.tenantScope || tenantScope === 'resource' && !node.waitFor.resourceRef ||
@@ -358,8 +360,11 @@ export function createWorkflows({
       }
       if (candidates.length) wait.scanCursor = candidates.at(-1).sequence;
       else wait.scanCursor = eventJournal.cursor();
+      const deadline = Object.values(state.workflowDeadlines).find(value => value.runId === run.id &&
+        value.instance === wait.instance && value.status === 'pending');
       for (const accepted of candidates) {
         if (!eventWaitMatches(run, node, accepted)) continue;
+        if (deadline && Date.parse(accepted.receivedAt) > Date.parse(deadline.dueAt)) continue;
         const context = run.sessionId && state.sessions[run.sessionId] || run;
         const acceptedWait = await engine.signal(context, wait.instance, {
           event: wait.waitFor.event, eventId: accepted.id, payload: accepted.payload,
@@ -408,6 +413,29 @@ export function createWorkflows({
       return { catchUp: { maxFirings: policy.catchUp.maxFirings } };
     throw new Error('Choose an explicit missed-fire policy.');
   }
+  function recentDueOccurrences(schedule, at) {
+    if (schedule.kind === 'interval') {
+      const interval = schedule.everySeconds * 1000;
+      const latestIndex = Math.floor((Date.parse(at) - Date.parse(schedule.anchorAt)) / interval);
+      if (latestIndex < 0) return [];
+      return [latestIndex - 1, latestIndex].filter(index => index >= 0)
+        .map(index => new Date(Date.parse(schedule.anchorAt) + index * interval).toISOString());
+    }
+    const lookbackDays = schedule.frequency === 'daily' ? 8 : schedule.frequency === 'weekly' ? 22 : 75;
+    let cursor = nextScheduleOccurrence(schedule, new Date(Date.parse(at) - lookbackDays * 86_400_000).toISOString());
+    const due = [];
+    for (let count = 0; count < 64 && Date.parse(cursor) <= Date.parse(at); count++) {
+      due.push(cursor);
+      cursor = nextScheduleOccurrence(schedule, cursor);
+    }
+    return due.slice(-2);
+  }
+  function skipScheduleRange(schedule, first, last, count) {
+    if (Date.parse(first) > Date.parse(last)) return;
+    const key = scheduleFireKey(schedule, first);
+    state.workflowScheduleFirings[key] ??= { key, scheduleId: schedule.id, revision: schedule.revision,
+      scheduledFor: first, coveredThrough: last, status: 'skipped', ...(count !== undefined ? { skippedCount: count } : {}), decidedAt: now() };
+  }
   async function deliverScheduleFire(fire) {
     if (fire.status === 'accepted') return;
     const schedule = state.workflowSchedules.find(value => value.id === fire.scheduleId && value.revision === fire.revision);
@@ -440,32 +468,39 @@ export function createWorkflows({
     }
     const currentSchedules = state.workflowSchedules.filter(value => value.enabled &&
       !state.workflowSchedules.some(other => other.id === value.id && other.revision > value.revision));
-    for (const schedule of currentSchedules.filter(value => Date.parse(value.nextFireAt) <= instant).slice(0, limit - processed)) {
-      let due = [];
-      let cursor = schedule.nextFireAt;
-      while (Date.parse(cursor) <= instant && due.length < 500) {
-        due.push(cursor); cursor = nextScheduleOccurrence(schedule.schedule, cursor);
-      }
-      if (!due.length) continue;
-      if (schedule.missedFirePolicy === 'skip' && due.length > 1) {
-        for (const skipped of due.slice(0, -1)) state.workflowScheduleFirings[scheduleFireKey(schedule, skipped)] ??= {
-          key: scheduleFireKey(schedule, skipped), scheduleId: schedule.id, revision: schedule.revision,
-          scheduledFor: skipped, coveredThrough: skipped, status: 'skipped', decidedAt: now() };
-        schedule.nextFireAt = cursor;
-        await save();
-        const fire = await persistScheduleFire(schedule, due.at(-1), due.at(-1));
+    for (const schedule of currentSchedules) {
+      if (processed >= limit) break;
+      if (Date.parse(schedule.nextFireAt) > instant) continue;
+      const first = schedule.nextFireAt;
+      const tail = recentDueOccurrences(schedule.schedule, at);
+      const last = tail.at(-1);
+      if (!last || Date.parse(last) < Date.parse(first)) continue;
+      const nextAfterLast = nextScheduleOccurrence(schedule.schedule, last);
+      if (schedule.missedFirePolicy === 'coalesce_once') {
+        const fire = await persistScheduleFire(schedule, first, last);
         await deliverScheduleFire(fire); processed++;
-      } else if (schedule.missedFirePolicy === 'coalesce_once') {
-        const fire = await persistScheduleFire(schedule, due[0], due.at(-1));
-        schedule.nextFireAt = cursor; await save(); await deliverScheduleFire(fire); processed++;
-      } else {
-        const count = schedule.missedFirePolicy.catchUp?.maxFirings ?? due.length;
-        for (const scheduledFor of due.slice(0, count)) {
-          const fire = await persistScheduleFire(schedule, scheduledFor);
-          await deliverScheduleFire(fire); processed++;
+      } else if (schedule.missedFirePolicy === 'skip') {
+        const previous = tail.length > 1 ? tail.at(-2) : null;
+        if (previous && Date.parse(previous) >= Date.parse(first)) {
+          const skippedCount = schedule.schedule.kind === 'interval'
+            ? Math.max(0, Math.round((Date.parse(previous) - Date.parse(first)) / (schedule.schedule.everySeconds * 1000)) + 1)
+            : undefined;
+          skipScheduleRange(schedule, first, previous, skippedCount);
         }
-        // Keep the first unhandled due slot for a bounded later pass.
-        if (due.length <= count) { schedule.nextFireAt = cursor; await save(); }
+        const fire = await persistScheduleFire(schedule, last, last);
+        await deliverScheduleFire(fire); processed++;
+      } else {
+        let scheduledFor = first;
+        let fired = 0;
+        const maximum = Math.min(schedule.missedFirePolicy.catchUp.maxFirings, limit - processed);
+        while (fired < maximum && Date.parse(scheduledFor) <= Date.parse(last)) {
+          const fire = await persistScheduleFire(schedule, scheduledFor);
+          await deliverScheduleFire(fire); processed++; fired++;
+          scheduledFor = nextScheduleOccurrence(schedule.schedule, scheduledFor);
+        }
+        // Catch-up is bounded per pass; remaining due slots stay queued for a later pass.
+        if (Date.parse(schedule.nextFireAt) > Date.parse(last)) schedule.nextFireAt = nextAfterLast;
+        await save();
       }
     }
     return { processed };
@@ -675,6 +710,8 @@ export function createWorkflows({
       const project = state.projects.find(value => value.id === input.projectId);
       const workflow = workflowForSchedule(input.workflowId, input.workflowVersion, input.projectId);
       if (!project || project.organizationId !== input.organizationId) throw new Error('Workflow schedule project is unavailable.');
+      if (previous && (previous.organizationId !== project.organizationId || previous.projectId !== project.id))
+        throw new Error('Workflow schedule identity cannot move to another project.');
       const schedule = normalizeSchedule(input.schedule);
       const missedFirePolicy = validateMissedFirePolicy(input.missedFirePolicy);
       const principal = input.principal;
@@ -682,7 +719,7 @@ export function createWorkflows({
       const nextFireAt = previous?.enabled && input.enabled && activityDigest(previous.schedule) === activityDigest(schedule)
         ? previous.nextFireAt : nextScheduleOccurrence(schedule, now());
       const value = { id, name: String(input.name ?? '').trim().slice(0, 120), organizationId: project.organizationId,
-        projectId: project.id, workflowId: workflow.id, workflowVersion: workflow.version, workflowDigest: activityDigest(workflow),
+        projectId: project.id, workflowId: workflow.id, workflowVersion: workflow.version ?? 1, workflowDigest: activityDigest(workflow),
         principal: structuredClone(principal), schedule, missedFirePolicy, enabled: Boolean(input.enabled),
         revision: (previous?.revision ?? 0) + 1, nextFireAt, updatedAt: now() };
       if (!value.name) throw new Error('Name the workflow schedule.');
@@ -696,8 +733,10 @@ export function createWorkflows({
     processDueSchedules,
     async processDue(at = now(), options = {}) {
       const schedules = await processDueSchedules(at, options);
-      const deadlines = await processDueDeadlines(at, options);
+      // An event accepted before a deadline wins the serialized race; an event
+      // received after the deadline is left for the timeout transition below.
       const waits = await deliverPendingWaitEvents();
+      const deadlines = await processDueDeadlines(at, options);
       return { schedulesProcessed: schedules.processed, deadlinesProcessed: deadlines.processed,
         waitsDelivered: waits.delivered };
     },
@@ -713,6 +752,8 @@ export function createWorkflows({
       if (!/^[A-Za-z0-9][\w.-]{0,99}$/.test(id)) throw new Error('Workflow webhook binding identity is invalid.');
       const previous = state.workflowWebhookBindings.find(value => value.id === id);
       if (previous && previous.revision !== input.revision) throw new Error('Workflow webhook binding changed. Reload before saving.');
+      if (previous && (previous.organizationId !== project.organizationId || previous.projectId !== project.id))
+        throw new Error('Workflow webhook binding identity cannot move to another project.');
       const seenTargets = new Set();
       const fieldMap = input.fieldMap.map(mapping => {
         if (!mapping || !descriptor.payload.some(field => field.path === mapping.targetPath) ||
@@ -761,6 +802,28 @@ export function createWorkflows({
         (decision.status === 'reserved' || !state.workflowRuns?.[decision.runId]))
         .slice(0, limit).map(([triggerKey, decision]) => ({ triggerKey, ...structuredClone(decision) }));
     },
+    validateEventDecision(triggerKey) {
+      const decision = state.automationDecisionLedger?.[triggerKey];
+      if (!decision) throw new Error('Workflow event decision is not available.');
+      if (decision.kind === 'schedule') {
+        const schedule = state.workflowSchedules.find(value => value.id === decision.subscriptionId &&
+          value.revision === decision.subscriptionRevision);
+        if (!schedule || activityDigest(schedule.principal) !== activityDigest(decision.principal) ||
+            schedule.workflowId !== decision.workflowId || schedule.workflowVersion !== decision.workflowVersion ||
+            schedule.workflowDigest !== decision.workflowDigest)
+          throw new Error('The pinned schedule revision is unavailable or changed.');
+      } else {
+        const rule = state.automations?.find(value => value.id === decision.ruleId && value.revision === decision.ruleRevision);
+        if (!rule?.enabled || activityDigest(rule.principal) !== activityDigest(decision.principal))
+          throw new Error('The pinned automation is unavailable or its principal changed.');
+        automations.validate(rule);
+      }
+      return structuredClone(decision);
+    },
+    eventDecision(triggerKey) {
+      const decision = state.automationDecisionLedger?.[triggerKey];
+      return decision ? structuredClone(decision) : null;
+    },
     async ensureRunForDecision(triggerKey) {
       const decision = state.automationDecisionLedger[triggerKey];
       if (!decision || decision.decisionKey !== triggerKey || !decision.runId || !decision.projectId || !decision.principal)
@@ -778,6 +841,21 @@ export function createWorkflows({
       const workflow = state.workflows.find(value => value.id === decision.workflowId && (value.version ?? 1) === decision.workflowVersion);
       if (!workflow || activityDigest(workflow) !== decision.workflowDigest)
         throw new Error('The decision’s pinned workflow revision is unavailable or changed.');
+      const activeRuns = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === decision.subscriptionId &&
+        !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
+      const waiting = Object.entries(state.automationDecisionLedger).filter(([key, value]) => key !== triggerKey &&
+        value.subscriptionId === decision.subscriptionId && value.subscriptionRevision === decision.subscriptionRevision &&
+        ['reserved', 'started'].includes(value.status) && !state.workflowRuns?.[value.runId]);
+      const entries = Object.keys(state.automationDecisionLedger);
+      const priorWaiting = waiting.filter(([key]) => entries.indexOf(key) < entries.indexOf(triggerKey)).length;
+      if (activeRuns + priorWaiting >= decision.maxActiveRuns) {
+        const overflowPolicy = decision.concurrencyPolicy === 'independent' ? decision.overflowPolicy ?? 'hold' : decision.concurrencyPolicy;
+        decision.status = overflowPolicy === 'reject' ? 'conflict' : 'held';
+        decision.message = 'Workflow subscription reached its active-run limit before this decision could start.';
+        decision.updatedAt = now();
+        await save();
+        return null;
+      }
       try {
         const run = await startRunInternal({ projectId: decision.projectId, organizationId: decision.organizationId,
           principal: decision.principal, workflow, activeTicketId: decision.ticketId ?? null, reservedRunId: decision.runId,
@@ -801,7 +879,10 @@ export function createWorkflows({
       if (existing) return structuredClone(existing);
       const active = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === decision.subscriptionId &&
         !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
-      if (active >= (decision.maxActiveRuns ?? 1)) throw new Error('Workflow subscription is still at its active-run limit.');
+      const pending = Object.values(state.automationDecisionLedger).filter(value => value !== decision &&
+        value.subscriptionId === decision.subscriptionId && value.subscriptionRevision === decision.subscriptionRevision &&
+        ['reserved', 'started'].includes(value.status) && !state.workflowRuns?.[value.runId]).length;
+      if (active + pending >= (decision.maxActiveRuns ?? 1)) throw new Error('Workflow subscription is still at its active-run limit.');
       decision.status = 'reserved'; delete decision.message; decision.retryRequestedAt = now();
       await save();
       return structuredClone(decision);
@@ -1163,6 +1244,9 @@ export function createWorkflows({
           activityDigest(run.attempt.activityRef) !== activityDigest(ref) || !run.attempt.intent)
         throw new Error('Workflow activity changed before dispatch started.');
       if (run.attempt.status !== 'ready') throw new Error('Workflow activity is not ready to dispatch.');
+      const eventCursor = eventJournal.cursor();
+      run.eventEligibilityCursor = eventCursor;
+      run.attempt.eventEligibilityCursor = eventCursor;
       run.attempt.dispatchStarted = true;
       run.attempt.status = 'running';
       const effect = state.workflowEffectLedger?.[run.attempt.effectKey];

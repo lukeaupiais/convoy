@@ -189,24 +189,27 @@ test('acceptance: imported support starts once and approved escalation starts li
             then: { action: "start_workflow", workflowId: 'development-review', workflowVersion: 1 }
         } });
     await f.act('syncTicketImportBinding', { id: binding.id });
-    let state = await until(async () => { const snapshot = await f.snapshot(); return snapshot.sessions && Object.values(snapshot.sessions).some(value => value.flow?.workflowId === 'support-review') ? snapshot : null; });
+    let state = await until(async () => { const snapshot = await f.snapshot(); return snapshot.workflowEventDecisions?.items?.some(value => value.workflowId === 'support-review' && value.status === 'started') ? snapshot : null; });
     const support = state.tickets.find(value => value.projectId === project.id && value.workType === 'support');
-    const session = Object.values(state.sessions).find(value => value.flow?.workflowId === 'support-review');
-    assert.equal(session.flow.status, 'waiting_gate');
-    await f.act('claim', { sessionId: session.id });
-    await f.act('approveGate', { sessionId: session.id, instance: session.flow.instance });
+    const reviewDecision = state.workflowEventDecisions.items.find(value => value.workflowId === 'support-review');
+    const supportRun = await f.act('getWorkflowRun', { workflowRunId: reviewDecision.runId });
+    assert.equal(supportRun.status, 'waiting_gate');
+    await f.act('claimWorkflowRun', { workflowRunId: supportRun.id });
+    await f.act('decideWorkflowRun', { workflowRunId: supportRun.id, instance: supportRun.instance, decision: 'approve' });
     state = await until(async () => { const snapshot = await f.snapshot(); return snapshot.ticketRelations?.length === 1 ? snapshot : null; });
     const development = state.tickets.find(value => value.workType === 'development' && value.projectId === project.id);
     assert.equal(state.ticketRelations[0].sourceTicketId, support.id);
     assert.equal(state.ticketRelations[0].targetTicketId, development.id);
     assert.equal(development.description.includes('Observed failure'), true);
-    assert.equal(Object.values(state.sessions).some(value => value.activeTicketId === development.id && value.flow?.workflowId === 'development-review'), true);
+    const developmentDecision = state.workflowEventDecisions.items.find(value => value.workflowId === 'development-review');
+    assert.ok(developmentDecision);
+    assert.equal((await f.act('getWorkflowRun', { workflowRunId: developmentDecision.runId })).status, 'waiting_gate');
     await f.act('syncTicketImportBinding', { id: binding.id });
     await f.restart();
     state = await f.snapshot();
     assert.equal(state.ticketRelations.length, 1);
     assert.equal(state.tickets.filter(value => value.projectId === project.id).length, 2);
-    assert.equal(Object.values(state.sessions).filter(value => value.activeTicketId === support.id).length, 1);
+    assert.equal(state.workflowEventDecisions.items.filter(value => value.workflowId === 'support-review').length, 1);
 });
 test('acceptance: a new customer message resumes the matching support wait after a restart', async (t) => {
     const issue = { remoteId: 'report-3', remoteKey: 'R-3', title: 'Request', description: 'Initial report', remoteVersion: '1' };
@@ -239,23 +242,26 @@ test('acceptance: a new customer message resumes the matching support wait after
         } });
     await assert.rejects(f.act('syncTicketImportBinding', { id: binding.id }), /thread unavailable/);
     await new Promise(resolve => setTimeout(resolve, 3200));
-    assert.equal(Object.values((await f.snapshot()).sessions ?? {}).some(value => value.flow?.workflowId === 'reply-wait'), false);
+    assert.equal((await f.snapshot()).workflowEventDecisions.items.some(value => value.workflowId === 'reply-wait'), false);
     threadUnavailable = false;
     await f.act('syncTicketImportBinding', { id: binding.id });
     let state = await f.snapshot();
     const support = state.tickets.find(value => value.projectId === project.id);
     assert.equal(state.ticketThreads.find(value => value.ticketId === support.id).messages.length, 1);
-    assert.equal(Object.values(state.sessions).find(value => value.activeTicketId === support.id).flow.status, 'waiting_event');
+    let decision = state.workflowEventDecisions.items.find(value => value.workflowId === 'reply-wait');
+    let replyRun = await f.act('getWorkflowRun', { workflowRunId: decision.runId });
+    assert.equal(replyRun.status, 'waiting_event');
     await f.restart();
     comments = [...comments, { remoteId: '2', body: 'More details', authorRole: 'requester', direction: 'inbound', createdAt: '2026-09-23T13:00:00Z' }];
     await f.act('syncTicketImportBinding', { id: binding.id });
     state = await f.snapshot();
-    const session = Object.values(state.sessions).find(value => value.activeTicketId === support.id);
-    assert.equal(session.flow.nodeId, 'review');
-    assert.equal(session.flow.status, 'waiting_gate');
+    decision = state.workflowEventDecisions.items.find(value => value.workflowId === 'reply-wait');
+    replyRun = await f.act('getWorkflowRun', { workflowRunId: decision.runId });
+    assert.equal(replyRun.nodeId, 'review');
+    assert.equal(replyRun.status, 'waiting_gate');
     assert.equal(state.ticketThreads.find(value => value.ticketId === support.id).messages.length, 2);
     await f.act('syncTicketImportBinding', { id: binding.id });
-    assert.equal(Object.values((await f.snapshot()).sessions).filter(value => value.activeTicketId === support.id).length, 1);
+    assert.equal((await f.snapshot()).automationDecisions.filter(value => value.workflowId === 'reply-wait').length, 1);
 });
 test('acceptance: customer messages blocked by an active review remain held until explicit retry', async (t) => {
     const issue = { remoteId: 'request-7', remoteKey: 'R-7', title: 'Request', description: 'Initial report', remoteVersion: '1' };
@@ -290,28 +296,28 @@ test('acceptance: customer messages blocked by an active review remain held unti
     await f.act('syncTicketImportBinding', { id: binding.id });
     let state = await until(async () => {
         const snapshot = await f.snapshot();
-        return snapshot.automationDecisions.some(value => value.ticketId === ticket.id && value.status === 'started') ? snapshot : null;
+        return snapshot.workflowEventDecisions.items.some(value => value.ticketId === ticket.id && value.status === 'started') ? snapshot : null;
     });
-    const session = state.sessions.find(value => value.activeTicketId === ticket.id);
-    const firstRun = session.flow.id;
-    assert.equal(session.flow.status, 'waiting_gate');
+    const firstDecision = state.workflowEventDecisions.items.find(value => value.workflowId === 'review-request' && value.status === 'started');
+    const firstRun = await f.act('getWorkflowRun', { workflowRunId: firstDecision.runId });
+    assert.equal(firstRun.status, 'waiting_gate');
     comments.push({ remoteId: '3', body: 'Another update', authorRole: 'report-originator', direction: 'inbound', createdAt: '2026-09-23T14:00:00Z' });
     await f.act('syncTicketImportBinding', { id: binding.id });
     state = await f.snapshot();
-    assert.equal(state.automationDecisions.some(value => value.ticketId === ticket.id && value.status === 'blocked_active'), true);
-    await f.act('claim', { sessionId: session.id });
-    await f.act('approveGate', { sessionId: session.id, instance: session.flow.instance });
+    assert.equal(state.workflowEventDecisions.items.some(value => value.ticketId === ticket.id && value.status === 'held'), true);
+    await f.act('claimWorkflowRun', { workflowRunId: firstRun.id });
+    await f.act('decideWorkflowRun', { workflowRunId: firstRun.id, instance: firstRun.instance, decision: 'approve' });
     await f.restart();
     state = await f.snapshot();
-    assert.equal(state.sessions.find(value => value.activeTicketId === ticket.id).flow.id, firstRun);
-    const held = state.automationDecisions.find(value => value.ticketId === ticket.id && value.status === 'blocked_active');
-    await f.act('claim', { sessionId: session.id });
-    await f.act('retryAutomationDecision', { sessionId: session.id, triggerKey: held.triggerKey });
+    assert.equal((await f.act('getWorkflowRun', { workflowRunId: firstRun.id })).status, 'completed');
+    const held = state.workflowEventDecisions.items.find(value => value.ticketId === ticket.id && value.status === 'held');
+    await f.act('retryWorkflowEventDecision', { decisionKey: held.key });
     state = await f.snapshot();
-    assert.equal(state.sessions.find(value => value.activeTicketId === ticket.id).flow.status, 'waiting_gate');
-    assert.equal(state.automationDecisions.filter(value => value.ticketId === ticket.id && value.status === 'started').length, 2);
+    const retryDecision = state.workflowEventDecisions.items.find(value => value.key === held.key);
+    assert.equal(retryDecision.status, 'started');
+    assert.equal((await f.act('getWorkflowRun', { workflowRunId: retryDecision.runId })).status, 'waiting_gate');
     await f.act('syncTicketImportBinding', { id: binding.id });
-    assert.equal((await f.snapshot()).automationDecisions.filter(value => value.ticketId === ticket.id && value.status === 'started').length, 2);
+    assert.equal((await f.snapshot()).workflowEventDecisions.items.filter(value => value.ticketId === ticket.id && value.status === 'started').length, 2);
 });
 test('acceptance: approved delivered clarification advances a source-owned board status', async (t) => {
     let writes = 0;
@@ -396,11 +402,12 @@ test('acceptance: approved delivered clarification advances a source-owned board
     await f.act('syncTicketImportBinding', { id: binding.id });
     const resumed = await until(async () => {
         const snapshot = await f.snapshot();
-        const current = snapshot.sessions.find(value => value.id === session.id);
-        return current?.flow?.id !== session.flow.id ? snapshot : null;
+        return snapshot.workflowEventDecisions.items.some(value => value.workflowId === 'clarify' && value.ticketId === ticket.id && value.status === 'started') ? snapshot : null;
     });
+    const triggeredDecision = resumed.workflowEventDecisions.items.findLast(value => value.workflowId === 'clarify' && value.ticketId === ticket.id);
+    const triggeredRun = await f.act('getWorkflowRun', { workflowRunId: triggeredDecision.runId });
     assert.equal(resumed.tickets.find(value => value.id === ticket.id).status, 'Open');
-    assert.equal(resumed.sessions.find(value => value.id === session.id).flow.status, 'waiting_gate');
+    assert.equal(triggeredRun.status, 'waiting_gate');
     assert.equal(resumed.boards.find(value => value.id === board.id).tickets.find(value => value.ticketId === ticket.id).columnId, 'open');
 });
 test('acceptance: a mapped HTTP source previews, imports once, and survives restart', async (t) => {
@@ -906,16 +913,17 @@ test('acceptance: a board move starts only the workflow version pinned by its pr
             when: { event: 'ticket_moved', boardId: board.id, columnId: 'review' },
             if: [],
             then: { action: "start_workflow", workflowId: workflow.id, workflowVersion: 2 }
-        } });
+    } });
     await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision, placement: { columnId: 'review' } });
     const state = await f.snapshot();
-    const triggered = state.sessions.filter(s => s.workflow?.id === workflow.id);
-    assert.equal(triggered.length, 1);
-    assert.equal(triggered[0].workflow.version, 2);
-    assert.equal(triggered[0].flow.status, 'waiting_gate');
+    const decision = state.workflowEventDecisions.items.find(value => value.workflowId === workflow.id);
+    assert.ok(decision);
+    const triggered = await f.act('getWorkflowRun', { workflowRunId: decision.runId });
+    assert.equal(triggered.workflowVersion, 2);
+    assert.equal(triggered.status, 'waiting_gate');
     assert.equal(state.tickets.length, 1);
     await f.restart();
-    assert.equal((await f.snapshot()).sessions.filter(s => s.workflow?.id === workflow.id).length, 1);
+    assert.equal((await f.act('getWorkflowRun', { workflowRunId: decision.runId })).workflowVersion, 2);
 });
 test('acceptance: conflicting start rules and an active run produce durable blocked decisions', async (t) => {
     const f = await fixture(t);
@@ -933,7 +941,7 @@ test('acceptance: conflicting start rules and an active run produce durable bloc
     await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision, placement: { columnId: 'review' } });
     let state = await f.snapshot();
     assert.deepEqual(state.automationDecisions.map(value => value.status), ['conflict', 'conflict']);
-    assert.equal(state.sessions.some(value => value.activeTicketId === ticket.id), false);
+    assert.equal(state.workflowEventDecisions.items.some(value => value.status === 'started'), false);
     await f.restart();
     state = await f.snapshot();
     assert.equal(state.automationDecisions.filter(value => value.status === 'conflict').length, 2);
@@ -943,11 +951,13 @@ test('acceptance: conflicting start rules and an active run produce durable bloc
     await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: state.tickets.find(value => value.id === ticket.id).revision, placement: { columnId: 'review' } });
     state = await f.snapshot();
     assert.equal(state.automationDecisions.findLast(value => value.ruleId === first.id).status, 'started');
-    assert.equal(state.sessions.find(value => value.activeTicketId === ticket.id).flow.status, 'waiting_gate');
+    const activeDecision = state.workflowEventDecisions.items.findLast(value => value.ruleId === first.id && value.status === 'started');
+    const activeRun = await f.act('getWorkflowRun', { workflowRunId: activeDecision.runId });
+    assert.equal(activeRun.status, 'waiting_gate');
     await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: state.tickets.find(value => value.id === ticket.id).revision, placement: { columnId: 'todo' } });
     state = await f.snapshot();
     await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: state.tickets.find(value => value.id === ticket.id).revision, placement: { columnId: 'review' } });
-    assert.equal((await f.snapshot()).automationDecisions.findLast(value => value.ruleId === first.id).status, 'blocked_active');
+    assert.equal((await f.snapshot()).workflowEventDecisions.items.findLast(value => value.ruleId === first.id).status, 'held');
 });
 test('acceptance: ticket launch and rules reject a workflow scoped to another project', async (t) => {
     const f = await fixture(t);
@@ -992,7 +1002,7 @@ test('acceptance: ticketless graph actions create work and route from structured
     assert.equal((await f.snapshot()).tickets.length, 1);
 });
 
-test('acceptance: automatic procurement review pins its workflow profile over the project default', async (t) => {
+test('acceptance: profiles do not create provider sessions for a human-only event workflow', async (t) => {
     const f = await fixture(t);
     const base = await f.act('publishProfile', { id: 'general', name: 'General', tools: [], skills: [] });
     const chosen = await f.act('publishProfile', { id: 'procurement', name: 'Procurement review', tools: ['convoy.read_file'], skills: [] });
@@ -1006,11 +1016,14 @@ test('acceptance: automatic procurement review pins its workflow profile over th
         then: { action: 'start_workflow', workflowId: 'supplier-review', workflowVersion: 1 }
     } });
     await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision, placement: { columnId: 'evaluating' } });
-    const session = (await f.snapshot()).sessions.find(s => s.activeTicketId === ticket.id);
-    assert.equal(session.flow.status, 'waiting_gate');
-    assert.equal(session.capabilityProfile.hash, chosen.hash);
+    const state = await f.snapshot();
+    const decision = state.workflowEventDecisions.items.find(value => value.ticketId === ticket.id && value.workflowId === 'supplier-review');
+    const run = await f.act('getWorkflowRun', { workflowRunId: decision.runId });
+    assert.equal(run.status, 'waiting_gate');
+    assert.equal(run.workflowVersion, 1);
+    assert.equal('sessionId' in run, false, 'a human-only automation stays independent from provider sessions');
     await f.restart();
-    assert.equal((await f.snapshot()).sessions.find(s => s.id === session.id).capabilityProfile.hash, chosen.hash);
+    assert.equal((await f.act('getWorkflowRun', { workflowRunId: decision.runId })).workflowVersion, 1);
 });
 
 for (const sendOutcome of ['pending', 'uncertain', 'spoofed-pre-dispatch-metadata']) test(`acceptance: approval sends the exact draft with ${sendOutcome} delivery before changing source status`, async (t) => {

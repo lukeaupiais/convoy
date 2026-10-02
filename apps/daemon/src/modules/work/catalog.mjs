@@ -287,7 +287,8 @@ export function createCatalog({ state, save, execution, externalTickets, context
     let eventNames = [];
     if (command.action === 'createTicket' || command.action === 'createRelatedTicket') eventNames = ['ticket_created'];
     else if (command.action === 'updateTicket') eventNames = ['ticket_updated'];
-    else if (command.action === 'setBoardPlacement' || command.action === 'clearBoardPlacement') eventNames = ['board_placement_changed'];
+    else if (command.action === 'setBoardPlacement' || command.action === 'clearBoardPlacement')
+      eventNames = ['board_placement_changed', ...(result?.fromColumnId !== result?.toColumnId ? ['ticket_moved'] : [])];
     if (!eventNames.length) return;
     const id = result?.id ?? result?.ticketId ?? command.ticketId ?? command.taskId;
     const value = ticket(id);
@@ -296,7 +297,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
     for (const event of eventNames) {
       const key = `command:${event}:${actionKey}`;
       if (state.workFacts.some(fact => fact.key === key)) continue;
-      state.workFacts.push({ id: key, key, sourceEventId: actionKey, event, projectId: value.projectId,
+      state.workFacts.push({ id: key, key, sourceEventId: `${event}:${actionKey}`, event, projectId: value.projectId,
         ticketId: value.id, ...(command.boardId ? { boardId: command.boardId } : {}),
         ...(result?.fromColumnId !== undefined ? { fromColumnId: result.fromColumnId } : {}),
         ...(result?.toColumnId !== undefined ? { toColumnId: result.toColumnId } : {}),

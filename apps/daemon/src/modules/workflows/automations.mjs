@@ -22,6 +22,10 @@ export function initializeAutomations(state) {
 
 export function createAutomations({ state, save, capabilities, eventDescriptors = [], authorizeRule = async () => {} }) {
   initializeAutomations(state);
+  const descriptorForEvent = (eventId, revision) => eventDescriptors
+    .filter(value => value.id === eventId || value.aliases?.includes(eventId))
+    .filter(value => revision === undefined || value.revision === revision)
+    .sort((left, right) => right.revision - left.revision)[0] ?? null;
   function validate(rule) {
     if (!rule.when || !rule.then || !Array.isArray(rule.if) || rule.then.action !== 'start_workflow')
       throw new Error('Automation requires When, If and Then.');
@@ -34,18 +38,23 @@ export function createAutomations({ state, save, capabilities, eventDescriptors 
       throw new Error('Unsupported automation fields.');
     const event = capabilities.events.find(value => value.id === rule.when.event);
     if (!event) throw new Error('Unsupported automation event.');
-    const descriptor = eventDescriptors.find(value => value.id === event.descriptorId || value.aliases?.includes(event.id) || value.id === event.id);
-    if (rule.when.eventRevision !== undefined && (!Number.isInteger(rule.when.eventRevision) || rule.when.eventRevision < 1 || descriptor && rule.when.eventRevision !== descriptor.revision))
+    const descriptor = descriptorForEvent(event.id, rule.when.eventRevision);
+    if (rule.when.eventRevision !== undefined && (!Number.isInteger(rule.when.eventRevision) || rule.when.eventRevision < 1 || !descriptor))
       throw new Error('Choose an available workflow event revision.');
     if (rule.if.length > 20 || rule.if.some(condition => {
+      if (!condition || typeof condition !== 'object' || Array.isArray(condition)) return true;
       const path = condition?.path ?? condition?.field;
-      const fieldDeclared = (event.fields ?? []).includes(path) || descriptor?.payload.some(field => field.path === path);
+      const field = descriptor?.payload.find(value => value.path === path);
+      const fieldDeclared = descriptor ? Boolean(field) : (event.fields ?? []).includes(path);
+      if (!fieldDeclared) return true;
       const validValue = condition.operator === 'exists'
         ? condition.value === undefined || typeof condition.value === 'boolean'
         : ['equals', 'notEquals'].includes(condition.operator)
-          ? ['string', 'number', 'boolean'].includes(typeof condition.value)
-          : ['greaterThan', 'lessThan'].includes(condition.operator) && typeof condition.value === 'number';
-      return !condition || !fieldDeclared || !validValue || Object.keys(condition).some(key => !['field','path','operator','value'].includes(key));
+          ? field?.type === 'enum' ? typeof condition.value === 'string' && field.values.includes(condition.value)
+            : field ? typeof condition.value === field.type && (field.type !== 'number' || Number.isFinite(condition.value))
+              : !descriptor && ['string', 'number', 'boolean'].includes(typeof condition.value) && (typeof condition.value !== 'number' || Number.isFinite(condition.value))
+          : ['greaterThan', 'lessThan'].includes(condition.operator) && field?.type === 'number' && Number.isFinite(condition.value);
+      return !validValue || Object.keys(condition).some(key => !['field','path','operator','value'].includes(key));
     }))
       throw new Error('Unsupported automation condition.');
     workflowForProject(state, rule.then.workflowId, rule.then.workflowVersion, rule.projectId);
@@ -67,7 +76,8 @@ export function createAutomations({ state, save, capabilities, eventDescriptors 
     if (rule.concurrency && (!['reject', 'hold', 'independent'].includes(rule.concurrency.policy) ||
         !Number.isInteger(rule.concurrency.maxActiveRuns ?? 1) || (rule.concurrency.maxActiveRuns ?? 1) < 1 ||
         (rule.concurrency.maxActiveRuns ?? 1) > 100 || rule.concurrency.overflowPolicy !== undefined &&
-        !['reject', 'hold'].includes(rule.concurrency.overflowPolicy))) throw new Error('Invalid automation concurrency policy.');
+        (rule.concurrency.policy !== 'independent' || !['reject', 'hold'].includes(rule.concurrency.overflowPolicy))))
+      throw new Error('Invalid automation concurrency policy.');
   }
   return {
     validate,
@@ -91,7 +101,7 @@ export function createAutomations({ state, save, capabilities, eventDescriptors 
       if (input.enabled && (!actor || !['user','workload'].includes(actor.kind))) throw new Error('Enabled automation needs a governed principal.');
       if (input.enabled) await authorizeRule(project.id, actor);
       const event = capabilities.events.find(value => value.id === input.when.event);
-      const descriptor = eventDescriptors.find(value => value.id === event?.descriptorId || value.aliases?.includes(event?.id) || value.id === event?.id);
+      const descriptor = event && descriptorForEvent(event.id, input.when.eventRevision);
       const when = { ...structuredClone(input.when), ...(descriptor && input.when.eventRevision === undefined ? { eventRevision: descriptor.revision } : {}) };
       const rule = { id, name: input.name.trim(), organizationId: project.organizationId, projectId: project.id,
         when, if: structuredClone(input.if), then: structuredClone(input.then),

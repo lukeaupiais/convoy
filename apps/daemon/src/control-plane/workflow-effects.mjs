@@ -226,7 +226,10 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       idempotencyKey: `${run.id}:${instance}` };
     const reservation = owner.activityReservationForActivation(session ?? run, node.id) ??
       owner.activityReservationForAttempt(run, node.id, instance);
-    const context = { run, session, node, instance, signal, owner, ...(reservation ? { activityReservation: reservation } : {}) };
+    // A standalone run is the workflow owner, not a provider session. Sessionless
+    // activities must see null here; linked runs arrive through their real session.
+    const context = { run, session: session?.independentRun ? null : session, node, instance, signal, owner,
+      ...(reservation ? { activityReservation: reservation } : {}) };
     const authorization = await authorizeActivity(run, descriptor, node, reservation);
     if (authorization?.model) context.model = authorization.model;
     if (run.attempt?.instance !== instance || run.attempt?.nodeId !== node.id)
@@ -398,7 +401,8 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
           JSON.stringify(run.attempt.activityRef) !== JSON.stringify(ref) || !run.attempt.intent)
         throw new Error('Workflow activity intent is unavailable for reconciliation.');
       const input = owner.resolveActivityInput(run, node);
-      const result = await implementation.reconcile({ run, session, node, instance: command.instance, owner,
+      const result = await implementation.reconcile({ run, session: session?.independentRun ? null : session,
+        node, instance: command.instance, owner,
         ...(authorization?.model ? { model: authorization.model } : {}) }, input,
         structuredClone(run.attempt.intent), { requestedResolution: command.resolution });
       if (!result || !['applied', 'not_applied', 'unknown', 'waiting'].includes(result.state))
