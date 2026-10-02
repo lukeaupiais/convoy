@@ -27,6 +27,12 @@ or isolated commits reconciled by root. The separable run UI preparation in spec
 reviewed 3 using its existing commands; it cannot invent activity/evidence interfaces. Start 7 on the reviewed integrated stack. Never implement on unknown dependent interfaces.
 Each implementation is assigned to a Luna agent at high reasoning effort with its saved spec.
 
+The remaining implementation owners are `/root/pr3_runs` for PR5,
+`/root/pr6_human_evidence` for PR6 and `/root/pr4_activities` for PR7, all Luna high.
+Existing threads are reused because the agent runtime reached its thread limit. Each receives
+the saved specification and reviewed prerequisite commit before its implementation phase.
+Root reviews each final diff and publishes the draft after the two review axes clear.
+
 ## Reviewed implementation proposals
 
 - [Activity interface](pr4-interface-design.md)

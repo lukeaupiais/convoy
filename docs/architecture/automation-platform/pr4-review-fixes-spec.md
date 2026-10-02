@@ -50,3 +50,70 @@ Commit only the scoped corrective delta and tests. Run check:architecture, build
 owner/activity/resource/UI/legacy acceptance groups; report logs and exact SHA. Root will re-run
 required checks on the frozen corrected head and publish the reviewed draft only after both
 review axes clear.
+
+## Provider model authoring compatibility
+
+Preserve an explicitly configured node.model through the generic editor codec for a registered
+activity; the new active agent-resource path uses that exact model and must not silently fall
+back after an unrelated edit. Render a compact model selector only when the selected descriptor
+actually declares agent resources. Other action activities receive no agent instructions or
+session-mode scaffolding. Verify the codec roundtrip and explicit unavailable model preservation.
+
+## Second frozen review findings at be008d3
+
+Registered agent-action tools need an explicit pinned Library-governed permission policy in
+the action definition and editor codec. A descriptor declares required resources; it grants no
+authority. Normalize/validate the canonical permission enum with a conservative default, expose
+a compact selector only for agent resources that need tools/workspace, and recheck current
+provider and execution grants at the active node. Add public-runtime nonempty-tool permitted
+and denied acceptance, including actual workspace acquisition only when declared.
+
+Work's latest-delivered evidence query must select the newest exact canonically delivered
+reply for the run/project/connection. A newer queued/pending reply must not displace an older
+confirmed delivery. A stale reply.deliveryStatus flag must not hide a matching exact outbound
+thread message that already proves delivery. Keep selection/refresh inside Work; the status
+command still refreshes and validates the chosen exact identity before mutation. Cover both
+orderings and missing/spoofed/cross-project evidence. No raw Work arrays in control-plane policy.
+
+Owner4 handles backend and Work tests; helper3 owns the provider-resource acceptance file;
+helper6 owns the UI permission codec/editor correction. Root independently reviews helper
+changes and both reviewers inspect the immutable backend corrective delta before publication.
+
+## Approval preparation and active resource acquisition
+
+An exact intent reservation at a prior human gate must not allocate the target activity's
+provider session, runner or workspace. Preparation is a pure bounded calculation from its
+validated input and identity; resource-dependent adapter preparation fails the explicit
+command immediately. Keep current principal/project/provider authorization checks using
+canonical project APIs without a fake Session. After approval advances to the action, acquire
+its declared resources and recheck full current provider, Library and Execution authority
+before dispatch. A prepared preview never grants tools or execution permission.
+
+Public-runtime proof covers a human gate followed by an approved registered agent action
+with declared workspace/read tools: preview has zero sessions/runner acquisition, approval
+activates normal resources and consumes the exact reserved intent once. Revoking current
+authority after preview prevents dispatch. Previously acquired resources may not substitute
+for the target's current policy. Helper3 owns these acceptance cases; owner4 owns the phase
+boundary and documentation; root reviews helper tests independently.
+
+## Final material/context corrections
+
+The exact selected provider model must appear in the shared private preview shape and the
+rendered approval material, with a compact state line and the prepared values. No additional
+helper explanation is needed. The preparation callback receives a resource-free projection,
+including for an already-linked session: session:null, no owner API, no live Session ID,
+workspace, runner, assignment or execution-grant data. Its bounded run facts include canonical
+identity/scope and only the exact captured decision submission needed by Work compatibility.
+Current authorization checks still run on the real owner run before invoking the callback.
+Prove this boundary with an existing-resource fixture and public session-backed preparation.
+
+## Canonical adapter model selection
+
+Registered callbacks receive the exact currently authorized model as context.model on
+preparation, dispatch, confirmation and reconciliation. Compute that choice once through the
+canonical authorization seam, including the reservation's pinned provider choice; adapters
+must not each reproduce a node/flow/session fallback. An already-linked session may retain
+its dialogue default model and lease identity, but that metadata does not select the current
+activity's provider. Do not create a fake Session or silently switch the session default.
+Public-runtime acceptance uses two different permitted models in consecutive activities with
+one linked session and asserts both adapters receive their own exact authorized selection.

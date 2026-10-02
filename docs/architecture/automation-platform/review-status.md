@@ -211,3 +211,75 @@ including exact latest-reply selection. Both axis reports have no other confirme
 blocker. Corrective work is assigned in pr4-review-fixes-spec.md: owner4 backend, agent3 resource
 acceptance, agent6 UI control-loss/first-claim correction and browser proof. Root re-reviews the
 UI independently; the helper reviewers remain independent of the backend they review.
+
+## PR4 corrected frozen verification
+
+Corrective implementation 0ef34115465c838aeee1f606d5eaf451cb6b9043 and doc-only follow-up
+be008d3aa351e629ea3df915f6d338e52f0e0b15 resolve the initial resource-acquisition and Work
+proof ownership blockers. Final two-axis review is in progress on be008d3; publication awaits
+its result. Work owns scoped exact receipt/confirmation queries, including immutable original
+creation results after unrelated ticket edits. Typed activity reconciliation requires an exact
+receipt rather than a mutable legacy projection. The activity owner rejects non-JSON intent
+values before hashing or persistence.
+
+Root verification passes: architecture/build, 341 module/web tests and 81 workflow acceptance
+tests, all with zero failures and skips. Logs: pr4-corrected-modules-web.log,
+pr4-corrected-workflow-acceptance.log and pr4-be008d3-{architecture,build}.log in
+/tmp/convoy-automation-series. A new public-runtime three-case acceptance test proves lazy
+agent acquisition, zero runner calls for provider-only work with a configured placement, and
+per-node model denial both on initial entry and an already-linked session.
+
+Root independently reviewed the helper-authored UI and provider-resource acceptance. Prepared
+material is gated by current control/context and invalidated using committed control state,
+including under React StrictMode. Disposable component browser proof preserves first-claim
+preparation, hides material after control loss, prevents reclaim resurrection and ignores a
+late response after gate change. Evidence: pr4-ui-control-proof.json. This synthetic-props
+component case proves React control timing; it does not claim live customer-ticket delivery.
+The separate runtime approval/session preparation tests cover API ownership. All probe files,
+servers and pages were cleaned up.
+
+Final review at be008d3 found two further confirmed gaps despite passing existing tests:
+registered agent actions cannot author Library tool permissions, and Work's latest-delivered
+query can select a newer pending reply. Root accepted both findings and assigned the second
+corrective delta in the saved corrective specification. be008d3 is not accepted/published;
+its green checks above remain useful diagnostics rather than final completion proof.
+
+## PR4 accepted and published
+
+Final activity head 5fa4ba8f4ef8e84ad3a46573201615e9420eefef is accepted against
+base ebca318c8f330176fa21d1780a06960e3aec9986 by both immutable Standards and Spec
+reviews. Earlier diagnostic heads above were not published; their confirmed findings were
+fixed before the draft. Root independently reviewed helper UI/resource tests. Final local
+architecture/build pass, 348 module/web tests and 86 workflow acceptance tests pass with
+zero skips/failures (434 cases). Logs: pr4-5fa4ba8-{architecture,build,modules-web,
+workflow-acceptance}.log under /tmp/convoy-automation-series.
+
+The final fixes include an authored conservative Library tool policy, lazy declared resources,
+resource-free bounded approval preparation even when a real session already exists, exact
+provider pins visible in private material, canonical context.model across adapter lifecycle
+callbacks, and Work-owned fresh canonical delivery selection. The eight-case provider
+acceptance proves current tool/model grants, pre-approval zero resources, post-preview
+revocation and two different valid models on one linked session. Browser artifacts include
+pr4-permission-ui-proof.json and pr4-model-preview-browser-proof.json; isolated fixture
+resources were removed.
+
+Draft: https://github.com/lukeaupiais/convoy/pull/31, base pr/automation-independent-runs.
+Exact-head remote checks and desktop jobs pass; system jobs are pending read-back. No merge
+or deployment occurred. The user's 14 dirty root UI files remain unchanged.
+
+Actual environment issue: the home filesystem filled and Vite's temporary config write through
+shared node_modules failed ENOSPC. Root isolated dependency temporary directories inside the
+/tmp worktrees, preserving shared dependency symlinks, and reran unchanged checks successfully.
+No user cache was removed and no check weakened. The owner's broader test:modules invocation
+stalled after green module/runner output and was interrupted; it is not claimed as passing.
+Remote full system/desktop jobs provide the remaining environment-independent evidence.
+
+## PR5 and full PR6 started on reviewed PR4
+
+Luna high /root/pr3_runs implements PR5 in events at base5fa4ba8 using saved spec05/proposal05.
+Luna high /root/pr6_human_evidence implements full PR6 in human-evidence. Root integrated the
+previously reviewed run UI phase onto PR4 with rebased commits1897cc9 and270bbb7. Conflicts
+preserve both the PR4 safe attempt/private material projection and the exact caller lease
+read, plus both run/activity command results. Architecture/build and eight focused run UI,
+authority and exact-approval cases pass before full6 starts. Composition remains dependency
+ordered on reviewed integrated5+6; its Luna high owner4 has read-only seam notes ready.
