@@ -1,5 +1,6 @@
 export { BoardAutomationInspector } from './BoardAutomationInspector';
 export { WorkflowReferenceView } from './WorkflowReferenceView';
+export { WorkflowRuns } from './WorkflowRuns';
 export {
   WorkflowActivityHistory,
   WorkflowRunDetails,

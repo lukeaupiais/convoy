@@ -2209,7 +2209,7 @@ export async function createRuntime({
       const run = workflows.run(command.workflowRunId);
       if (!run?.projectId) throw new Error('Workflow run does not exist.');
       await requireProjectPermission(run.projectId, 'project.read', actor);
-      return workflows.readRun(run.id);
+      return workflows.readRun(run.id, { client: command.client, actorKey: principalKey(actor) });
     }
     if (action === 'prepareWorkflowActivity') {
       const run = workflows.run(command.workflowRunId);

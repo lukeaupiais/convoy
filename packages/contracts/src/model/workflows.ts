@@ -33,7 +33,7 @@ export type WorkflowRun = {
   organizationId: string;
   projectId: string;
   sessionId?: string;
-  independent?: boolean;
+  independent: boolean;
   workflowId: string;
   workflowVersion: number;
   status: string;
@@ -47,13 +47,27 @@ export type WorkflowRun = {
   activityReservations?: (WorkflowActivityReservation & { gateNodeId: string; gateInstance: string; targetNodeId: string; targetInstance: string; activityRef: WorkflowActivityRef; inputDigest: string; intentDigest: string; consumedAt?: string })[];
   attempt?: WorkflowActivityAttempt;
   activityAttempts?: WorkflowActivityAttempt[];
-  history: { nodeId: string; instance?: string; outcome: string; at?: string; to?: string | null }[];
+  history: {
+    nodeId: string;
+    instance?: string;
+    outcome: string;
+    at?: string;
+    to?: string | null;
+    summary?: string;
+  }[];
   historyTotal?: number;
   historyTruncated?: boolean;
   decisions?: { instance: string; decision: 'approve' | 'requestChanges'; actor: string; principal: Record<string, unknown>; at: string }[];
   decisionsTotal?: number;
   decisionsTruncated?: boolean;
-  lease: null | { id: string; client: string; label: string; expiresAt: number };
+  lease: null | {
+    id: string;
+    client: string;
+    label: string;
+    expiresAt: number;
+    /** Read-only projection on getWorkflowRun; it does not grant control. */
+    ownedByCurrentCaller?: boolean;
+  };
 };
 type BoardAutomationReference = WorkflowReference & {
   scope: 'column' | 'board' | 'project';

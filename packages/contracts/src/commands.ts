@@ -617,6 +617,8 @@ export type RuntimeCommand<Action extends RuntimeAction = RuntimeAction> =
 
 type RuntimeCommandKnownResults = {
   prepareWorkflowActivity: import('./model/workflows').WorkflowActivityReservation;
+  startWorkflowRun: { workflowRunId: string };
+  getWorkflowRun: import('./model/workflows').WorkflowRun;
   updateKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   createKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   setKnowledgeCollectionState: import('./model/knowledge').KnowledgeCollection;

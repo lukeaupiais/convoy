@@ -8,7 +8,7 @@ import {
 import { CapabilityLibrary } from '../features/library/CapabilityLibrary';
 import { EnvironmentSettings } from '../features/runners/EnvironmentSettings';
 import { WorkflowEditor } from '../features/workflows/WorkflowEditor';
-import { WorkflowReferenceView } from '../features/workflows/index';
+import { WorkflowReferenceView, WorkflowRuns } from '../features/workflows/index';
 import type { WorkflowReference } from '../shared/api/runtime';
 import { ProviderSettings } from '../features/providers';
 import { IntegrationSettings } from '../features/integrations';
@@ -189,7 +189,10 @@ export function SettingsPage({
             onBack={() => onCloseReference?.()}
           />
         ) : (
-          <WorkflowEditor state={state} />
+          <>
+            <WorkflowEditor state={state} />
+            <WorkflowRuns state={state} projectId={projectId} />
+          </>
         ))}
       {view === 'Skills & instructions' && state && (
         <CapabilityLibrary state={state} projectId={projectId}>

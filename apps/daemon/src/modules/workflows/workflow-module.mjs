@@ -1562,10 +1562,10 @@ export function createWorkflows({
         await save();
       }
     },
-    readRun(id) {
+    readRun(id, leaseIdentity) {
       const run = state.workflowRuns?.[id];
       if (!run) return null;
-      return structuredClone(publicRun(run));
+      return structuredClone(publicRun(run, leaseIdentity));
     },
     bindSessionRun(session, flow, migrationPrincipal = defaultPrincipal) {
       if (session.independentRun) return;
@@ -1697,7 +1697,7 @@ export function createWorkflows({
   };
 }
 
-function publicRun(run) {
+function publicRun(run, leaseIdentity) {
   const safeAttempt = attempt => attempt && ({
     instance: attempt.instance, nodeId: attempt.nodeId, status: attempt.status,
     startedAt: attempt.startedAt, completedAt: attempt.completedAt, outcome: attempt.outcome,
@@ -1731,7 +1731,18 @@ function publicRun(run) {
     history: (run.flow?.history ?? []).slice(-200).map(({ nodeId, instance, outcome, at, to, submission }) => ({ nodeId, instance, outcome, at, to, ...(typeof submission?.summary === 'string' ? { summary: submission.summary.slice(0, 500) } : {}) })),
     historyTotal: (run.flow?.history ?? []).length,
     historyTruncated: (run.flow?.history ?? []).length > 200,
-    lease: run.lease ? { id: run.lease.id, client: run.lease.client, label: run.lease.label, expiresAt: run.lease.expiresAt } : null,
+    lease: run.lease ? {
+      id: run.lease.id,
+      client: run.lease.client,
+      label: run.lease.label,
+      expiresAt: run.lease.expiresAt,
+      ...(leaseIdentity ? {
+        ownedByCurrentCaller:
+          run.lease.expiresAt > Date.now() &&
+          run.lease.client === leaseIdentity.client &&
+          run.lease.principalKey === leaseIdentity.actorKey,
+      } : {}),
+    } : null,
     decisions: (run.decisions ?? []).slice(-50),
     decisionsTotal: (run.decisions ?? []).length,
     decisionsTruncated: (run.decisions ?? []).length > 50,
