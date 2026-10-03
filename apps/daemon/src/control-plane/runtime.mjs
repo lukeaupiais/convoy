@@ -2291,6 +2291,7 @@ export async function createRuntime({
     if (action === 'prepareWorkflowActivity') {
       const run = workflows.run(command.workflowRunId);
       if (!run?.projectId || !run.flow) throw new Error('Workflow run does not exist.');
+      await requireWorkflowReviewer(run, actor);
       await requireProjectPermission(run.projectId, 'project.execute', actor);
       if (!run.principal) throw new Error('Workflow run has no governed execution principal.');
       await identity.assertPrincipalActive(run.principal);

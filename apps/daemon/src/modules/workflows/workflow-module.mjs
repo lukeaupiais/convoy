@@ -1140,9 +1140,18 @@ export function createWorkflows({
     },
     async captureEvidence(run, { instance, producer, name, mime, data, nodeId, attemptInstance }, contextFiles) {
       if (!run || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
-      const sourceNodeId = nodeId ?? run.flow?.nodeId;
-      const sourceInstance = attemptInstance ?? instance;
-      const node = normalize(run.workflow).nodes.find(item => item.id === sourceNodeId);
+      let sourceNodeId = nodeId ?? run.flow?.nodeId;
+      let sourceInstance = attemptInstance ?? instance;
+      let node = normalize(run.workflow).nodes.find(item => item.id === sourceNodeId);
+      if (producer === 'document') {
+        const gate = normalize(run.workflow).nodes.find(item => item.id === run.flow?.nodeId);
+        if (run.flow?.status !== 'waiting_gate' || gate?.kind !== 'human' || instance !== run.flow.instance ||
+            nodeId !== undefined && nodeId !== gate.id || attemptInstance !== undefined && attemptInstance !== run.flow.instance)
+          throw new Error('Document evidence must belong to the current human task instance.');
+        sourceNodeId = gate.id;
+        sourceInstance = run.flow.instance;
+        node = gate;
+      }
       if (!node || !sourceInstance || !['waiting_gate', 'ready', 'completed', 'awaiting_continue'].includes(run.flow?.status))
         throw new Error('Evidence source is not available for this workflow run.');
       if (producer === 'activity_receipt') {

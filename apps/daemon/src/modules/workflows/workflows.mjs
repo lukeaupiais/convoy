@@ -11,15 +11,31 @@ const required = (value, label, limit = 6000) => {
 const kinds = new Set(['agent', 'human', 'check', 'action', 'branch', 'wait']);
 const sessionModes = new Set(['continue', 'new', 'reuse']);
 const safeId = value => typeof value === 'string' && /^[\w-]{1,80}$/.test(value);
+const safeFormFieldId = value => safeId(value) && !['__proto__', 'prototype', 'constructor'].includes(value);
 
 function normalizeHumanTask(node, original) {
   delete node.legacyHumanTask;
   if (node.kind !== 'human') {
-    if (original.humanTask !== undefined) throw new Error(`${node.name}: human-task configuration requires a human node.`);
+    if (original.humanTask !== undefined || original.legacyHumanTask !== undefined)
+      throw new Error(`${node.name}: human-task configuration requires a human node.`);
     return;
   }
   const configured = original.humanTask;
-  if (configured === undefined) {
+  const legacyMarker = original.legacyHumanTask === true;
+  if (original.legacyHumanTask !== undefined && !legacyMarker)
+    throw new Error(`${node.name}: legacy human-task compatibility marker is invalid.`);
+  if (legacyMarker) {
+    const outcomes = configured?.outcomes;
+    const compatibleLegacy = configured && typeof configured === 'object' && !Array.isArray(configured) &&
+      Object.keys(configured).every(key => ['outcomes'].includes(key)) &&
+      Object.keys(configured).length === 1 && Array.isArray(outcomes) && outcomes.length === 2 &&
+      outcomes[0]?.id === 'approved' && outcomes[0]?.effect === 'approve_activity' &&
+      outcomes[1]?.id === 'changes_requested' && outcomes[1]?.effect === undefined &&
+      Object.keys(outcomes[0]).every(key => ['id', 'label', 'effect'].includes(key)) &&
+      Object.keys(outcomes[1]).every(key => ['id', 'label'].includes(key));
+    if (!compatibleLegacy) throw new Error(`${node.name}: legacy compatibility cannot be combined with configured human-task policy.`);
+  }
+  if (configured === undefined || legacyMarker) {
     node.legacyHumanTask = true;
     node.humanTask = { outcomes: [
       { id: 'approved', label: original.decisionLabels?.approved ?? 'Approved', effect: 'approve_activity' },
@@ -45,7 +61,7 @@ function normalizeHumanTask(node, original) {
       throw new Error(`${node.name}: human form must contain at most 32 fields.`);
     const fieldIds = new Set();
     form = { fields: configured.form.fields.map(field => {
-      if (!field || typeof field !== 'object' || Array.isArray(field) || !safeId(field.id) || fieldIds.has(field.id) ||
+      if (!field || typeof field !== 'object' || Array.isArray(field) || !safeFormFieldId(field.id) || fieldIds.has(field.id) ||
           typeof field.label !== 'string' || !field.label.trim() || field.label.length > 100 ||
           !['text', 'number', 'boolean', 'choice', 'date'].includes(field.type) || typeof field.required !== 'undefined' && typeof field.required !== 'boolean')
         throw new Error(`${node.name}: human form fields require unique safe IDs, labels and supported types.`);
@@ -650,6 +666,8 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       const node = current(s);
       if (command.action === 'reviseSubmission' && s.flow.status === 'awaiting_continue') { event(s, 'evidence_invalidated', { instance: s.flow.instance }); activate(s, node.id, 'revision'); await save(); return; }
       if (s.flow.status === 'waiting_gate') {
+        if (node.humanTask?.outcomes?.length && !node.legacyHumanTask && command.action !== 'decideHumanTask')
+          throw new Error('This configured human task requires a reviewed response and configured outcome.');
         if (command.action === 'decideHumanTask') {
           const outcome = command.outcomeId;
           const configured = node.humanTask?.outcomes?.find(item => item.id === outcome);

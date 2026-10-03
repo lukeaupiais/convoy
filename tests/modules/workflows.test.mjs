@@ -350,6 +350,11 @@ test('configured human outcomes, bounded forms, reviewer selectors, and deadline
   ] }, { publishing: true });
   assert.equal(legacy.nodes[0].legacyHumanTask, true);
   assert.deepEqual(legacy.nodes[0].humanTask.outcomes.map(value => value.id), ['approved', 'changes_requested']);
+  assert.deepEqual(normalizeWorkflow(legacy), legacy, 'legacy compatibility data stays idempotent through read normalization');
+  assert.throws(() => normalizeWorkflow({ id: 'forged-legacy-marker', name: 'Forged marker', nodes: [{
+    id: 'review', name: 'Review', kind: 'human', legacyHumanTask: true,
+    humanTask: { outcomes: [{ id: 'release', label: 'Release' }, { id: 'revise', label: 'Revise' }], form: { fields: [] } },
+  }] }), /legacy compatibility cannot be combined/i);
   for (const humanTask of [
     { outcomes: [{ id: 'same', label: 'One' }, { id: 'same', label: 'Two' }] },
     { outcomes: [{ id: 'yes', label: 'Yes', effect: 'approve_activity' }, { id: 'no', label: 'No' }], form: { fields: [{ id: 'amount', label: 'Amount', type: 'number', minimum: 2, maximum: 1 }] } },
@@ -357,10 +362,41 @@ test('configured human outcomes, bounded forms, reviewer selectors, and deadline
   ]) assert.throws(() => normalizeWorkflow({ id: 'invalid-review', name: 'Invalid review', nodes: [
     { id: 'review', name: 'Review', kind: 'human', humanTask },
   ] }), /outcome|field|reviewer|bounds/i);
+  for (const id of ['__proto__', 'prototype', 'constructor']) {
+    const unsafeField = { id, label: 'Required value', type: 'text', required: true };
+    const definition = { id: `unsafe-${id}`, name: 'Unsafe field', nodes: [{ id: 'review', name: 'Review', kind: 'human', humanTask: {
+      outcomes: [{ id: 'accept', label: 'Accept' }, { id: 'decline', label: 'Decline' }], form: { fields: [unsafeField] },
+    } }] };
+    assert.throws(() => normalizeWorkflow(definition), /human form fields require unique safe IDs/i, `normalization must reject ${id}`);
+    assert.throws(() => normalizeWorkflow(definition, { publishing: true }), /human form fields require unique safe IDs/i,
+      `publication must reject ${id}`);
+  }
   assert.throws(() => normalizeWorkflow({ id: 'bad-route', name: 'Bad route', nodes: [
     { id: 'review', name: 'Review', kind: 'human', humanTask: { outcomes: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }] } },
     { id: 'next', name: 'Next', kind: 'human', humanTask: { outcomes: [{ id: 'done', label: 'Done' }, { id: 'stop', label: 'Stop' }] } },
   ], edges: [{ from: 'review', to: 'next', outcome: 'unconfigured' }] }), /not configured/i);
+});
+
+test('session-backed configured human tasks reject legacy decisions without mutating the gate', async () => {
+  const workflow = normalizeWorkflow({ id: 'configured-task-bypass', name: 'Configured task bypass', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', humanTask: { outcomes: [
+      { id: 'release', label: 'Release' }, { id: 'revise', label: 'Revise' },
+    ], form: { fields: [{ id: 'summary', label: 'Summary', type: 'text', required: true }] } } },
+  ] });
+  const session = { id: 'configured-task-bypass', messages: [], checks: [], events: [], workflow };
+  const engine = createWorkflowEngine({ state: { sessions: { [session.id]: session } }, save: async () => {},
+    event: (value, type, data) => value.events.push({ type, ...data }), busy: () => false, launch: () => true });
+  await engine.start(session);
+  const instance = session.flow.instance;
+  for (const command of [
+    { action: 'approveGate', instance },
+    { action: 'requestChanges', instance, feedback: 'Please revise' },
+    { action: 'decideHumanTask', instance, outcomeId: 'approved' },
+  ]) await assert.rejects(engine.decide(session, command), /configured|outcome/i);
+  assert.equal(session.flow.status, 'waiting_gate');
+  assert.equal(session.flow.instance, instance);
+  assert.deepEqual(session.flow.history, []);
+  assert.equal(session.flow.reviewedHumanResponseId, undefined);
 });
 
 test('approval preserves the captured draft and rejects a missing draft without advancing', async () => {

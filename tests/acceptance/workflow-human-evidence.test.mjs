@@ -134,7 +134,14 @@ test('configured procurement and publication human tasks capture exact evidence,
   await f.act('claimWorkflowRun', { workflowRunId: purchase.workflowRunId }, buyer);
   await assert.rejects(f.act('submitWorkflowHumanResponse', { workflowRunId: purchase.workflowRunId, instance: initial.instance, values: { total: 50, deliveryDate: '2026-02-31' } }, buyer), /valid date/i);
   await assert.rejects(f.act('getWorkflowRun', { workflowRunId: purchase.workflowRunId }, foreign), /authorized|available|active/i);
+  const beforeUpload = await f.act('getWorkflowRun', { workflowRunId: purchase.workflowRunId }, buyer);
   const quote = Buffer.from('%PDF-1.7\nprocurement quote\n%%EOF').toString('base64');
+  await assert.rejects(f.act('captureWorkflowEvidence', { workflowRunId: purchase.workflowRunId, instance: 'stale-gate-instance',
+    producer: 'document', name: 'stale.pdf', mime: 'application/pdf', data: quote }, buyer), /current human task instance/i);
+  await assert.rejects(f.act('captureWorkflowEvidence', { workflowRunId: purchase.workflowRunId, instance: initial.instance,
+    nodeId: 'missing-node', attemptInstance: 'invented-attempt', producer: 'document', name: 'invented.pdf', mime: 'application/pdf', data: quote }, buyer), /current human task instance/i);
+  assert.deepEqual((await f.act('getWorkflowRun', { workflowRunId: purchase.workflowRunId }, buyer)).evidence, beforeUpload.evidence,
+    'stale and invented document source identities are rejected before adding evidence references');
   const quoteEvidence = await f.act('captureWorkflowEvidence', { workflowRunId: purchase.workflowRunId, instance: initial.instance,
     producer: 'document', name: 'Q-2031.pdf', mime: 'application/pdf', data: quote }, buyer);
   assert.equal(quoteEvidence.source.producer, 'document');
@@ -152,6 +159,9 @@ test('configured procurement and publication human tasks capture exact evidence,
     'project readers can inspect run history/evidence without receiving private form responses for a task they cannot review');
   await f.act('releaseWorkflowRun', { workflowRunId: purchase.workflowRunId }, buyer);
   await f.act('claimWorkflowRun', { workflowRunId: purchase.workflowRunId }, otherBuyer);
+  await assert.rejects(f.act('prepareWorkflowActivity', { workflowRunId: purchase.workflowRunId,
+    gateInstance: initial.instance, targetNodeId: 'place-order' }, otherBuyer), /not authorized|review/i,
+  'a project executor excluded by the configured reviewer policy cannot obtain private prepared material');
   await assert.rejects(f.act('prepareWorkflowHumanReview', { workflowRunId: purchase.workflowRunId, instance: initial.instance,
     responseId: response.id, outcomeId: 'authorize_purchase', targetNodeId: 'place-order' }, otherBuyer), /not authorized|permission|review/i);
   await f.act('releaseWorkflowRun', { workflowRunId: purchase.workflowRunId }, otherBuyer);
@@ -233,6 +243,13 @@ test('configured procurement and publication human tasks capture exact evidence,
   const edition = await f.act('startWorkflowRun', { projectId: f.projects.publication.id, workflowId: 'edition-review', workflowVersion: 1 }, editor);
   const editorial = await f.act('getWorkflowRun', { workflowRunId: edition.workflowRunId }, editor);
   await f.act('claimWorkflowRun', { workflowRunId: edition.workflowRunId }, editor);
+  for (const decision of ['approve', 'requestChanges']) {
+    await assert.rejects(f.act('decideWorkflowRun', { workflowRunId: edition.workflowRunId, instance: editorial.instance,
+      decision, feedback: 'Return this edition for a revision.' }, editor), /configured human task requires a reviewed response/i);
+  }
+  await assert.rejects(f.act('decideWorkflowRun', { workflowRunId: edition.workflowRunId, instance: editorial.instance,
+    outcomeId: 'approved' }, editor), /human outcome|review material|response/i);
+  assert.equal((await f.act('getWorkflowRun', { workflowRunId: edition.workflowRunId }, editor)).status, 'waiting_gate');
   await assert.rejects(f.act('submitWorkflowHumanResponse', { workflowRunId: edition.workflowRunId, instance: editorial.instance, values: { audience: 'private' } }, editor), /invalid|enum/i);
   const choice = await f.act('submitWorkflowHumanResponse', { workflowRunId: edition.workflowRunId, instance: editorial.instance, values: { audience: 'public' } }, editor);
   const publicationReview = await f.act('prepareWorkflowHumanReview', { workflowRunId: edition.workflowRunId, instance: editorial.instance,
@@ -247,4 +264,55 @@ test('configured procurement and publication human tasks capture exact evidence,
   assert.equal(decision.responseId, revisedResponse.id);
   assert.equal(decision.materialDigest, freshReview.materialDigest);
   assert.equal(decision.principal.userId, buyer.userId);
+});
+
+test('session-backed configured human tasks reject legacy approve and request-changes commands', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.act('saveWorkflow', { workflow: { id: 'session-configured-review', name: 'Session configured review', nodes: [
+    { id: 'review', kind: 'human', name: 'Review', humanTask: {
+      outcomes: [{ id: 'release', label: 'Release' }, { id: 'revise', label: 'Revise' }],
+      form: { fields: [{ id: 'decisionNote', label: 'Decision note', type: 'text', required: true }] },
+    } },
+  ], edges: [] } });
+  const ticket = await f.act('createTicket', { requestId: 'session-configured-task', projectId: 'agent-platform', title: 'Review a supplier quote' });
+  await f.act('runTicket', { requestId: 'session-configured-task-run', ticketId: ticket.id, revision: ticket.revision,
+    workflowId: 'session-configured-review', workflowVersion: 1, model: 'fixture', mode: 'new' });
+  const session = (await f.snapshot()).sessions.find(item => item.activeTicketId === ticket.id);
+  assert.equal(session.flow.status, 'waiting_gate');
+  await f.act('claim', { sessionId: session.id });
+  for (const [action, payload] of [
+    ['approveGate', { sessionId: session.id }],
+    ['requestChanges', { sessionId: session.id, feedback: 'Please revise' }],
+    ['decideWorkflowRun', { workflowRunId: session.workflowRunId, decision: 'approve' }],
+    ['decideWorkflowRun', { workflowRunId: session.workflowRunId, decision: 'requestChanges', feedback: 'Please revise' }],
+  ]) {
+    await assert.rejects(f.act(action, { ...payload, instance: session.flow.instance }),
+      /configured human task requires a reviewed response/i, `${action} must not bypass the configured form/outcome decision`);
+  }
+  const unchanged = (await f.snapshot()).sessions.find(item => item.id === session.id);
+  assert.equal(unchanged.flow.status, 'waiting_gate');
+  assert.equal(unchanged.flow.instance, session.flow.instance);
+  assert.deepEqual(unchanged.flow.history, []);
+});
+
+test('published legacy gates retain their approve path across read, restart, and re-normalization', { timeout: 30_000 }, async t => {
+  const f = await fixture(t);
+  await f.act('saveWorkflow', { workflow: { id: 'legacy-session-review', name: 'Legacy session review', nodes: [
+    { id: 'review', kind: 'human', name: 'Review', decisionLabels: { approved: 'Accept legacy review' } },
+  ], edges: [] } });
+  const ticket = await f.act('createTicket', { requestId: 'legacy-session-task', projectId: 'agent-platform', title: 'Review a historical workflow' });
+  await f.act('runTicket', { requestId: 'legacy-session-task-run', ticketId: ticket.id, revision: ticket.revision,
+    workflowId: 'legacy-session-review', workflowVersion: 1, model: 'fixture', mode: 'new' });
+  let session = (await f.snapshot()).sessions.find(item => item.activeTicketId === ticket.id);
+  assert.equal(session.flow.status, 'waiting_gate');
+  const read = await f.act('getWorkflowRun', { workflowRunId: session.workflowRunId });
+  assert.equal(read.status, 'waiting_gate');
+  await f.act('claim', { sessionId: session.id });
+  await f.act('approveGate', { sessionId: session.id, instance: session.flow.instance });
+  await f.restart();
+  session = (await f.snapshot()).sessions.find(item => item.activeTicketId === ticket.id);
+  assert.equal(session.flow.status, 'completed');
+  const completed = await f.act('getWorkflowRun', { workflowRunId: session.workflowRunId });
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.history.at(-1).outcome, 'approved');
 });
