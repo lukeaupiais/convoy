@@ -25,11 +25,7 @@ export function WorkflowWorkspace({
         >
           Definitions
         </button>
-        <button
-          type="button"
-          aria-pressed={pane === 'runs'}
-          onClick={() => setPane('runs')}
-        >
+        <button type="button" aria-pressed={pane === 'runs'} onClick={() => setPane('runs')}>
           Runs
         </button>
       </nav>

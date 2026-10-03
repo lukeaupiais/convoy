@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { command, type RuntimeState, type WorkflowRun, type WorkflowHumanReview } from '../../shared/api/runtime';
+import {
+  command,
+  type RuntimeState,
+  type WorkflowRun,
+  type WorkflowHumanReview,
+} from '../../shared/api/runtime';
 import { WorkflowHumanTaskPanel } from './WorkflowHumanTaskPanel';
 import {
   independentWorkflowRuns,
@@ -44,7 +49,10 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     setDetail(null);
     setActionError('');
     setRefreshError('');
-    setHumanValues({}); setHumanResponseId(''); setHumanOutcomeId(''); setHumanReview(null);
+    setHumanValues({});
+    setHumanResponseId('');
+    setHumanOutcomeId('');
+    setHumanReview(null);
   }, [projectId]);
 
   useEffect(() => {
@@ -178,7 +186,10 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     detailRef.current = null;
     setDetail(null);
     setSelectedRunId(runId);
-    setHumanValues({}); setHumanResponseId(''); setHumanOutcomeId(''); setHumanReview(null);
+    setHumanValues({});
+    setHumanResponseId('');
+    setHumanOutcomeId('');
+    setHumanReview(null);
     if (
       previous?.id !== runId &&
       previous?.lease?.ownedByCurrentCaller &&
@@ -220,35 +231,64 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   const workflow = currentDetail ? workflowForRun(currentDetail, state.workflows) : undefined;
   const currentNode = workflow?.nodes.find((node) => node.id === currentDetail?.nodeId);
   const control = currentDetail ? runControlEligibility(currentDetail) : null;
-  const ownsRunControl = Boolean(currentDetail && control?.ownsControl && (currentDetail.lease?.expiresAt ?? 0) > Date.now());
-  const canAct = Boolean(currentDetail && control?.ownsControl && (currentDetail.lease?.expiresAt ?? 0) > Date.now() && !busy);
+  const ownsRunControl = Boolean(
+    currentDetail && control?.ownsControl && (currentDetail.lease?.expiresAt ?? 0) > Date.now(),
+  );
+  const canAct = Boolean(
+    currentDetail &&
+    control?.ownsControl &&
+    (currentDetail.lease?.expiresAt ?? 0) > Date.now() &&
+    !busy,
+  );
   const canReviewTask = Boolean(canAct && currentDetail?.humanTaskReviewerEligible === true);
-  const humanContextKey = JSON.stringify([selectedRunId, currentDetail?.nodeId, currentDetail?.instance,
-    state.currentUser?.id, state.activeContext?.id, state.activeContext?.projectId, state.activeContext?.principal]);
+  const humanContextKey = JSON.stringify([
+    selectedRunId,
+    currentDetail?.nodeId,
+    currentDetail?.instance,
+    state.currentUser?.id,
+    state.activeContext?.id,
+    state.activeContext?.projectId,
+    state.activeContext?.principal,
+  ]);
   const error = actionError || refreshError;
-  const currentResponse = currentDetail?.humanResponses?.slice().reverse().find((response) => response.instance === currentDetail.instance);
+  const currentResponse = currentDetail?.humanResponses
+    ?.slice()
+    .reverse()
+    .find((response) => response.instance === currentDetail.instance);
 
   useEffect(() => {
     if (ownsRunControl) return;
-    setHumanValues({}); setHumanResponseId(''); setHumanOutcomeId(''); setHumanReview(null);
+    setHumanValues({});
+    setHumanResponseId('');
+    setHumanOutcomeId('');
+    setHumanReview(null);
   }, [humanContextKey, ownsRunControl]);
 
   async function submitHumanResponse() {
     if (!currentDetail?.instance || !canAct) return;
-    setBusy(true); setActionError(''); setHumanReview(null);
+    setBusy(true);
+    setActionError('');
+    setHumanReview(null);
     try {
       const result = await command('submitWorkflowHumanResponse', {
-        workflowRunId: currentDetail.id, instance: currentDetail.instance, values: humanValues,
+        workflowRunId: currentDetail.id,
+        instance: currentDetail.instance,
+        values: humanValues,
       });
       setHumanResponseId(result.result.id);
       setRefreshKey((value) => value + 1);
-    } catch (caught) { setActionError(caught instanceof Error ? caught.message : String(caught)); }
-    finally { setBusy(false); }
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function captureHumanDocument(file?: File) {
     if (!file || !currentDetail?.instance || !canAct) return;
-    setBusy(true); setActionError(''); setHumanReview(null);
+    setBusy(true);
+    setActionError('');
+    setHumanReview(null);
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -258,57 +298,109 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
       });
       const data = dataUrl.slice(dataUrl.indexOf(',') + 1);
       await command('captureWorkflowEvidence', {
-        workflowRunId: currentDetail.id, instance: currentDetail.instance, producer: 'document',
-        name: file.name, mime: file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : /\.json$/i.test(file.name) ? 'application/json' : /\.md$/i.test(file.name) ? 'text/markdown' : 'text/plain'), data,
+        workflowRunId: currentDetail.id,
+        instance: currentDetail.instance,
+        producer: 'document',
+        name: file.name,
+        mime:
+          file.type ||
+          (/\.pdf$/i.test(file.name)
+            ? 'application/pdf'
+            : /\.json$/i.test(file.name)
+              ? 'application/json'
+              : /\.md$/i.test(file.name)
+                ? 'text/markdown'
+                : 'text/plain'),
+        data,
       });
-      setHumanResponseId(''); setHumanReview(null);
+      setHumanResponseId('');
+      setHumanReview(null);
       setRefreshKey((value) => value + 1);
-    } catch (caught) { setActionError(caught instanceof Error ? caught.message : String(caught)); }
-    finally { setBusy(false); }
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function prepareHumanReview(outcomeId: string) {
     if (!currentDetail?.instance || !currentNode || !humanResponseId || !canAct) return;
-    const route = workflow?.edges.find((edge) => edge.from === currentNode.id && edge.outcome === outcomeId) ??
-      workflow?.edges.find((edge) => edge.from === currentNode.id && ['*', 'default'].includes(edge.outcome));
-    setBusy(true); setActionError(''); setHumanReview(null);
+    const route =
+      workflow?.edges.find((edge) => edge.from === currentNode.id && edge.outcome === outcomeId) ??
+      workflow?.edges.find(
+        (edge) => edge.from === currentNode.id && ['*', 'default'].includes(edge.outcome),
+      );
+    setBusy(true);
+    setActionError('');
+    setHumanReview(null);
     try {
       const response = await command('prepareWorkflowHumanReview', {
-        workflowRunId: currentDetail.id, instance: currentDetail.instance, responseId: humanResponseId,
-        outcomeId, ...(route ? { targetNodeId: route.to } : {}),
+        workflowRunId: currentDetail.id,
+        instance: currentDetail.instance,
+        responseId: humanResponseId,
+        outcomeId,
+        ...(route ? { targetNodeId: route.to } : {}),
       });
-      setHumanOutcomeId(outcomeId); setHumanReview(response.result);
-    } catch (caught) { setActionError(caught instanceof Error ? caught.message : String(caught)); }
-    finally { setBusy(false); }
+      setHumanOutcomeId(outcomeId);
+      setHumanReview(response.result);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function decideHumanOutcome() {
     if (!currentDetail?.instance || !humanReview || !humanOutcomeId || !canAct) return;
-    setBusy(true); setActionError('');
+    setBusy(true);
+    setActionError('');
     try {
       await command('decideWorkflowRun', {
-        workflowRunId: currentDetail.id, instance: currentDetail.instance, outcomeId: humanOutcomeId,
-        responseId: humanReview.response.id, reviewedMaterialDigest: humanReview.materialDigest,
-        ...(humanReview.reservation ? { activityReservationId: humanReview.reservation.id, activityReservationDigest: humanReview.reservation.digest } : {}),
+        workflowRunId: currentDetail.id,
+        instance: currentDetail.instance,
+        outcomeId: humanOutcomeId,
+        responseId: humanReview.response.id,
+        reviewedMaterialDigest: humanReview.materialDigest,
+        ...(humanReview.reservation
+          ? {
+              activityReservationId: humanReview.reservation.id,
+              activityReservationDigest: humanReview.reservation.digest,
+            }
+          : {}),
       });
-      setHumanReview(null); setHumanResponseId(''); setRefreshKey((value) => value + 1);
-    } catch (caught) { setActionError(caught instanceof Error ? caught.message : String(caught)); }
-    finally { setBusy(false); }
+      setHumanReview(null);
+      setHumanResponseId('');
+      setRefreshKey((value) => value + 1);
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function downloadEvidence(evidenceId: string, name: string) {
     if (!currentDetail) return;
-    setBusy(true); setActionError('');
+    setBusy(true);
+    setActionError('');
     try {
-      const response = await command('readWorkflowEvidence', { workflowRunId: currentDetail.id, evidenceId });
+      const response = await command('readWorkflowEvidence', {
+        workflowRunId: currentDetail.id,
+        evidenceId,
+      });
       const raw = atob(response.result.data);
       const bytes = Uint8Array.from(raw, (character) => character.charCodeAt(0));
       const blob = new Blob([bytes], { type: response.result.evidence.mediaType });
       const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click();
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = name;
+      anchor.click();
       URL.revokeObjectURL(url);
-    } catch (caught) { setActionError(caught instanceof Error ? caught.message : String(caught)); }
-    finally { setBusy(false); }
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -361,21 +453,58 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
             ))}
           </select>
         </label>
-        {selectedDefinition?.runInputSchema?.type === 'object' && Object.entries(selectedDefinition.runInputSchema.properties ?? {}).map(([field, schema]) => (
-          <label key={field}>
-            {field}{selectedDefinition.runInputSchema?.required?.includes(field) ? ' *' : ''}
-            {schema.enum ? (
-              <select value={String(runInputValues[field] ?? '')} onChange={(event) => setRunInputValues((value) => ({ ...value, [field]: schema.enum?.find((item) => String(item) === event.target.value) }))}>
-                <option value="">Select</option>{schema.enum.map((item) => <option key={JSON.stringify(item)} value={String(item)}>{String(item)}</option>)}
-              </select>
-            ) : schema.type === 'boolean' ? (
-              <input type="checkbox" checked={Boolean(runInputValues[field])} onChange={(event) => setRunInputValues((value) => ({ ...value, [field]: event.target.checked }))} />
-            ) : (
-              <input type={schema.type === 'number' || schema.type === 'integer' ? 'number' : 'text'} required={selectedDefinition.runInputSchema?.required?.includes(field)}
-                value={String(runInputValues[field] ?? '')} onChange={(event) => setRunInputValues((value) => ({ ...value, [field]: event.target.value === '' ? '' : schema.type === 'number' || schema.type === 'integer' ? Number(event.target.value) : event.target.value }))} />
-            )}
-          </label>
-        ))}
+        {selectedDefinition?.runInputSchema?.type === 'object' &&
+          Object.entries(selectedDefinition.runInputSchema.properties ?? {}).map(
+            ([field, schema]) => (
+              <label key={field}>
+                {field}
+                {selectedDefinition.runInputSchema?.required?.includes(field) ? ' *' : ''}
+                {schema.enum ? (
+                  <select
+                    value={String(runInputValues[field] ?? '')}
+                    onChange={(event) =>
+                      setRunInputValues((value) => ({
+                        ...value,
+                        [field]: schema.enum?.find((item) => String(item) === event.target.value),
+                      }))
+                    }
+                  >
+                    <option value="">Select</option>
+                    {schema.enum.map((item) => (
+                      <option key={JSON.stringify(item)} value={String(item)}>
+                        {String(item)}
+                      </option>
+                    ))}
+                  </select>
+                ) : schema.type === 'boolean' ? (
+                  <input
+                    type="checkbox"
+                    checked={Boolean(runInputValues[field])}
+                    onChange={(event) =>
+                      setRunInputValues((value) => ({ ...value, [field]: event.target.checked }))
+                    }
+                  />
+                ) : (
+                  <input
+                    type={schema.type === 'number' || schema.type === 'integer' ? 'number' : 'text'}
+                    required={selectedDefinition.runInputSchema?.required?.includes(field)}
+                    value={String(runInputValues[field] ?? '')}
+                    onChange={(event) =>
+                      setRunInputValues((value) => ({
+                        ...value,
+                        [field]:
+                          event.target.value === ''
+                            ? ''
+                            : schema.type === 'number' || schema.type === 'integer'
+                              ? Number(event.target.value)
+                              : event.target.value,
+                      }))
+                    }
+                  />
+                )}
+              </label>
+            ),
+          )}
         <button className="primary" disabled={!project || !selectedDefinition || busy}>
           Start run
         </button>
@@ -504,34 +633,92 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
             </dl>
             {currentDetail.status === 'waiting_gate' && currentNode?.kind === 'human' && (
               <section className="workflow-human-task" aria-label="Human task">
-                {currentDetail.humanTaskDueAt && Date.parse(currentDetail.humanTaskDueAt) <= Date.now() && (
-                  <span role="status">Overdue · {recordedAt(currentDetail.humanTaskDueAt)}</span>
-                )}
+                {currentDetail.humanTaskDueAt &&
+                  Date.parse(currentDetail.humanTaskDueAt) <= Date.now() && (
+                    <span role="status">Overdue · {recordedAt(currentDetail.humanTaskDueAt)}</span>
+                  )}
                 {!currentNode.legacyHumanTask ? (
-                  <WorkflowHumanTaskPanel node={currentNode} values={humanValues} onValuesChange={setHumanValues}
-                    response={canReviewTask && currentResponse?.id === humanResponseId ? currentResponse : undefined}
-                    evidence={(currentDetail.evidence ?? []).filter((item) => item.source.attemptInstance === currentDetail.instance)}
-                    review={ownsRunControl && canReviewTask ? humanReview ?? undefined : undefined} selectedOutcomeId={humanOutcomeId} disabled={!canReviewTask || busy}
-                    onOutcomeChange={(id) => { setHumanOutcomeId(id); setHumanReview(null); }}
-                    onSubmit={() => void submitHumanResponse()} onCaptureDocument={(file) => void captureHumanDocument(file)}
-                    onReadEvidence={(id, name) => void downloadEvidence(id, name)} onPrepareOutcome={(id) => void prepareHumanReview(id)}
-                    onDecide={() => void decideHumanOutcome()} />
+                  <WorkflowHumanTaskPanel
+                    node={currentNode}
+                    values={humanValues}
+                    onValuesChange={setHumanValues}
+                    response={
+                      canReviewTask && currentResponse?.id === humanResponseId
+                        ? currentResponse
+                        : undefined
+                    }
+                    evidence={(currentDetail.evidence ?? []).filter(
+                      (item) => item.source.attemptInstance === currentDetail.instance,
+                    )}
+                    review={
+                      ownsRunControl && canReviewTask ? (humanReview ?? undefined) : undefined
+                    }
+                    selectedOutcomeId={humanOutcomeId}
+                    disabled={!canReviewTask || busy}
+                    onOutcomeChange={(id) => {
+                      setHumanOutcomeId(id);
+                      setHumanReview(null);
+                    }}
+                    onSubmit={() => void submitHumanResponse()}
+                    onCaptureDocument={(file) => void captureHumanDocument(file)}
+                    onReadEvidence={(id, name) => void downloadEvidence(id, name)}
+                    onPrepareOutcome={(id) => void prepareHumanReview(id)}
+                    onDecide={() => void decideHumanOutcome()}
+                  />
                 ) : (
                   <div className="workflow-human-outcomes">
-                    <button type="button" className="primary" disabled={!canAct || busy} onClick={async () => {
-                      if (!currentDetail.instance) return;
-                      setBusy(true); setActionError('');
-                      try { await command('decideWorkflowRun', { workflowRunId: currentDetail.id, instance: currentDetail.instance, decision: 'approve' }); setRefreshKey((value) => value + 1); }
-                      catch (caught) { setActionError(caught instanceof Error ? caught.message : String(caught)); }
-                      finally { setBusy(false); }
-                    }}>{currentNode.humanTask?.outcomes.find((outcome) => outcome.id === 'approved')?.label ?? 'Approve'}</button>
-                    <button type="button" className="secondary" disabled={!canAct || busy} onClick={async () => {
-                      if (!currentDetail.instance) return;
-                      setBusy(true); setActionError('');
-                      try { await command('decideWorkflowRun', { workflowRunId: currentDetail.id, instance: currentDetail.instance, decision: 'requestChanges', feedback: 'Changes requested' }); setRefreshKey((value) => value + 1); }
-                      catch (caught) { setActionError(caught instanceof Error ? caught.message : String(caught)); }
-                      finally { setBusy(false); }
-                    }}>{currentNode.humanTask?.outcomes.find((outcome) => outcome.id === 'changes_requested')?.label ?? 'Request changes'}</button>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={!canAct || busy}
+                      onClick={async () => {
+                        if (!currentDetail.instance) return;
+                        setBusy(true);
+                        setActionError('');
+                        try {
+                          await command('decideWorkflowRun', {
+                            workflowRunId: currentDetail.id,
+                            instance: currentDetail.instance,
+                            decision: 'approve',
+                          });
+                          setRefreshKey((value) => value + 1);
+                        } catch (caught) {
+                          setActionError(caught instanceof Error ? caught.message : String(caught));
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      {currentNode.humanTask?.outcomes.find((outcome) => outcome.id === 'approved')
+                        ?.label ?? 'Approve'}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={!canAct || busy}
+                      onClick={async () => {
+                        if (!currentDetail.instance) return;
+                        setBusy(true);
+                        setActionError('');
+                        try {
+                          await command('decideWorkflowRun', {
+                            workflowRunId: currentDetail.id,
+                            instance: currentDetail.instance,
+                            decision: 'requestChanges',
+                            feedback: 'Changes requested',
+                          });
+                          setRefreshKey((value) => value + 1);
+                        } catch (caught) {
+                          setActionError(caught instanceof Error ? caught.message : String(caught));
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      {currentNode.humanTask?.outcomes.find(
+                        (outcome) => outcome.id === 'changes_requested',
+                      )?.label ?? 'Request changes'}
+                    </button>
                   </div>
                 )}
               </section>

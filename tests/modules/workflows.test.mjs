@@ -503,12 +503,7 @@ test('workflow publication rejects unsupported human choices while preserving su
     ] } },
     { id: 'done', name: 'Done', kind: 'agent' },
   ], edges: [{ from: 'review', to: 'done', outcome: '*' }] };
-  const legacyStored = { id: 'legacy', name: 'Legacy review', version: 1, nodes: [
-    { id: 'start', kind: 'agent', name: 'Start', prompt: 'Start' },
-    { id: 'review', kind: 'human', name: 'Review', prompt: 'Review', decisionLabels: { approved: 'Approved', changes_requested: 'Request changes' } },
-    { id: 'done', kind: 'agent', name: 'Done', prompt: 'Done' },
-  ], edges: [{ from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: 'approved' }] };
-  const state = { workflows: [legacyStored], workflowDrafts: {} };
+  const state = { workflows: [], workflowDrafts: {} };
   const registry = createWorkflowRegistry({ state, save: async () => {}, normalize: normalizeWorkflow, validateBindings: () => {} });
   await assert.rejects(registry.publish({ workflow: { ...supported, edges: [{ from: 'review', to: 'done', outcome: 'rejected' }] } }), /outcome rejected is not configured/);
   const published = await registry.publish({ workflow: supported });
@@ -527,15 +522,22 @@ test('workflow publication rejects unsupported human choices while preserving su
       ] } },
   ] } }), /markers are not accepted/i);
   assert.equal(state.workflows.length, publishedCountBeforeForgery, 'rejected caller markers do not append a published revision');
-  const legacy = await registry.publish({ baseVersion: 1, workflow: { id: 'legacy', name: 'Legacy review', nodes: [
+  const legacySteps = { id: 'legacy-steps', name: 'Legacy steps', steps: [
     { id: 'start', kind: 'agent', name: 'Start', prompt: 'Start' },
     { id: 'review', kind: 'human', name: 'Review', prompt: 'Review', decisionLabels: { approved: 'Approved', changes_requested: 'Request changes' } },
     { id: 'done', kind: 'agent', name: 'Done', prompt: 'Done' },
-  ], edges: [{ from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: 'approved' }] } });
+  ] };
+  await assert.rejects(registry.publish({ workflow: { ...legacySteps, edges: [
+    { from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: 'rejected' },
+  ] } }), /unsupported human outcome rejected/);
+  const legacy = await registry.publish({ workflow: { ...legacySteps, edges: [
+    { from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: '*' },
+  ] } });
   assert.equal(legacy.nodes.find(node => node.id === 'review').legacyHumanTask, true,
-    'the owner may preserve a gate only when the prior immutable publication proves legacy origin');
+    'legacy ordered-step publication retains its compatibility projection');
   assert.deepEqual(legacy.edges.map(({ from, to, outcome }) => ({ from, to, outcome })), [
     { from: 'start', to: 'review', outcome: 'success' },
+    { from: 'review', to: 'done', outcome: '*' },
     { from: 'review', to: 'done', outcome: 'approved' },
   ]);
 });
