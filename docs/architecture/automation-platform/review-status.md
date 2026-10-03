@@ -1,5 +1,19 @@
 # Automation platform review and verification
 
+## Current status — 2026-10-03
+
+PRs 1–4 are published drafts with completed immutable reviews and passing exact-head remote checks/system/desktop CI. Latest PR 4 head: 89d22331c61b48f50f4ab6c9b9e3d4154c19d136; remote system 613 tests, 601 pass, 12 explicit prerequisite skips, zero failures.
+
+PR 5 checkpoint dcec5e76be134abec224d87bba5f1d1acb214a69 passes owner architecture/build and 169 focused checks. Root independently passed 63 event/journal/schedule/scope/recovery and legacy Work cases with zero failures/skips (pr5-dcec5e7-parent-tests.log). Immutable Standards review still requires legacy retry lifecycle ownership and preservation of failed retry acceptance; Spec review requires durable cascade-bound disposition so a poison outbox fact cannot block later unrelated facts. Root additionally requires existing-run acknowledgment recovery, actual activated-agent profile pinning and typed event/schedule inputs. These are assigned in pr5-final-review-spec.md; this checkpoint is not accepted or published.
+
+PR 6 checkpoint c59095e98258811a16f7bfb06f8e559a0d35c65c is frozen on base270bbb7 before PR 5 integration. Architecture/build, owner workflow/board groups and disposable browser form/control/context proofs pass. Immutable Standards review is clear; Spec review is blocked by a configured-task legacy approval bypass and unsafe form field IDs. Parent publicly reproduced an excluded reviewer completing a configured task with no required response/material through decision=approve; the disposable fixture was removed. Current reviewer preparation, safe legacy decode and stale document attribution checks are assigned in pr6-final-review-spec.md. This checkpoint is not accepted or published.
+
+PR 7 implementation remains ordered after reviewed integrated PR 5+6. Luna high owner4 is currently writing separate PR 5 input acceptance coverage; owner3 owns event production/UI corrections and owner6 owns human/evidence corrections. Root reviews each final helper and immutable corrective delta before publishing and remote CI read-back. No merge/deploy occurred; original 14 dirty UI files are preserved.
+
+The user requested a phone-accessible preview. A separate fixed c59095e checkout serves http://192.168.1.107:5174 with isolated data and the existing private-network development guard. Two no-agent procurement/publication human-review examples are seeded. Real Chrome at390x844 verifies LAN page/API, project/run selection and claim/release, zero sessions, no page horizontal overflow. The physical phone connection is not claimed verified. Preview services/data/access details: /tmp/convoy-automation-series/phone-preview-access.md. The preview is development code still undergoing the above corrections; no customer configuration or credentials were copied.
+
+The following sections preserve the historical verification trail; earlier pending/failure statements are superseded only by the explicit later proof above or below.
+
 This is a working record; a listed specification is not implementation proof.
 
 ## Baseline
@@ -321,3 +335,45 @@ The prior old-head CI system runs were cancelled after exposing the same defect.
 will publish the corrected head and verify its exact-head full remote CI.
 
 Corrected PR4 head228f40b is published; exact-head remote CI read-back is pending.
+
+PR4 exact-head remote read-back is now complete at228f40b: both push and PR
+checks/system/desktop jobs pass. Full remote system:612 tests,600 pass,12 explicit
+prerequisite skips,zero failures. Logpr4-228f40b-remote-system.log. No merge/deploy.
+
+## PR5 integration exposed a descriptor placement boundary
+
+The PR5 scheduled inventory fixture reported registered daemon activity entry into
+the ordinary session launch path, where placement is skipped only for provider-only
+agent descriptors. Owner4 is diagnosing that boundary on published228f40b, with a
+saved corrective extension in pr4-capacity-verification-spec.md. Registered daemon/
+pure/integration work must not acquire a runner solely because its carrier session
+has configured placement. Scheduled no-agent runs must remain genuinely independent.
+The green228f40b checks are valid evidence for their tested cases; this new scenario
+requires another focused correction/review and exact-head CI before final delivery.
+
+The read-only formative PR5 review is complete. Confirmed WIP issues: exact wait
+tenant/resource matching, bounded-page scan progress, full source/event decision
+identity, lifetime dedupe shutdown, legacy v1 internal lookups, and remaining CP
+legacy decision writes. Root sent precise findings and added retention/ownership
+clarifications to spec05. Mutable-tree feedback does not substitute for final
+immutable Standards and Spec reviews.
+
+## PR4 mixed-session descriptor placement proof
+
+Owner4 froze89d22331c61b48f50f4ab6c9b9e3d4154c19d136 over228f40b. A real conversation
+pins configured runner placement; its registered agent activity reaches dispatch,
+then a daemon transform runs. The old guard produces an extra runner call after
+that barrier; the descriptor-directed guard preserves the count. Registered activity
+placement/verification now requires declared runner/workspace resources; ordinary/
+legacy steps retain configured placement. Both immutable peer reviews and root
+independent read accept the delta. Root architecture/build and15 resource/capacity
+acceptance cases pass without skips. The new head is published; exact-head CI pending.
+
+The separately reported scheduled inventory stall is on PR5's independent-run path.
+It was not reproduced or repaired by this mixed-session correction; PR5 owner is
+diagnosing the exact schedule path and must prove no-session scheduling before freeze.
+
+PR4 latest exact-head89d2233 read-back: both push and PR checks/system/desktop all pass.
+
+PR4 latest remote system at89d2233:613 tests,601 pass,12 explicit skips,zero failures.
+Logpr4-89d2233-remote-system.log.

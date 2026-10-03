@@ -60,3 +60,26 @@ weaken checks. Do not add filler UI copy. Do not push, merge, deploy, or message
 root will review commits, publish draft PRs, and verify remote CI. Commit only scoped changes.
 Each handoff identifies base/head commits, spec path, changed ownership, tests/results,
 compatibility behavior, and known limitations. Ask root about genuine specification conflicts.
+
+## Root formative review clarifications
+
+Waits compare exact organization, project and declared resource scope. Keep the
+eligibility cursor immutable and advance a separate scan cursor across bounded pages,
+so more than500 unrelated events cannot starve a later retained match. Decision identity
+includes the complete accepted source/event identity and rule revision. Legacy missing
+workflow versions use the reviewed v1 decoder at every internal pin lookup. Move all
+legacy decision retry/failure writes through the Workflow owner; CP only coordinates.
+
+Do not impose a fixed total lifetime event count that permanently shuts down ingress.
+Retained journal payloads stay bounded by age/count/bytes. Small durable historical
+identity tombstones may grow with accepted-event history, as existing run history does,
+or use an archive through the same owning persistence seam. Expired duplicate identities
+fail closed rather than replaying an old effect. Document storage/retention semantics and
+test cursor expiry, replay rejection and continued new-event acceptance after retention.
+Source timestamps cannot establish freshness or widen scope.
+
+Scope matching follows the pinned descriptor and wait declaration: an organization
+event may satisfy an explicitly organization-scoped wait in that organization;
+project/resource events require their exact declared project/resource identity.
+Always reject foreign organizations. Do not make advertised organization events
+unusable by imposing an undeclared project requirement.

@@ -28,3 +28,20 @@ definition missing version must remain selectable through the governed standalon
 run and automation pin paths. Interpret absent version as1 consistently, keep
 current tenant/project checks, reject other tenants, and assert original definition
 bytes remain unchanged. No implicit latest workflow selection is reintroduced.
+
+## Descriptor-only resources in every launch path
+
+PR5's scheduled inventory fixture reported registered daemon activity entry into
+the ordinary session launch path. Check both sides: schedules use the canonical
+independent run engine without synthesizing a session, and mixed real-session runs
+still acquire resources only declared by their active registered descriptor.
+For registered daemon/pure/integration/provider-only work, skip placement and
+verification acquisition unless the descriptor declares runner/workspace resources.
+Preserve configured placement and capacity queuing for ordinary/legacy agent turns,
+plus current runner/workspace agent grant checks. Do not scan later graph nodes.
+
+Add a real mixed run regression (actual agent first, then registered daemon activity)
+with explicit placement and unavailable/occupied capacity after agent entry. Prove
+no runner acquisition for the daemon node, one real session, and correct typed output.
+Retain registered runner/workspace agent positives and existing capacity/held/restart
+checks. Coordinate inventory repro with PR5 owner. Freeze a scoped commit for review.
