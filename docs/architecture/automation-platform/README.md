@@ -39,6 +39,7 @@ Root reviews each final diff and publishes the draft after the two review axes c
 - [Events, schedules and waits](pr5-interface-design.md)
 - [Human tasks and evidence](pr6-interface-design.md)
 - [Composition](pr7-interface-design.md)
+- [Composition implementation seams](pr7-implementation-seams-spec.md)
 
 These proposals guide implementation; they are not proof of delivered behavior.
 The [review record](review-status.md) distinguishes implemented checks from pending work.
