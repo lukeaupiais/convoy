@@ -1,7 +1,48 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeWorkflow } from './workflows.mjs';
+import { validateActivityValue } from './activity-data.mjs';
 
 const idPattern = /^[A-Za-z0-9][\w-]{0,79}$/;
+const safePathPart = value => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value) &&
+  !['__proto__', 'prototype', 'constructor'].includes(value);
+
+function validateEventInputBindings(bindings, descriptor, schema) {
+  if (bindings === undefined) bindings = {};
+  if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings) || Object.getPrototypeOf(bindings) !== Object.prototype || Object.keys(bindings).length > 128)
+    throw new Error('Automation input bindings must be a bounded object.');
+  const properties = schema?.properties ?? {};
+  const fields = new Map((descriptor?.payload ?? []).map(field => [field.path, field]));
+  for (const [key, binding] of Object.entries(bindings)) {
+    if (!safePathPart(key) || !Object.hasOwn(properties, key) || !binding || typeof binding !== 'object' || Array.isArray(binding) ||
+        Object.getPrototypeOf(binding) !== Object.prototype || Object.keys(binding).length !== 1)
+      throw new Error(`Automation run input ${key} has an invalid binding.`);
+    if (Object.hasOwn(binding, 'value')) {
+      validateActivityValue(binding.value, properties[key], `automation.inputBindings.${key}`);
+      continue;
+    }
+    const from = binding.from;
+    if (!from || typeof from !== 'object' || Array.isArray(from) || Object.getPrototypeOf(from) !== Object.prototype ||
+        Object.keys(from).some(name => !['kind', 'path'].includes(name)) || from.kind !== 'event_payload' ||
+        !Array.isArray(from.path) || from.path.length < 1 || from.path.length > 8 || from.path.some(part => !safePathPart(part)))
+      throw new Error(`Automation run input ${key} must reference a declared event payload path.`);
+    const field = fields.get(from.path.join('.'));
+    if (!field || !field.required && (schema.required ?? []).includes(key))
+      throw new Error(`Automation run input ${key} is not guaranteed by the pinned event descriptor.`);
+    const target = properties[key];
+    const sourceType = field.type === 'enum' ? 'string' : field.type;
+    const compatibleType = sourceType === target.type || sourceType === 'integer' && target.type === 'number';
+    const compatibleBounds = field.type === 'enum'
+      ? !target.enum || field.values.every(value => target.enum.includes(value))
+      : target.enum ? false
+      : target.type === 'string' ? target.minLength === undefined || target.minLength === 0
+        ? target.maxLength === undefined : false
+        : target.minimum === undefined && target.maximum === undefined;
+    if (!compatibleType || !compatibleBounds)
+      throw new Error(`Automation event payload ${field.path} is incompatible with run input ${key}.`);
+  }
+  for (const key of schema?.required ?? []) if (!Object.hasOwn(bindings, key))
+    throw new Error(`Automation run input ${key} is required and needs a binding.`);
+}
 export function workflowForProject(state, id, version, projectId, { raw = false } = {}) {
   const project = state.projects?.find(item => item.id === projectId);
   const workflow = state.workflows?.find(item => item.id === id && (item.version ?? 1) === version);
@@ -31,13 +72,20 @@ export function createAutomations({ state, save, capabilities, eventDescriptors 
       throw new Error('Automation requires When, If and Then.');
     if (['event','boardId','columnId','bindingId','workType','workflowId','workflowVersion','migratedFrom'].some(key => Object.hasOwn(rule,key)))
       throw new Error('Legacy automation fields are not supported.');
-    if (Object.keys(rule.when).some(key => !['event','eventRevision','boardId','columnId','bindingId'].includes(key)) ||
-        Object.keys(rule.then).some(key => !['action','workflowId','workflowVersion'].includes(key)) ||
+    if (Object.keys(rule.when).some(key => !['event','eventRevision','boardId','columnId','bindingId','resourceRef'].includes(key)) ||
+        Object.keys(rule.then).some(key => !['action','workflowId','workflowVersion','inputBindings'].includes(key)) ||
         rule.concurrency !== undefined && (!rule.concurrency || typeof rule.concurrency !== 'object' || Array.isArray(rule.concurrency) ||
           Object.keys(rule.concurrency).some(key => !['policy','maxActiveRuns','overflowPolicy'].includes(key))))
       throw new Error('Unsupported automation fields.');
     const event = capabilities.events.find(value => value.id === rule.when.event);
     if (!event) throw new Error('Unsupported automation event.');
+    const resourceRef = rule.when.resourceRef;
+    if (event.scope === 'resource' && (!resourceRef || typeof resourceRef !== 'object' || Array.isArray(resourceRef) ||
+        Object.getPrototypeOf(resourceRef) !== Object.prototype || Object.keys(resourceRef).length !== 2 ||
+        typeof resourceRef.kind !== 'string' || !/^[A-Za-z][\w.-]{0,79}$/.test(resourceRef.kind) ||
+        typeof resourceRef.id !== 'string' || !/^[A-Za-z0-9][\w.-]{0,119}$/.test(resourceRef.id)) ||
+        event.scope !== 'resource' && resourceRef !== undefined)
+      throw new Error('Resource-scoped automation requires an exact resource reference.');
     const descriptor = descriptorForEvent(event.id, rule.when.eventRevision);
     if (rule.when.eventRevision !== undefined && (!Number.isInteger(rule.when.eventRevision) || rule.when.eventRevision < 1 || !descriptor))
       throw new Error('Choose an available workflow event revision.');
@@ -57,8 +105,9 @@ export function createAutomations({ state, save, capabilities, eventDescriptors 
       return !validValue || Object.keys(condition).some(key => !['field','path','operator','value'].includes(key));
     }))
       throw new Error('Unsupported automation condition.');
-    workflowForProject(state, rule.then.workflowId, rule.then.workflowVersion, rule.projectId);
+    const workflow = workflowForProject(state, rule.then.workflowId, rule.then.workflowVersion, rule.projectId);
     if (!Number.isInteger(rule.then.workflowVersion) || rule.then.workflowVersion < 1) throw new Error('Choose a published workflow version.');
+    validateEventInputBindings(rule.then.inputBindings, descriptor, workflow.runInputSchema ?? { type: 'object', properties: {}, additionalProperties: false });
     const { boardId, columnId, bindingId } = rule.when;
     if (event.scope === 'binding' && !bindingId) throw new Error('Choose an import binding.');
     if (bindingId) {
@@ -112,6 +161,7 @@ export function createAutomations({ state, save, capabilities, eventDescriptors 
     },
     matches(rule, fact) {
       if (!rule.enabled || rule.projectId !== fact.projectId || rule.when.event !== fact.event) return false;
+      if (rule.when.resourceRef && (rule.when.resourceRef.kind !== fact.resourceRef?.kind || rule.when.resourceRef.id !== fact.resourceRef?.id)) return false;
       if (rule.when.bindingId && rule.when.bindingId !== fact.bindingId) return false;
       if (rule.when.boardId && rule.when.boardId !== fact.boardId) return false;
       if (rule.when.columnId && !(fact.toColumnId === rule.when.columnId && fact.fromColumnId !== rule.when.columnId)) return false;

@@ -301,10 +301,11 @@ export async function createRuntime({
     const scope = descriptor.tenantScope;
     for (const id of [descriptor.id, ...(descriptor.aliases ?? [])]) {
       const legacy = workAutomationCapabilities.events.find(value => value.id === id);
+      const workAlias = descriptor.source?.owner === 'work' && id !== descriptor.id && Boolean(legacy);
       const existing = automationEventCapabilityMap.get(id);
       if (existing && existing.revision > descriptor.revision) continue;
       automationEventCapabilityMap.set(id, { id, descriptorId: descriptor.id, revision: descriptor.revision, label: descriptor.label,
-        scope: legacy?.scope ?? scope, fields: [...new Set([...(legacy?.fields ?? []), ...fields])],
+        scope: workAlias ? legacy.scope : scope, fields: [...new Set([...(workAlias ? legacy.fields : []), ...fields])],
         payload: structuredClone(descriptor.payload), manual: Boolean(descriptor.manual) });
     }
   }
@@ -1122,13 +1123,11 @@ export async function createRuntime({
     workReplyConfirmation: (command, projectId) => work.catalog.workflowReplyConfirmation(command, projectId),
     makeSession,
     pinInstructions,
-    normalizeWorkflow,
     event,
     save: () => store.save(),
     now,
     getEngine: () => engine,
     requireText: text,
-    automations,
     workEventOutbox: work.catalog.workflowEvents,
     processEventDecisions: processWorkflowEventDecisions,
     authorizeStart: async (rule, session) => {

@@ -1026,6 +1026,52 @@ test('acceptance: profiles do not create provider sessions for a human-only even
     assert.equal((await f.act('getWorkflowRun', { workflowRunId: decision.runId })).workflowVersion, 1);
 });
 
+test('acceptance: an activated event agent keeps its workflow-specific profile over the project default and restart', async (t) => {
+    let generations = 0;
+    const f = await fixture(t, { generate: async function* () {
+        generations++;
+        yield { type: 'result', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'profile-submit', name: 'submit_step', arguments: {
+            summary: 'Assessment complete', outcome: 'success', artifacts: [],
+        } }], stopReason: 'stop', timestamp: Date.now() } };
+    } });
+    const base = await f.act('publishProfile', { id: 'general-agent', name: 'General agent', tools: [], skills: [] });
+    const chosen = await f.act('publishProfile', { id: 'procurement-agent', name: 'Procurement agent', tools: ['convoy.read_file'], skills: [] });
+    await f.act('setProjectProfile', { projectId: 'agent-platform', profile: { id: base.id, version: base.version } });
+    const ticket = await f.act('createTicket', { requestId: 'purchase-profile', title: 'Evaluate supplier', projectId: 'agent-platform' });
+    const board = await f.act('saveBoard', { name: 'Purchase profile queue', projectIds: ['agent-platform'], columns: [{ id: 'pending', name: 'Pending' }, { id: 'evaluating', name: 'Evaluating' }] });
+    await f.act('saveWorkflow', { workflow: { id: 'supplier-profile-review', name: 'Supplier profile review', capabilityProfile: { id: chosen.id, version: chosen.version }, nodes: [
+        { id: 'assess', kind: 'agent', name: 'Assess supplier', prompt: 'Assess the supplier.' },
+        { id: 'review', kind: 'human', name: 'Review assessment', prompt: 'Review the assessment.' },
+    ], edges: [{ from: 'assess', to: 'review', outcome: 'success' }] } });
+    await f.act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+        name: 'Assess purchase', projectId: 'agent-platform', enabled: true,
+        when: { event: 'ticket_moved', boardId: board.id, columnId: 'evaluating' }, if: [],
+        then: { action: 'start_workflow', workflowId: 'supplier-profile-review', workflowVersion: 1 },
+    } });
+    await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision, placement: { columnId: 'evaluating' } });
+    const state = await until(async () => {
+        const snapshot = await f.snapshot();
+        const decision = snapshot.workflowEventDecisions.items.find(value => value.ticketId === ticket.id && value.workflowId === 'supplier-profile-review');
+        const run = decision && snapshot.workflowRuns.find(value => value.id === decision.runId);
+        const session = run?.sessionId && snapshot.sessions.find(value => value.id === run.sessionId);
+        return run?.status === 'waiting_gate' && session ? { snapshot, decision, run, session } : null;
+    });
+    assert.equal(state.run.nodeId, 'review', 'the registered agent activity really activated before reaching the human task');
+    assert.equal(state.session.capabilityProfile.hash, chosen.hash);
+    assert.equal(state.session.workflow.capabilityProfile.version, chosen.version);
+    assert.equal(generations, 1);
+
+    await f.restart();
+    const restarted = await f.snapshot();
+    const run = await f.act('getWorkflowRun', { workflowRunId: state.run.id });
+    const session = restarted.sessions.find(value => value.id === run.sessionId);
+    assert.equal(run.workflowVersion, 1);
+    assert.equal(run.status, 'waiting_gate');
+    assert.equal(session.capabilityProfile.hash, chosen.hash);
+    assert.equal(session.workflow.capabilityProfile.version, chosen.version);
+    assert.equal(generations, 1, 'restart resumes the pinned human gate without replaying the agent');
+});
+
 for (const sendOutcome of ['pending', 'uncertain', 'spoofed-pre-dispatch-metadata']) test(`acceptance: approval sends the exact draft with ${sendOutcome} delivery before changing source status`, async (t) => {
     const approvedBody = '  Which edition?\nPlease include the version.\n';
     let writes = 0;

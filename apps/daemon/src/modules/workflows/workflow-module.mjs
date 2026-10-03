@@ -26,6 +26,7 @@ function checkedActivityIntent(value) {
 export function migrateWorkflowState(state, { defaultWorkflow, normalize }) {
   state.workflowRuns ??= {};
   state.workflowEffectLedger ??= {};
+  state.workflowEventRejections ??= {};
   for (const run of Object.values(state.workflowRuns)) {
     if (run.independentRun && run.attempt?.status === 'running' && run.flow) {
       if (['waiting_gate', 'waiting_event', 'awaiting_continue', 'awaiting_submission', 'paused'].includes(run.flow.status))
@@ -209,6 +210,8 @@ export function createWorkflows({
     const descriptor = eventJournal.descriptor(accepted.event.descriptor);
     if (!descriptor || (rule.when.event !== descriptor.id && !descriptor.aliases.includes(rule.when.event))) return false;
     if (rule.when.eventRevision !== undefined && rule.when.eventRevision !== accepted.event.descriptor.revision) return false;
+    if (rule.when.resourceRef && (rule.when.resourceRef.kind !== accepted.event.resourceRef?.kind ||
+        rule.when.resourceRef.id !== accepted.event.resourceRef?.id)) return false;
     const payload = accepted.event.payload;
     const ticketId = payload.ticketId;
     const fact = { ...payload, event: rule.when.event, projectId: accepted.event.projectId,
@@ -233,6 +236,20 @@ export function createWorkflows({
   function matchedEventRules(accepted) {
     return (state.automations ?? []).filter(rule => decisionMatches(rule, accepted));
   }
+  function resolveEventRunInput(rule, event) {
+    const workflow = state.workflows.find(value => value.id === rule.then.workflowId && (value.version ?? 1) === rule.then.workflowVersion);
+    if (!workflow) throw new Error('The automation’s pinned workflow version is unavailable.');
+    const schema = normalize(workflow).runInputSchema ?? { type: 'object', properties: {}, additionalProperties: false };
+    const values = {};
+    for (const [key, binding] of Object.entries(rule.then.inputBindings ?? {})) {
+      if (Object.hasOwn(binding, 'value')) values[key] = structuredClone(binding.value);
+      else {
+        const value = workflowEventPath(event.payload, binding.from.path.join('.'));
+        if (value !== undefined) values[key] = structuredClone(value);
+      }
+    }
+    return validateActivityValue(values, schema);
+  }
   const eventDecisionKey = (rule, event) => JSON.stringify([rule.id, rule.revision, event.source.id, event.source.eventId]);
   function reserveEventDecisions(event) {
     const accepted = { event };
@@ -254,6 +271,7 @@ export function createWorkflows({
       const status = conflictingMatches || overCapacity && overflowPolicy === 'reject' ? 'conflict' : overCapacity ? 'held' : 'reserved';
       const workflow = state.workflows.find(value => value.id === rule.then.workflowId && (value.version ?? 1) === rule.then.workflowVersion);
       const project = state.projects.find(value => value.id === rule.projectId);
+      const runInput = resolveEventRunInput(rule, event);
       const runId = randomUUID();
       const record = {
         at: now(), status, ruleId: rule.id, ruleRevision: rule.revision, subscriptionId: rule.id,
@@ -262,6 +280,7 @@ export function createWorkflows({
         principal: structuredClone(rule.principal), ticketId: event.payload?.ticketId,
         trigger: rule.when.event, sourceEvent: structuredClone(event), eventId: event.id, runId,
         decisionKey: triggerKey, attempts: 0,
+        runInput, runInputDigest: activityDigest(runInput),
         concurrencyPolicy: concurrency.policy, overflowPolicy: concurrency.policy === 'independent' ? overflowPolicy : undefined,
         maxActiveRuns: concurrency.maxActiveRuns ?? 1,
         ...(conflictingMatches ? { message: 'Multiple enabled subscriptions matched this event; no workflow was started.' } : {}),
@@ -279,6 +298,13 @@ export function createWorkflows({
         value.projectId && value.projectId !== projectId || value.teamId && value.teamId !== project.teamId)
       throw new Error('Workflow is not available for this schedule project.');
     return value;
+  }
+  function pinnedDecisionRunInput(decision) {
+    const runInput = decision.runInput ?? {};
+    const runInputDigest = activityDigest(runInput);
+    if (decision.runInputDigest !== undefined && decision.runInputDigest !== runInputDigest)
+      throw new Error('The decision’s pinned workflow input changed.');
+    return runInput;
   }
   function setPayloadPath(target, path, value) {
     const parts = path.split('.'); let current = target;
@@ -446,6 +472,10 @@ export function createWorkflows({
     { beforeSave: accepted => [...reserveEventDecisions(accepted), reserveScheduleDecision(accepted, schedule)] });
     fire.status = 'accepted'; fire.acceptedAt = now(); await save();
   }
+  function resolveScheduleRunInput(input, workflow) {
+    const schema = normalize(workflow).runInputSchema ?? { type: 'object', properties: {}, additionalProperties: false };
+    return validateActivityValue(input ?? {}, schema);
+  }
   function reserveScheduleDecision(event, schedule) {
     const decisionKey = `schedule:${schedule.id}:${schedule.revision}:${event.source.eventId}`;
     if (!state.automationDecisionLedger[decisionKey]) {
@@ -454,6 +484,7 @@ export function createWorkflows({
         subscriptionRevision: schedule.revision, workflowId: schedule.workflowId, workflowVersion: schedule.workflowVersion,
         projectId: schedule.projectId, organizationId: schedule.organizationId, principal: structuredClone(schedule.principal),
         sourceEvent: structuredClone(event), eventId: event.id, runId: randomUUID(), decisionKey, attempts: 0,
+        runInput: structuredClone(schedule.runInput ?? {}), runInputDigest: schedule.runInputDigest ?? activityDigest(schedule.runInput ?? {}),
         concurrencyPolicy: 'independent', maxActiveRuns: 100, workflowDigest: schedule.workflowDigest };
     }
     return decisionKey;
@@ -594,7 +625,7 @@ export function createWorkflows({
         })),
         workflowSchedules: (() => {
           const schedules = this.scheduleSnapshot(scope);
-          return { items: schedules.slice(0, 100).map(({ principal, ...schedule }) => schedule), total: schedules.length,
+          return { items: schedules.slice(0, 100).map(({ principal, runInput, ...schedule }) => schedule), total: schedules.length,
             truncated: schedules.length > 100 };
         })(),
         workflowWebhookBindings: (() => {
@@ -610,8 +641,17 @@ export function createWorkflows({
           ruleId: decision.ruleId, ruleRevision: decision.ruleRevision, workflowId: decision.workflowId,
           workflowVersion: decision.workflowVersion, runId: decision.runId, ticketId: decision.ticketId,
           sourceEventId: decision.sourceEvent?.source?.eventId, at: decision.at,
+          ...(decision.runInputDigest ? { runInputDigest: decision.runInputDigest } : {}),
           ...(decision.message ? { message: String(decision.message).slice(0, 300) } : {}),
         })), total: scopedDecisions.length, truncated: scopedDecisions.length > 100 },
+        workflowEventRejections: (() => {
+          const rejected = Object.values(state.workflowEventRejections ?? {}).filter(value =>
+            (!organizationId || value.organizationId === organizationId) &&
+            (!scope?.projectIds || scope.projectIds.includes(value.projectId)));
+          return { items: rejected.slice(-100).map(({ key, reason, source, descriptor, projectId, receivedAt }) =>
+            ({ key, reason, source: structuredClone(source), descriptor: structuredClone(descriptor), projectId, receivedAt })),
+            total: rejected.length, truncated: rejected.length > 100 };
+        })(),
         automationDecisions: scopedDecisions.filter(([, decision]) => decision.ticketId !== undefined).slice(-100).map(([triggerKey, decision]) => ({
           triggerKey, workflowId: decision.workflowId, workflowVersion: decision.workflowVersion, ticketId: decision.ticketId,
           ...(decision.trigger ? { trigger: decision.trigger } : {}), at: decision.at,
@@ -701,6 +741,42 @@ export function createWorkflows({
     async acceptEvent(envelope) {
       return eventJournal.accept(envelope, { beforeSave: event => reserveEventDecisions(event) });
     },
+    async acceptOutboxEvent(envelope) {
+      if (envelope?.causation?.depth > 16)
+        return { rejected: await this.recordCausalLimitRejection(envelope) };
+      return { accepted: await this.acceptEvent(envelope) };
+    },
+    async recordCausalLimitRejection(envelope) {
+      const causation = envelope?.causation;
+      if (!causation || !Number.isInteger(causation.depth) || causation.depth <= 16 ||
+          typeof causation.eventId !== 'string' || !causation.eventId || causation.eventId.length > 160 ||
+          typeof causation.rootEventId !== 'string' || !causation.rootEventId || causation.rootEventId.length > 160 ||
+          typeof envelope?.source?.id !== 'string' || !envelope.source.id || envelope.source.id.length > 120 ||
+          typeof envelope.source.eventId !== 'string' || !envelope.source.eventId || envelope.source.eventId.length > 160 ||
+          typeof envelope.organizationId !== 'string' || !envelope.organizationId || envelope.organizationId.length > 100 ||
+          typeof envelope.projectId !== 'string' || !envelope.projectId || envelope.projectId.length > 100)
+        throw new Error('Workflow event cascade rejection is invalid.');
+      const descriptor = eventJournal.descriptor(envelope.descriptor);
+      if (!descriptor || descriptor.tenantScope === 'organization' || descriptor.tenantScope === 'resource' && !envelope.resourceRef ||
+          descriptor.tenantScope !== 'resource' && envelope.resourceRef)
+        throw new Error('Workflow event cascade rejection does not match a registered project event.');
+      const key = JSON.stringify([envelope.source.id, envelope.source.eventId]);
+      const current = state.workflowEventRejections[key];
+      if (current) {
+        if (current.organizationId !== envelope.organizationId || current.projectId !== envelope.projectId ||
+            current.descriptor.id !== descriptor.id || current.descriptor.revision !== descriptor.revision ||
+            current.causation.runId !== causation.runId || current.causation.rootEventId !== causation.rootEventId)
+          throw new Error('Workflow event rejection identity conflicts with an earlier disposition.');
+        return structuredClone(current);
+      }
+      const rejection = { key, reason: 'causation_limit', source: { id: envelope.source.id, eventId: envelope.source.eventId },
+        descriptor: { id: descriptor.id, revision: descriptor.revision }, organizationId: envelope.organizationId,
+        projectId: envelope.projectId, causation: { eventId: causation.eventId, runId: causation.runId,
+          depth: causation.depth, rootEventId: causation.rootEventId }, receivedAt: now() };
+      state.workflowEventRejections[key] = rejection;
+      await save();
+      return structuredClone(rejection);
+    },
     async saveSchedule(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Workflow schedule is required.');
       const id = input.id ?? randomUUID();
@@ -713,6 +789,7 @@ export function createWorkflows({
       if (previous && (previous.organizationId !== project.organizationId || previous.projectId !== project.id))
         throw new Error('Workflow schedule identity cannot move to another project.');
       const schedule = normalizeSchedule(input.schedule);
+      const runInput = resolveScheduleRunInput(input.runInput, workflow);
       const missedFirePolicy = validateMissedFirePolicy(input.missedFirePolicy);
       const principal = input.principal;
       if (!principal || !['user', 'workload'].includes(principal.kind)) throw new Error('Workflow schedule needs a governed principal.');
@@ -720,7 +797,7 @@ export function createWorkflows({
         ? previous.nextFireAt : nextScheduleOccurrence(schedule, now());
       const value = { id, name: String(input.name ?? '').trim().slice(0, 120), organizationId: project.organizationId,
         projectId: project.id, workflowId: workflow.id, workflowVersion: workflow.version ?? 1, workflowDigest: activityDigest(workflow),
-        principal: structuredClone(principal), schedule, missedFirePolicy, enabled: Boolean(input.enabled),
+        principal: structuredClone(principal), runInput, runInputDigest: activityDigest(runInput), schedule, missedFirePolicy, enabled: Boolean(input.enabled),
         revision: (previous?.revision ?? 0) + 1, nextFireAt, updatedAt: now() };
       if (!value.name) throw new Error('Name the workflow schedule.');
       if (previous) previous.enabled = false;
@@ -810,7 +887,8 @@ export function createWorkflows({
           value.revision === decision.subscriptionRevision);
         if (!schedule || activityDigest(schedule.principal) !== activityDigest(decision.principal) ||
             schedule.workflowId !== decision.workflowId || schedule.workflowVersion !== decision.workflowVersion ||
-            schedule.workflowDigest !== decision.workflowDigest)
+            schedule.workflowDigest !== decision.workflowDigest ||
+            (schedule.runInputDigest ?? activityDigest(schedule.runInput ?? {})) !== (decision.runInputDigest ?? activityDigest(decision.runInput ?? {})))
           throw new Error('The pinned schedule revision is unavailable or changed.');
       } else {
         const rule = state.automations?.find(value => value.id === decision.ruleId && value.revision === decision.ruleRevision);
@@ -832,7 +910,8 @@ export function createWorkflows({
       if (existing) {
         if (existing.provenance?.decisionKey !== triggerKey || existing.provenance?.eventId !== decision.eventId ||
             existing.projectId !== decision.projectId || activityDigest(existing.principal) !== activityDigest(decision.principal) ||
-            existing.provenance?.workflowDigest !== decision.workflowDigest)
+            existing.provenance?.workflowDigest !== decision.workflowDigest ||
+            existing.runInputDigest !== activityDigest(pinnedDecisionRunInput(decision)))
           throw new Error('Reserved workflow run identity conflicts with its event decision.');
         if (decision.status !== 'started') { decision.status = 'started'; decision.startedAt ??= now(); await save(); }
         return structuredClone(existing);
@@ -841,6 +920,7 @@ export function createWorkflows({
       const workflow = state.workflows.find(value => value.id === decision.workflowId && (value.version ?? 1) === decision.workflowVersion);
       if (!workflow || activityDigest(workflow) !== decision.workflowDigest)
         throw new Error('The decision’s pinned workflow revision is unavailable or changed.');
+      const runInput = pinnedDecisionRunInput(decision);
       const activeRuns = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === decision.subscriptionId &&
         !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
       const waiting = Object.entries(state.automationDecisionLedger).filter(([key, value]) => key !== triggerKey &&
@@ -858,10 +938,11 @@ export function createWorkflows({
       }
       try {
         const run = await startRunInternal({ projectId: decision.projectId, organizationId: decision.organizationId,
-          principal: decision.principal, workflow, activeTicketId: decision.ticketId ?? null, reservedRunId: decision.runId,
+          principal: decision.principal, workflow, activeTicketId: decision.ticketId ?? null, runInput, reservedRunId: decision.runId,
           provenance: { eventId: decision.eventId, sourceEventId: decision.sourceEvent.source.eventId,
             subscriptionId: decision.subscriptionId, subscriptionRevision: decision.subscriptionRevision,
-            decisionKey: triggerKey, workflowDigest: decision.workflowDigest, eventCursor: decision.sourceEvent.sequence } });
+            decisionKey: triggerKey, workflowDigest: decision.workflowDigest, eventCursor: decision.sourceEvent.sequence,
+            ...(decision.sourceEvent.causation ? { causation: structuredClone(decision.sourceEvent.causation) } : {}) } });
         decision.status = 'started'; decision.startedAt = now(); decision.attempts = (decision.attempts ?? 0) + 1;
         await save();
         return run;
@@ -876,7 +957,22 @@ export function createWorkflows({
       const decision = state.automationDecisionLedger[triggerKey];
       if (!decision || !['held', 'failed', 'conflict'].includes(decision.status)) throw new Error('Workflow event decision is not available for explicit retry.');
       const existing = state.workflowRuns?.[decision.runId];
-      if (existing) return structuredClone(existing);
+      if (existing) {
+        if (existing.provenance?.decisionKey !== triggerKey || existing.provenance?.eventId !== decision.eventId ||
+            existing.projectId !== decision.projectId || activityDigest(existing.principal) !== activityDigest(decision.principal) ||
+            existing.provenance?.workflowDigest !== decision.workflowDigest ||
+            existing.runInputDigest !== activityDigest(pinnedDecisionRunInput(decision)))
+          throw new Error('Reserved workflow run identity conflicts with its event decision.');
+        // A run can be durably created before the decision acknowledgement is
+        // saved. Reconcile that owner record in place; never allocate or
+        // dispatch a second run for the same accepted event.
+        decision.status = 'started';
+        decision.startedAt ??= now();
+        decision.reconciledAt = now();
+        delete decision.message;
+        await save();
+        return structuredClone(existing);
+      }
       const active = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === decision.subscriptionId &&
         !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
       const pending = Object.values(state.automationDecisionLedger).filter(value => value !== decision &&
@@ -886,6 +982,21 @@ export function createWorkflows({
       decision.status = 'reserved'; delete decision.message; decision.retryRequestedAt = now();
       await save();
       return structuredClone(decision);
+    },
+    legacyDecisionForRetry(triggerKey) {
+      const decision = state.automationDecisionLedger?.[triggerKey];
+      if (!decision || !['failed', 'blocked_active'].includes(decision.status))
+        throw new Error('Workflow trigger is not failed or has already started.');
+      const rule = state.automations?.find(value => value.id === decision.ruleId && value.revision === decision.ruleRevision);
+      if (decision.ruleId && (!rule || !rule.enabled)) throw new Error('Start automation changed. Review it before retrying.');
+      if (rule) automations.validate(rule);
+      const workflow = state.workflows.find(value => value.id === decision.workflowId && (value.version ?? 1) === decision.workflowVersion);
+      if (!workflow) throw new Error('The pinned workflow version for this trigger is unavailable.');
+      return {
+        decision: structuredClone(decision),
+        ...(rule ? { rule: structuredClone(rule) } : {}),
+        workflow: { ...normalize(structuredClone(workflow)), version: decision.workflowVersion },
+      };
     },
     async markLegacyDecisionPending(triggerKey) {
       const decision = state.automationDecisionLedger[triggerKey];

@@ -8,7 +8,7 @@ import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.m
 import { createPersistence } from '../../apps/daemon/src/adapters/persistence/index.mjs';
 import { createRuntime as createControlPlaneRuntime } from '../../apps/daemon/src/control-plane/runtime.mjs';
 import { initialControlPlaneState } from '../../apps/daemon/src/control-plane/state-schema.mjs';
-import { defaultWorkflowDefinition } from '../../apps/daemon/src/modules/workflows/index.mjs';
+import { defaultWorkflowDefinition, activityDigest } from '../../apps/daemon/src/modules/workflows/index.mjs';
 import { createApp } from '../../apps/daemon/src/http/app.mjs';
 
 const callback = {
@@ -24,6 +24,12 @@ const organizationSignal = {
   source: { owner: 'publication-adapter' }, tenantScope: 'organization',
   payload: [{ path: 'requestId', type: 'string', required: true }, { path: 'status', type: 'string', required: true }],
   correlationPaths: ['requestId'], maxPayloadBytes: 4096, manual: true,
+};
+const inventorySignal = {
+  id: 'inventory.stock_counted', revision: 1, label: 'Stock counted',
+  source: { owner: 'inventory-adapter' }, tenantScope: 'resource',
+  payload: [{ path: 'count', type: 'number', required: true }],
+  correlationPaths: [], maxPayloadBytes: 4096, manual: false,
 };
 const publicationRevision2 = {
   ...callback, revision: 2, label: 'Publication callback v2',
@@ -113,6 +119,31 @@ test('manual event submission binds tenant and principal, deduplicates, and star
   assert.equal(isolated.sessions.length, 0);
 });
 
+test('resource-scoped inventory subscriptions preserve generic scope without Work import bindings', async t => {
+  const f = await fixture(t, { workflowEvents: [inventorySignal] });
+  const workflow = await f.act('saveWorkflow', { projectId: f.project.id, workflow: {
+    id: 'inventory-count-review', name: 'Inventory count review',
+    nodes: [{ id: 'review', name: 'Review count', kind: 'human', prompt: 'Review the stock count.' }], edges: [],
+  } });
+  const advertised = (await f.snapshot()).automationCapabilities.events.find(value => value.id === inventorySignal.id);
+  assert.equal(advertised.scope, 'resource');
+  assert.equal(advertised.descriptorId, inventorySignal.id);
+  const resourceRef = { kind: 'stock-item', id: 'SKU-4821' };
+  const saved = await f.act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+    name: 'Review a stock count', projectId: f.project.id,
+    when: { event: inventorySignal.id, eventRevision: 1, resourceRef },
+    if: [{ path: 'count', operator: 'greaterThan', value: 0 }],
+    then: { action: 'start_workflow', workflowId: workflow.id, workflowVersion: workflow.version },
+    concurrency: { policy: 'independent', maxActiveRuns: 2 }, enabled: true,
+  } });
+  assert.deepEqual(saved.when.resourceRef, resourceRef);
+  const snapshot = await f.snapshot();
+  assert.equal(snapshot.automations.find(value => value.id === saved.id).when.resourceRef.id, 'SKU-4821');
+  assert.equal(snapshot.automationCapabilities.events.find(value => value.id === inventorySignal.id).scope, 'resource');
+  assert.equal(snapshot.workflowRuns.length, 0);
+  assert.equal(snapshot.sessions.length, 0);
+});
+
 test('manual event correlation reads declared nested paths', async t => {
   const f = await fixture(t, { workflowEvents: [nestedCallback] });
   const workflow = await f.act('saveWorkflow', { projectId: f.project.id, workflow: {
@@ -166,7 +197,7 @@ test('event decision restart reuses its reserved run ID and never replays an app
   const receiptPath = join(directory, 'adapter-receipt.json');
   const client = 'event-decision-recovery';
   const committed = { ...inventory, ref: { id: 'inventory.durable-commit', revision: 1 },
-    inputSchema: { type: 'object', properties: { recordId: { type: 'string', minLength: 1, maxLength: 80 } }, required: ['recordId'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { recordId: { type: 'string' } }, required: ['recordId'], additionalProperties: false },
     outputSchema: { type: 'object', properties: { receiptId: { type: 'string', minLength: 1, maxLength: 160 }, recordId: { type: 'string', minLength: 1, maxLength: 80 } }, required: ['receiptId', 'recordId'], additionalProperties: false },
     effect: 'durable-effect', approval: { required: false }, cancellation: 'reconcile-after-dispatch',
     confirmation: 'adapter-confirmed', reconciliation: 'adapter' };
@@ -208,12 +239,14 @@ test('event decision restart reuses its reserved run ID and never replays an app
   await act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
   const workflow = await act('saveWorkflow', { projectId: project.id, workflow: {
     id: 'durable-event-commit', name: 'Durable event commit',
+    runInputSchema: { type: 'object', properties: { recordId: { type: 'string' } }, required: ['recordId'], additionalProperties: false },
     nodes: [{ id: 'commit', name: 'Commit inventory', kind: 'action', activity: committed.ref,
-      bindings: { recordId: { literal: 'inventory-record-91' } } }], edges: [],
+      bindings: { recordId: { from: { kind: 'run_input', path: ['recordId'] } } } }], edges: [],
   } });
   await act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
     name: 'Commit inventory callback', projectId: project.id, when: { event: callback.id, eventRevision: 1 }, if: [],
-    then: { action: 'start_workflow', workflowId: workflow.id, workflowVersion: workflow.version },
+    then: { action: 'start_workflow', workflowId: workflow.id, workflowVersion: workflow.version,
+      inputBindings: { recordId: { from: { kind: 'event_payload', path: ['requestId'] } } } },
     concurrency: { policy: 'independent', maxActiveRuns: 2 }, enabled: true,
   } });
   await close();
@@ -320,6 +353,12 @@ test('event decision restart reuses its reserved run ID and never replays an app
   assert.equal(Object.keys(state.workflowRuns).length, 1);
   assert.equal(Object.values(state.automationDecisionLedger).filter(value => value.workflowId === workflow.id).length, 1);
   assert.equal(Object.values(state.automationDecisionLedger).find(value => value.workflowId === workflow.id).runId, reserved.runId);
+  const decision = Object.values(state.automationDecisionLedger).find(value => value.workflowId === workflow.id);
+  const pinnedRun = state.workflowRuns[reserved.runId];
+  assert.deepEqual(decision.runInput, { recordId: 'inventory-record-91' });
+  assert.equal(decision.runInputDigest, activityDigest({ recordId: 'inventory-record-91' }));
+  assert.deepEqual(pinnedRun.runInput, decision.runInput);
+  assert.equal(pinnedRun.runInputDigest, decision.runInputDigest);
   assert.equal(JSON.parse(await readFile(receiptPath, 'utf8')).dispatches, 1);
   assert.equal((await runtime.snapshot(undefined, client)).sessions.length, 0);
   await act('claimWorkflowRun', { workflowRunId: reserved.runId });

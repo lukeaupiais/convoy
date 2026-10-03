@@ -113,7 +113,9 @@ export type RuntimeSnapshot = {
   workflowEventDecisions?: { items: { key: string; status: string; projectId: string; organizationId: string;
     subscriptionId: string; subscriptionRevision: number; ruleId?: string; ruleRevision?: number;
     workflowId: string; workflowVersion: number; runId: string; ticketId?: number; sourceEventId?: string;
-    at: string; message?: string }[]; total: number; truncated: boolean };
+    runInputDigest?: string; at: string; message?: string }[]; total: number; truncated: boolean };
+  workflowEventRejections?: { items: { key: string; reason: 'causation_limit'; source: { id: string; eventId: string };
+    descriptor: { id: string; revision: number }; projectId: string; receivedAt: string }[]; total: number; truncated: boolean };
   workflowRuns?: import('./model/workflows').WorkflowRun[];
   workflowRunsTotal?: number;
   workflowRunsTruncated?: boolean;

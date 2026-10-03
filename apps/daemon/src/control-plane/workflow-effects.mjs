@@ -13,8 +13,8 @@ export function migrateWorkflowEffectState(state) {
  * uncertain create/update/move.
  */
 export function createWorkflowEffects({ state, catalog, conversations, sessionFor, boards, workCommand, workEvidence,
-  latestDeliveredReply, workReplyConfirmation, inspectChanges, makeSession, pinInstructions, normalizeWorkflow,
-  event, save, now, getEngine, requireText, automations, authorizeStart, activityCatalog, injectedActivities = [],
+  latestDeliveredReply, workReplyConfirmation, inspectChanges, makeSession, pinInstructions,
+  event, save, now, getEngine, requireText, authorizeStart, activityCatalog, injectedActivities = [],
   getWorkflowOwner = () => null, authorizeActivity = async () => {}, workEventOutbox, processEventDecisions = async () => {} }) {
   migrateWorkflowEffectState(state);
   const activityImplementations = createWorkflowActivityImplementationMap({ workCommand, workEvidence,
@@ -57,7 +57,14 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
         rootEventId: parent?.causation?.rootEventId ?? parent?.eventId ?? `run:${fact.causation.runId}`,
       } } : {}),
     };
-    await owner.acceptEvent(envelope);
+    const disposition = await owner.acceptOutboxEvent(envelope);
+    if (disposition.rejected) {
+      // The Work fact may be acknowledged only after Workflow has durably
+      // recorded this known terminal cascade disposition. Other failures stay
+      // pending so they remain visible and retryable.
+      await workEventOutbox.acknowledge(fact.kind, fact.key);
+      return;
+    }
     await processEventDecisions();
     await owner.deliverPendingWaitEvents?.();
     await workEventOutbox.acknowledge(fact.kind, fact.key);
@@ -481,28 +488,25 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
   }
 
   async function retryTrigger(session, command) {
-    const triggerKey = requireText(command.triggerKey, 500); const record = state.automationDecisionLedger[triggerKey];
-    if (!record || !['failed','blocked_active'].includes(record.status)) throw new Error('Workflow trigger is not failed or has already started.');
+    const triggerKey = requireText(command.triggerKey, 500);
+    const retry = await getWorkflowOwner()?.legacyDecisionForRetry(triggerKey);
+    if (!retry) throw new Error('Workflow trigger retry is unavailable.');
+    const { decision: record, rule } = retry;
     if (session.flow && !['completed', 'cancelled'].includes(session.flow.status)) throw new Error('The triggered workflow is already active.');
-    const rule = state.automations?.find(value => value.id === record.ruleId && value.revision === record.ruleRevision);
-    if (record.ruleId && (!rule || !rule.enabled)) throw new Error('Start automation changed. Review it before retrying.');
-    const workflow = state.workflows.find(value => value.id === record.workflowId && value.version === record.workflowVersion);
-    if (!workflow) throw new Error('The pinned workflow version for this trigger is unavailable.');
     const ticket = catalog.ticket(record.ticketId); if (!ticket) throw new Error('Triggered ticket no longer exists.');
     if (String(session.activeTicketId) !== String(ticket.id)) throw new Error('Decision belongs to another ticket.');
     if (rule) {
-      automations.validate(rule);
       if (ticket.projectId !== rule.projectId) throw new Error('Ticket project changed.');
       session.executionPrincipal = structuredClone(rule.principal);
       await authorizeStart(rule, session);
     }
-    session.workflow = { ...normalizeWorkflow(workflow), version: workflow.version };
+    session.workflow = retry.workflow;
     await getWorkflowOwner()?.markLegacyDecisionPending(triggerKey);
-    event(session, 'workflow_trigger_retry', { triggerKey, workflowId: workflow.id, workflowVersion: workflow.version }); await save();
+    event(session, 'workflow_trigger_retry', { triggerKey, workflowId: retry.workflow.id, workflowVersion: retry.workflow.version }); await save();
     try { await getEngine().start(session, { triggerKey }); await getWorkflowOwner()?.markLegacyDecisionStarted(triggerKey); }
     catch (error) {
       await getWorkflowOwner()?.failLegacyDecision(triggerKey, error);
-      event(session, 'workflow_trigger_failed', { triggerKey, workflowId: workflow.id, ticketId: ticket.id, message: error.message });
+      event(session, 'workflow_trigger_failed', { triggerKey, workflowId: retry.workflow.id, ticketId: ticket.id, message: error.message });
     }
     await save();
   }

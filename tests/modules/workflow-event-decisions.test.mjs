@@ -15,7 +15,7 @@ const scheduleEvent = {
   correlationPaths: ['scheduleId'], maxPayloadBytes: 2048,
 };
 
-function fixture({ now = () => '2026-01-01T00:00:00.000Z' } = {}) {
+function fixture({ now = () => '2026-01-01T00:00:00.000Z', save = async () => {} } = {}) {
   const workflow = { id: 'inventory-review', version: 1, organizationId: 'org-a', name: 'Inventory review', nodes: [
     { id: 'review', kind: 'human', name: 'Review', prompt: 'Review this inventory result.' },
   ], edges: [] };
@@ -26,7 +26,7 @@ function fixture({ now = () => '2026-01-01T00:00:00.000Z' } = {}) {
     principal: { kind: 'user', userId: 'operator-a' } };
   const state = { projects: [{ id: 'project-a', organizationId: 'org-a' }], workflows: [workflow], automations: [rule] };
   let starts = 0;
-  const workflows = createWorkflows({ state, save: async () => {}, defaultWorkflow: workflow,
+  const workflows = createWorkflows({ state, save, defaultWorkflow: workflow,
     normalize: normalizeWorkflow, validateBindings: () => {}, effects: {}, requestStop: async () => {},
     automations: { snapshot: () => [], validate: () => {} }, eventDescriptors: [event, scheduleEvent],
     engine: { async start(run) { starts++; run.flow = { workflowId: workflow.id, workflowVersion: workflow.version,
@@ -35,6 +35,35 @@ function fixture({ now = () => '2026-01-01T00:00:00.000Z' } = {}) {
   });
   return { state, workflows, rule, get starts() { return starts; } };
 }
+
+test('explicit retry reconciles a failed acknowledgement to the already-created canonical run', async () => {
+  let failRunSave = true;
+  const f = fixture({ save: async () => {
+    if (failRunSave && Object.keys(f.state?.workflowRuns ?? {}).length) {
+      failRunSave = false;
+      throw new Error('run persisted but acknowledgement was lost');
+    }
+  } });
+  const accepted = await f.workflows.acceptEvent({ descriptor: { id: event.id, revision: 1 },
+    source: { id: 'inventory.source-a', eventId: 'ack-loss' }, organizationId: 'org-a', projectId: 'project-a',
+    payload: { requestId: 'ack-loss' }, correlation: { key: 'requestId', value: 'ack-loss' } });
+  const [key, failed] = Object.entries(f.state.automationDecisionLedger).find(([, value]) => value.eventId === accepted.event.id);
+  await assert.rejects(f.workflows.ensureRunForDecision(key), /acknowledgement was lost/);
+  assert.equal(failed.status, 'failed');
+  assert.equal(f.starts, 1);
+  assert.equal(Object.keys(f.state.workflowRuns).length, 1);
+  const originalRunId = failed.runId;
+  const existing = f.state.workflowRuns[originalRunId];
+
+  const reconciled = await f.workflows.retryEventDecision(key);
+  assert.equal(reconciled.id, originalRunId);
+  assert.equal(failed.status, 'started');
+  assert.equal(failed.reconciledAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(f.starts, 1, 'acknowledgement recovery must not redispatch or create a second run');
+  assert.equal((await f.workflows.ensureRunForDecision(key)).id, originalRunId);
+  assert.equal(f.state.workflowRuns[originalRunId], existing);
+  assert.equal(f.starts, 1);
+});
 
 test('subscription reservations enforce capacity and explicit retry reuses the reserved run ID', async () => {
   const f = fixture();

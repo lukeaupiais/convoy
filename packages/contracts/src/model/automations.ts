@@ -9,9 +9,10 @@ export type AutomationRule = {
   name: string;
   organizationId: string;
   projectId: string;
-  when: { event: AutomationEvent; eventRevision?: number; boardId?: string; columnId?: string; bindingId?: string };
+  when: { event: AutomationEvent; eventRevision?: number; boardId?: string; columnId?: string; bindingId?: string; resourceRef?: { kind: string; id: string } };
   if: AutomationCondition[];
-  then: { action: 'start_workflow'; workflowId: string; workflowVersion: number };
+  then: { action: 'start_workflow'; workflowId: string; workflowVersion: number;
+    inputBindings?: Record<string, { value: unknown } | { from: { kind: 'event_payload'; path: string[] } }> };
   enabled: boolean;
   concurrency?: { policy: 'reject' | 'hold' | 'independent'; maxActiveRuns: number; overflowPolicy?: 'reject' | 'hold' };
   principal:
