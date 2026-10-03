@@ -188,6 +188,26 @@ test('decision labels survive draft codec round trips and invalid metadata is re
   assert.match(validateWorkflow(draft).join(' '), /supported human outcomes/);
 });
 
+test('legacy gate editor conversion emits labels-only data without the internal trust marker', () => {
+  const graph = fromWorkflow({ id: 'legacy-editor', name: 'Legacy editor', nodes: [{
+    id: 'review', kind: 'human', name: 'Review', prompt: 'Review',
+    legacyHumanTask: true,
+    humanTask: { outcomes: [
+      { id: 'approved', label: 'Accept estimate', effect: 'approve_activity' },
+      { id: 'changes_requested', label: 'Revise estimate' },
+    ] },
+    decisionLabels: { approved: 'Accept estimate', changes_requested: 'Revise estimate' },
+  }] });
+  const [wire] = toWorkflow(graph).nodes;
+  assert.equal(wire.legacyHumanTask, undefined);
+  assert.equal(wire.humanTask, undefined);
+  assert.deepEqual(wire.decisionLabels, { approved: 'Accept estimate', changes_requested: 'Revise estimate' });
+  graph.nodes[0] = { ...graph.nodes[0], legacyHumanTask: undefined, humanTask: {
+    outcomes: [{ id: 'approve', label: 'Approve' }, { id: 'decline', label: 'Decline' }],
+  } };
+  assert.deepEqual(toWorkflow(graph).nodes[0].humanTask?.outcomes.map(({ id }) => id), ['approve', 'decline']);
+});
+
 test('configured human task form and explicit effect policy survive codec round trips', () => {
   const task = { outcomes: [
     { id: 'authorize_purchase', label: 'Authorize purchase', effect: 'approve_activity' },

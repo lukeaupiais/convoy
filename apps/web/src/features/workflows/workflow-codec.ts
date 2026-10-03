@@ -37,6 +37,8 @@ export type GraphNode = {
   y: number;
   advance?: 'automatic' | 'manual';
   decisionLabels?: DecisionLabels;
+  /** Internal projection of a persisted legacy gate; never serialized to callers. */
+  legacyHumanTask?: boolean;
   humanTask?: WorkflowStep['humanTask'];
   artifact?: Artifact;
   presentationBindings?: PresentationBinding[];
@@ -395,6 +397,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     advance: value.advance === 'manual' ? 'manual' : 'automatic',
     decisionLabels,
     humanTask,
+    legacyHumanTask: value.legacyHumanTask === true ? true : undefined,
     artifact: artifact
       ? {
           path: String(artifact.path ?? ''),
@@ -505,6 +508,7 @@ export function backendNode(node: GraphNode): WorkflowStep {
     session,
     artifact,
     presentationBindings,
+    legacyHumanTask: _legacyHumanTask,
     ...rest
   } = node;
   const result: Record<string, unknown> = {
@@ -513,6 +517,10 @@ export function backendNode(node: GraphNode): WorkflowStep {
     prompt: node.prompt,
   };
   if (type === 'branch' && !node.prompt) delete result.prompt;
+  // Round-trip a persisted legacy gate as its historical labels-only shape.
+  // The daemon's persisted decoder restores its compatibility projection;
+  // callers cannot publish the internal authorization marker themselves.
+  if (type === 'approval' && node.legacyHumanTask) delete result.humanTask;
   if (artifact && (artifact.path || artifact.headings.some((heading) => heading.trim())))
     result.artifact = {
       path: artifact.path,

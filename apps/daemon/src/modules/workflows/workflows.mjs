@@ -287,6 +287,11 @@ export function normalizeWorkflow(input, { publishing = false } = {}) {
   if (!input || typeof input !== 'object') throw new Error('Workflow is required.');
   const isLegacy = !Array.isArray(input.nodes); const sourceNodes = isLegacy ? input.steps : input.nodes;
   if (!Array.isArray(sourceNodes) || !sourceNodes.length || sourceNodes.length > 100) throw new Error('Add between 1 and 100 workflow nodes.');
+  // This marker is an internal compatibility projection. Older clients may
+  // still publish a bare human node, but cannot submit the marker itself as
+  // caller-selectable publication policy.
+  if (publishing && sourceNodes.some(node => node?.legacyHumanTask !== undefined))
+    throw new Error('Legacy human-task markers are not accepted in published input.');
   const value = { id: input.id || randomUUID(), name: required(input.name, 'Workflow name', 120), schemaVersion: 3, nodes: [], edges: [], entryNode: input.entryNode ?? input.startNode, maxRevisions: input.maxRevisions ?? 3 };
   const runInputSchema = input.runInputSchema ?? { type: 'object', properties: {}, required: [], additionalProperties: false };
   validateActivitySchema(runInputSchema);

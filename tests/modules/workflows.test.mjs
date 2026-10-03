@@ -355,6 +355,15 @@ test('configured human outcomes, bounded forms, reviewer selectors, and deadline
     id: 'review', name: 'Review', kind: 'human', legacyHumanTask: true,
     humanTask: { outcomes: [{ id: 'release', label: 'Release' }, { id: 'revise', label: 'Revise' }], form: { fields: [] } },
   }] }), /legacy compatibility cannot be combined/i);
+  const exactLegacyMarker = { id: 'exact-forged-legacy-marker', name: 'Forged marker', nodes: [{
+    id: 'review', name: 'Review', kind: 'human', legacyHumanTask: true,
+    humanTask: { outcomes: [
+      { id: 'approved', label: 'Approved', effect: 'approve_activity' },
+      { id: 'changes_requested', label: 'Request changes' },
+    ] },
+  }] };
+  assert.throws(() => normalizeWorkflow(exactLegacyMarker, { publishing: true }), /markers are not accepted/i,
+    'the exact generated compatibility projection is still untrusted at publication');
   for (const humanTask of [
     { outcomes: [{ id: 'same', label: 'One' }, { id: 'same', label: 'Two' }] },
     { outcomes: [{ id: 'yes', label: 'Yes', effect: 'approve_activity' }, { id: 'no', label: 'No' }], form: { fields: [{ id: 'amount', label: 'Amount', type: 'number', minimum: 2, maximum: 1 }] } },
@@ -488,17 +497,43 @@ test('a pinned human decision cannot approve when its exact source package is mi
 
 test('workflow publication rejects unsupported human choices while preserving supported wildcards', async () => {
   const supported = { id: 'wildcard', name: 'Wildcard review', nodes: [
-    { id: 'review', name: 'Review', kind: 'human' },
+    { id: 'review', name: 'Review', kind: 'human', humanTask: { outcomes: [
+      { id: 'approved', label: 'Approved', effect: 'approve_activity' },
+      { id: 'changes_requested', label: 'Request changes' },
+    ] } },
     { id: 'done', name: 'Done', kind: 'agent' },
   ], edges: [{ from: 'review', to: 'done', outcome: '*' }] };
-  const state = { workflows: [], workflowDrafts: {} };
+  const legacyStored = { id: 'legacy', name: 'Legacy review', version: 1, nodes: [
+    { id: 'start', kind: 'agent', name: 'Start', prompt: 'Start' },
+    { id: 'review', kind: 'human', name: 'Review', prompt: 'Review', decisionLabels: { approved: 'Approved', changes_requested: 'Request changes' } },
+    { id: 'done', kind: 'agent', name: 'Done', prompt: 'Done' },
+  ], edges: [{ from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: 'approved' }] };
+  const state = { workflows: [legacyStored], workflowDrafts: {} };
   const registry = createWorkflowRegistry({ state, save: async () => {}, normalize: normalizeWorkflow, validateBindings: () => {} });
-  await assert.rejects(registry.publish({ workflow: { ...supported, edges: [{ from: 'review', to: 'done', outcome: 'rejected' }] } }), /unsupported human outcome rejected/);
+  await assert.rejects(registry.publish({ workflow: { ...supported, edges: [{ from: 'review', to: 'done', outcome: 'rejected' }] } }), /outcome rejected is not configured/);
   const published = await registry.publish({ workflow: supported });
   assert.equal(published.edges[0].outcome, '*');
-  const legacy = await registry.publish({ workflow: { id: 'legacy', name: 'Legacy review', steps: [
-    { id: 'start', kind: 'agent', name: 'Start' }, { id: 'review', kind: 'human', name: 'Review' }, { id: 'done', kind: 'agent', name: 'Done' },
+  const oldClientLegacy = await registry.publish({ workflow: { id: 'new-legacy', name: 'New legacy', nodes: [
+    { id: 'review', name: 'Review', kind: 'human' },
   ] } });
+  assert.equal(oldClientLegacy.nodes[0].legacyHumanTask, true,
+    'older clients may continue publishing bare human gates through compatibility normalization');
+  const publishedCountBeforeForgery = state.workflows.length;
+  await assert.rejects(registry.publish({ workflow: { id: 'legacy', name: 'Legacy review', baseVersion: 1, nodes: [
+    { id: 'review', name: 'Review', kind: 'human', legacyHumanTask: true,
+      humanTask: { outcomes: [
+        { id: 'approved', label: 'Approved', effect: 'approve_activity' },
+        { id: 'changes_requested', label: 'Request changes' },
+      ] } },
+  ] } }), /markers are not accepted/i);
+  assert.equal(state.workflows.length, publishedCountBeforeForgery, 'rejected caller markers do not append a published revision');
+  const legacy = await registry.publish({ baseVersion: 1, workflow: { id: 'legacy', name: 'Legacy review', nodes: [
+    { id: 'start', kind: 'agent', name: 'Start', prompt: 'Start' },
+    { id: 'review', kind: 'human', name: 'Review', prompt: 'Review', decisionLabels: { approved: 'Approved', changes_requested: 'Request changes' } },
+    { id: 'done', kind: 'agent', name: 'Done', prompt: 'Done' },
+  ], edges: [{ from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: 'approved' }] } });
+  assert.equal(legacy.nodes.find(node => node.id === 'review').legacyHumanTask, true,
+    'the owner may preserve a gate only when the prior immutable publication proves legacy origin');
   assert.deepEqual(legacy.edges.map(({ from, to, outcome }) => ({ from, to, outcome })), [
     { from: 'start', to: 'review', outcome: 'success' },
     { from: 'review', to: 'done', outcome: 'approved' },

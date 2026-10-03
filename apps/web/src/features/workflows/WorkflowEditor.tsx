@@ -203,7 +203,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
   function patchHumanTask(id: string, humanTask: WorkflowStep['humanTask'], rename?: { from: string; to: string }) {
     setDraft((current) => ({
       ...current,
-      nodes: current.nodes.map((node) => node.id === id ? { ...node, humanTask } : node),
+      nodes: current.nodes.map((node) => node.id === id ? { ...node, humanTask, legacyHumanTask: undefined } : node),
       edges: rename ? current.edges.map((edge) => edge.from === id && edge.outcome === rename.from ? { ...edge, outcome: rename.to } : edge) : current.edges,
     }));
   }
