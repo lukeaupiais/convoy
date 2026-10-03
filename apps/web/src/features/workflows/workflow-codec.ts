@@ -16,6 +16,7 @@ export type ConditionOperator = 'equals' | 'notEquals' | 'exists';
 export type ConditionValueType = 'text' | 'number' | 'boolean' | 'null';
 export type Artifact = { path: string; headings: string[] };
 export type PresentationBinding = NonNullable<WorkflowStep['presentationBindings']>[number];
+export type DecisionLabels = NonNullable<WorkflowStep['decisionLabels']>;
 export type Condition = {
   source: ConditionSource;
   field: string;
@@ -34,6 +35,7 @@ export type GraphNode = {
   x: number;
   y: number;
   advance?: 'automatic' | 'manual';
+  decisionLabels?: DecisionLabels;
   artifact?: Artifact;
   presentationBindings?: PresentationBinding[];
   requiresCheck?: boolean;
@@ -326,6 +328,12 @@ export function safeNode(raw: unknown, index: number): GraphNode {
         ];
       })
     : undefined;
+  const decisionLabels =
+    value.decisionLabels &&
+    typeof value.decisionLabels === 'object' &&
+    !Array.isArray(value.decisionLabels)
+      ? (structuredClone(value.decisionLabels) as DecisionLabels)
+      : undefined;
   const operation = String(value.operation ?? 'inspect_changes') as ActionOperation;
   const outcomes = Array.isArray(value.outcomes) ? value.outcomes.map(String) : undefined;
   const conditionOutcomes =
@@ -376,6 +384,7 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     x: Number.isFinite(Number(value.x)) ? Number(value.x) : node.x,
     y: Number.isFinite(Number(value.y)) ? Number(value.y) : node.y,
     advance: value.advance === 'manual' ? 'manual' : 'automatic',
+    decisionLabels,
     artifact: artifact
       ? {
           path: String(artifact.path ?? ''),
@@ -699,6 +708,27 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
       )
     )
       errors.push(`${node.name}: human outcomes support approved and changes_requested only.`);
+    if (node.decisionLabels !== undefined) {
+      const labels = node.decisionLabels as Record<string, unknown>;
+      if (
+        node.type !== 'approval' ||
+        !labels ||
+        typeof labels !== 'object' ||
+        Array.isArray(labels) ||
+        Object.keys(labels).some((outcome) => !['approved', 'changes_requested'].includes(outcome))
+      )
+        errors.push(`${node.name}: decision labels must use supported human outcomes.`);
+      else if (
+        Object.values(labels).some(
+          (label) =>
+            typeof label !== 'string' ||
+            !label.trim() ||
+            label.length > 80 ||
+            /[\u0000-\u001f\u007f]/.test(label),
+        )
+      )
+        errors.push(`${node.name}: decision labels must be plain text up to 80 characters.`);
+    }
   }
   return [...new Set(errors)];
 }

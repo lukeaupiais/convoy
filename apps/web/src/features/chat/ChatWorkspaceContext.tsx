@@ -308,7 +308,6 @@ export function ChatWorkspaceContext({
         {session.workspace && runner && !runner.capabilities.terminal && (
           <small>Native terminal unavailable on this runner.</small>
         )}
-        <small>Run from the Convoy directory. Terminal detach leaves the process running.</small>
         <span role="status">{copied}</span>
       </div>
     </details>

@@ -23,9 +23,6 @@ export function EnvironmentSettings({ state }: { state: RuntimeState }) {
   }
   return (
     <div className="environment-settings">
-      <p className="muted">
-        Run agents locally or on your SSH hosts. Provider credentials stay here.
-      </p>
       {message && <p role="status">{message}</p>}
       <details className="runtime-details">
         <summary>Connect a remote workspace</summary>
@@ -298,13 +295,6 @@ export function EnvironmentSettings({ state }: { state: RuntimeState }) {
           Save capacity
         </button>
       </form>
-      <p className="muted">
-        Load means assigned executions, including approval waits and unresolved remote attempts—not
-        host CPU usage. Labels are operator-declared; tool availability is probed. Automatic routing
-        only occurs before a workspace is bound. Capacity providers are currently static; the
-        environment contract is ready for future provisioned fleets, but Convoy does not create or
-        destroy runners automatically.
-      </p>
     </div>
   );
 }

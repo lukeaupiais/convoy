@@ -627,10 +627,6 @@ export function CapabilityLibrary({
                 </label>
               ))}
             </fieldset>
-            <p className="muted">
-              Harness controls remain available. Profiles select capabilities; they do not bypass
-              approvals, workflow restrictions, or runner limits.
-            </p>
             <button className="primary" disabled={busy}>
               Publish profile
             </button>

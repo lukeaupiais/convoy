@@ -211,10 +211,6 @@ export function ProviderSettings({ state }: { state: RuntimeState }) {
     <div className="provider-settings">
       {notice && <p role={notice.kind}>{notice.text}</p>}
       <h2>Provider connections</h2>
-      <p className="muted">
-        Governed accounts and inference endpoints available to this context. Credentials remain in
-        the daemon credential broker and are never shown here.
-      </p>
       {connections.length ? (
         connections.map((connection) => {
           const record = state.providerConnections?.find((item) => item.id === connection.id);
@@ -277,7 +273,6 @@ export function ProviderSettings({ state }: { state: RuntimeState }) {
                 autoComplete="new-password"
                 placeholder="Optional for local endpoints"
               />
-              <small>Submitted once, cleared immediately, and never returned by Convoy.</small>
             </label>
             <label>
               Monthly budget (USD)
@@ -297,10 +292,6 @@ export function ProviderSettings({ state }: { state: RuntimeState }) {
       )}
 
       <h2>Model routes</h2>
-      <p className="muted">
-        Logical model targets are resolved by policy at turn start. Candidate order is shown from
-        primary to final fallback.
-      </p>
       {routes.length ? (
         routes.map((route) => (
           <article className="runtime-row" key={route.id}>
@@ -355,7 +346,6 @@ export function ProviderSettings({ state }: { state: RuntimeState }) {
                     </option>
                   ))}
                 </select>
-                <small>Fallback is limited to requests known not sent or rejected.</small>
               </label>
               <label>
                 Maximum estimated cost per turn (USD)

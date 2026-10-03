@@ -78,7 +78,6 @@ export function CollectionSettings({
         {!!pages.length && (
           <>
             <h2>Pages</h2>
-            <p className="wiki-muted">Choose starting pages and arrange the navigation.</p>
             <ol className="wiki-order">
               {order.map((id, index) => {
                 const p = pages.find((p) => p.id === id)!;

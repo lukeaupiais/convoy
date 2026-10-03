@@ -7,6 +7,7 @@ import type {
 import { artifactMarkdownBlocks } from './artifact-markdown';
 import {
   workflowActivityHistory,
+  workflowDecisionLabel,
   workflowDecisionCapabilities,
   workflowNeedsRecovery,
   workflowRunOutput,
@@ -386,15 +387,11 @@ export function WorkflowRunInteraction({
   working = false,
   actions = {},
   onRecovery,
-  resolveReplyDestination,
 }: {
   session: Session;
   working?: boolean;
   actions?: WorkflowInteractionActions;
   onRecovery?: () => void;
-  resolveReplyDestination?: (
-    connectionId: string,
-  ) => { name?: string; remoteId?: string } | undefined;
 }) {
   const flow = session.flow;
   const nodes = session.workflow?.nodes ?? session.workflow?.steps ?? [];
@@ -430,13 +427,6 @@ export function WorkflowRunInteraction({
     sourceNodeId === replyAction?.input?.sourceNodeId
       ? submission?.details?.[replyField]
       : undefined;
-  const replyConnectionId =
-    typeof replyAction?.input?.connectionId === 'string'
-      ? replyAction.input.connectionId
-      : undefined;
-  const replyDestination = replyConnectionId
-    ? resolveReplyDestination?.(replyConnectionId)
-    : undefined;
   const visibleDetailBindings = [
     ...detailBindings,
     ...(replyField &&
@@ -592,7 +582,6 @@ export function WorkflowRunInteraction({
             <section className="workflow-required-interaction">
               <strong>Tool permission · {session.pending.tool}</strong>
               <pre>{JSON.stringify(session.pending.args, null, 2)}</pre>
-              <p>This decision applies only to the operation shown.</p>
               <div className="workflow-tool-actions">
                 <button
                   className="primary"
@@ -648,19 +637,11 @@ export function WorkflowRunInteraction({
       {(flow.status === 'waiting_gate' ||
         (flow.status === 'awaiting_continue' && (actions.continueRun || actions.rework))) && (
         <footer className="workflow-interaction-footer">
-          {flow.status === 'waiting_gate' && replyAction && replyConnectionId && replyText?.trim() && (
-            <p className="workflow-consequence">
-              Approval authorizes sending the configured reply through{' '}
-              {replyDestination?.name ?? `connection ${replyConnectionId}`}
-              {replyDestination?.remoteId && <> · {replyDestination.remoteId}</>}. Delivery is
-              confirmed separately.
-            </p>
-          )}
           {flow.status === 'waiting_gate' && (
             <>
               {approvalReady && actions.approveGate ? (
                 <button className="primary" disabled={working} onClick={actions.approveGate}>
-                  Approve
+                  {workflowDecisionLabel(node, 'approved')}
                 </button>
               ) : approvalMaterialRequired && !submission ? (
                 <p role="alert">Reviewed material is unavailable. Refresh before deciding.</p>
@@ -674,7 +655,7 @@ export function WorkflowRunInteraction({
                   aria-expanded={showFeedback}
                   onClick={() => setShowFeedback((value) => !value)}
                 >
-                  {showFeedback ? 'Cancel' : 'Request changes'}
+                  {showFeedback ? 'Cancel' : workflowDecisionLabel(node, 'changes_requested')}
                 </button>
               )}
             </>
