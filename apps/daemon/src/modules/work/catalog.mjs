@@ -525,6 +525,15 @@ export function createCatalog({ state, save, execution, externalTickets, context
   function assertEditable(t, queuedPlacement = false) { execution.assertEditable(t, queuedPlacement); }
   return {
     project, ticket, assertEditable, boards,
+    matchesWorkflowWait({ ticketId, activeTicketId, ticketSource = 'active_ticket', relationKind, status, acceptedStatus }) {
+      const current = ticket(ticketId);
+      if (!current || status !== undefined && acceptedStatus !== status) return false;
+      if (ticketSource === 'related_ticket') return state.ticketRelations?.some(link =>
+        String(link.sourceTicketId) === String(activeTicketId) && String(link.targetTicketId) === String(current.id) &&
+        (relationKind === undefined || link.kind === relationKind)) ?? false;
+      return ticketSource === 'active_ticket' && activeTicketId !== null && activeTicketId !== undefined &&
+        String(activeTicketId) === String(current.id);
+    },
     ticketContext(ticketId) {
       const thread = state.ticketThreads.find(value => value.ticketId === ticketId);
       const relatedTickets = (state.ticketRelations ?? [])

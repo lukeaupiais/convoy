@@ -45,11 +45,26 @@ const boardCommands = new Set([
 /** Work owns projects, tickets, boards, and their optimistic revisions. */
 export function createWork({ afterCommand = async (_command, result) => result, ...dependencies }) {
   const catalog = createCatalog(dependencies);
+  const legacyTicketWaitAliases = new Set(['ticket_message_received', 'ticket_source_updated', 'ticket_updated']);
   return {
     id: 'work',
     commands,
     catalog,
     workflowEvents: catalog.workflowEvents,
+    validateWorkflowWait({ descriptor, wait }) {
+      const isWorkEvent = descriptor.source?.owner === 'work';
+      if (!isWorkEvent && (wait.ticketSource !== undefined || wait.relationKind !== undefined || wait.status !== undefined))
+        throw new Error('Ticket wait constraints are only available for Work events.');
+      return true;
+    },
+    matchesWorkflowWait({ descriptor, wait, run, accepted }) {
+      if (descriptor.source?.owner !== 'work') return undefined;
+      const hasExplicitTicketScope = wait.ticketSource !== undefined || wait.relationKind !== undefined || wait.status !== undefined;
+      if (!hasExplicitTicketScope && !legacyTicketWaitAliases.has(wait.event)) return true;
+      return catalog.matchesWorkflowWait({ ticketId: accepted.payload?.ticketId, activeTicketId: run.activeTicketId,
+        ticketSource: wait.ticketSource ?? 'active_ticket', relationKind: wait.relationKind, status: wait.status,
+        acceptedStatus: accepted.payload?.status });
+    },
     snapshot({ scope } = {}) {
       const value = catalog.snapshot();
       if (!scope) return value;

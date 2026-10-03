@@ -1,5 +1,5 @@
 import { createWorkflowRegistry } from './workflow-registry.mjs';
-import { activityDigest, validateActivityValue, resolveActivityBindings } from './activity-data.mjs';
+import { activityDigest, validateActivityValue, resolveActivityBindings, activitySchemaAtPath } from './activity-data.mjs';
 import { legacyActivityRef } from './activity-catalog.mjs';
 import { createWorkflowEventJournal, workflowEventPath } from './event-journal.mjs';
 import { randomUUID } from 'node:crypto';
@@ -145,17 +145,42 @@ export function createWorkflows({
   activityAvailable = () => true,
   prepareActivityIntent = async () => { throw new Error('Activity intent preparation is unavailable.'); },
   eventDescriptors = [],
+  validateEventWait = () => {},
+  matchEventWaitSource = () => undefined,
   now = () => new Date().toISOString(),
 }) {
   migrateWorkflowState(state, { defaultWorkflow, normalize });
   const eventJournal = createWorkflowEventJournal({ state, descriptors: eventDescriptors, save, now });
   function validateEventWaitBindings(workflow) {
-    for (const node of workflow.nodes ?? workflow.steps ?? []) {
+    const nodes = workflow.nodes ?? workflow.steps ?? [];
+    const edges = workflow.edges ?? [];
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const isUpstream = (sourceId, targetId) => {
+      const pending = [sourceId];
+      const visited = new Set();
+      while (pending.length) {
+        const current = pending.pop();
+        if (current === targetId) return true;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        for (const edge of edges) if (edge.from === current) pending.push(edge.to);
+      }
+      return false;
+    };
+    const compatibleCorrelation = (source, target) => {
+      const sourceType = source.type === 'enum' ? 'string' : source.type;
+      const targetType = target.type === 'enum' ? 'string' : target.type;
+      if (!(sourceType === targetType || sourceType === 'integer' && targetType === 'number')) return false;
+      if (target.type === 'enum') return source.type === 'enum' && source.enum.every(value => target.values.includes(value));
+      return true;
+    };
+    for (const node of nodes) {
       if (node.kind !== 'wait') continue;
       const wait = node.waitFor;
       const descriptor = eventJournal.descriptor(wait.eventRevision === undefined
         ? wait.event : { id: wait.event, revision: wait.eventRevision });
       if (!descriptor) throw new Error(`${node.name}: workflow event descriptor is unavailable.`);
+      validateEventWait({ descriptor, wait, workflow, node });
       if (wait.scope !== undefined && wait.scope !== descriptor.tenantScope)
         throw new Error(`${node.name}: wait scope does not match the registered event descriptor.`);
       if (descriptor.tenantScope === 'resource' && !wait.resourceRef ||
@@ -174,8 +199,29 @@ export function createWorkflows({
       }
       if (wait.correlation && !descriptor.correlationPaths.includes(wait.correlation.key))
         throw new Error(`${node.name}: correlation key is not declared by the event.`);
-      const workCompatibilityAlias = ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(wait.event);
-      if (!workCompatibilityAlias) wait.event = descriptor.id;
+      if (wait.correlation) {
+        const target = descriptor.payload.find(field => field.path === wait.correlation.key);
+        const source = wait.correlation.from;
+        let sourceSchema;
+        const activeTicketSource = source === 'activeTicketId';
+        if (activeTicketSource && !['string', 'number', 'integer'].includes(target?.type))
+          throw new Error(`${node.name}: active ticket identity requires a scalar event correlation field.`);
+        else if (source.startsWith('runInput.')) {
+          try { sourceSchema = activitySchemaAtPath(workflow.runInputSchema, source.slice(9).split('.')); }
+          catch { throw new Error(`${node.name}: correlation source is not declared by the workflow input schema.`); }
+        } else if (source.startsWith('output.')) {
+          const [, sourceId, ...path] = source.split('.');
+          const producer = byId.get(sourceId);
+          const producerDescriptor = producer?.kind === 'action' && producer.activity ? activityCatalog?.get(producer.activity) : null;
+          if (!producer || !producerDescriptor || !isUpstream(sourceId, node.id))
+            throw new Error(`${node.name}: correlation output must come from an upstream registered activity.`);
+          try { sourceSchema = activitySchemaAtPath(producerDescriptor.outputSchema, path); }
+          catch { throw new Error(`${node.name}: correlation output path is not declared by its activity.`); }
+        }
+        if (!target || !activeTicketSource && (!sourceSchema || !compatibleCorrelation(sourceSchema, target)))
+          throw new Error(`${node.name}: correlation source does not match event field ${wait.correlation.key}.`);
+      }
+      if (!descriptor.aliases.includes(wait.event)) wait.event = descriptor.id;
       wait.eventRevision = descriptor.revision;
       wait.scope = descriptor.tenantScope;
     }
@@ -311,21 +357,25 @@ export function createWorkflows({
     for (const part of parts.slice(0, -1)) current = current[part] ??= {};
     current[parts.at(-1)] = value;
   }
-  function eventWaitMatches(run, node, accepted) {
+  function eventWaitMatches(run, node, accepted, registeredWait) {
     const wait = node.waitFor;
-    const descriptor = eventJournal.descriptor(accepted.descriptor);
-    const tenantScope = wait.scope ?? descriptor?.tenantScope;
+    const descriptor = eventJournal.descriptor(registeredWait?.descriptor ?? accepted.descriptor);
+    const tenantScope = registeredWait?.tenantScope ?? wait.scope ?? descriptor?.tenantScope;
+    const resourceRef = registeredWait?.resourceRef ?? wait.resourceRef;
     if (!descriptor || (wait.event !== descriptor.id && !descriptor.aliases.includes(wait.event)) ||
-        wait.eventRevision !== undefined && wait.eventRevision !== accepted.descriptor.revision ||
+        registeredWait?.descriptor && (registeredWait.descriptor.id !== accepted.descriptor.id ||
+          registeredWait.descriptor.revision !== accepted.descriptor.revision) ||
+        !registeredWait?.descriptor && wait.eventRevision !== undefined && wait.eventRevision !== accepted.descriptor.revision ||
         tenantScope !== descriptor.tenantScope ||
         accepted.organizationId !== run.organizationId ||
         ['project', 'resource'].includes(descriptor.tenantScope) && accepted.projectId !== run.projectId ||
-        descriptor.tenantScope === 'resource' && (!wait.resourceRef ||
-          wait.resourceRef.kind !== accepted.resourceRef?.kind || wait.resourceRef.id !== accepted.resourceRef?.id)) return false;
+        descriptor.tenantScope === 'resource' && (!resourceRef ||
+          resourceRef.kind !== accepted.resourceRef?.kind || resourceRef.id !== accepted.resourceRef?.id)) return false;
+    if (matchEventWaitSource({ descriptor, wait, run, accepted }) === false) return false;
     const expected = wait.correlation?.from?.startsWith('runInput.')
       ? workflowEventPath(run.runInput, wait.correlation.from.slice(9))
       : wait.correlation?.from?.startsWith('output.')
-        ? workflowEventPath(run.activityOutputs?.[wait.correlation.from.slice(7).split('.')[0]], wait.correlation.from.slice(7).split('.').slice(1).join('.'))
+        ? workflowEventPath(run.activityOutputs?.[wait.correlation.from.slice(7).split('.')[0]]?.value, wait.correlation.from.slice(7).split('.').slice(1).join('.'))
         : wait.correlation?.from === 'activeTicketId' ? run.activeTicketId : undefined;
     if (wait.correlation && (expected === undefined || accepted.correlation?.key !== wait.correlation.key || accepted.correlation.value !== String(expected))) return false;
     if ((wait.if ?? []).some(condition => {
@@ -389,7 +439,7 @@ export function createWorkflows({
       const deadline = Object.values(state.workflowDeadlines).find(value => value.runId === run.id &&
         value.instance === wait.instance && value.status === 'pending');
       for (const accepted of candidates) {
-        if (!eventWaitMatches(run, node, accepted)) continue;
+        if (!eventWaitMatches(run, node, accepted, wait)) continue;
         if (deadline && Date.parse(accepted.receivedAt) > Date.parse(deadline.dueAt)) continue;
         const context = run.sessionId && state.sessions[run.sessionId] || run;
         const acceptedWait = await engine.signal(context, wait.instance, {
@@ -1533,10 +1583,16 @@ export function createWorkflows({
         id, independentRun: false, sessionId: session.id,
         projectId: session.projectId, organizationId: project?.organizationId ?? 'personal',
         principal: session.executionPrincipal ? structuredClone(session.executionPrincipal) : structuredClone(migrationPrincipal),
+        ...(session.activeTicketId !== undefined ? { activeTicketId: session.activeTicketId } : {}),
         workflow: structuredClone(session.workflow), flow,
       };
       if (!owner.principal) throw new Error('Workflow run has no resolvable execution principal.');
       else if (flow) {
+        if (session.activeTicketId !== undefined) {
+          if (owner.activeTicketId !== undefined && String(owner.activeTicketId) !== String(session.activeTicketId))
+            throw new Error('Session workflow run ticket identity changed.');
+          owner.activeTicketId ??= session.activeTicketId;
+        }
         owner.workflow = structuredClone(session.workflow);
         owner.flow = flow;
       }

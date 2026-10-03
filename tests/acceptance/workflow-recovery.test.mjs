@@ -168,6 +168,81 @@ test('a conflicted board event decision retries its reserved run against the pin
     assert.equal((await runtime.snapshot()).tickets.find(value => value.id === ticket.id).revision, moveRevision);
     await runtime.close();
 });
+
+test('a no-runner event run resumes the same pinned version after placement is added and daemon restarts', async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'convoy-runner-event-recovery-'));
+    const runnerCalls = [];
+    const options = { directory, models: [{ id: 'fixture' }],
+        auth: { token: async () => 'fixture', status: async () => ({ connected: true }) },
+        generate: async function* () { assert.fail('A runner-only workflow must not call a provider.'); },
+        runners: { async execute(_runner, command) {
+            runnerCalls.push(command.action);
+            if (command.action === 'probe') return { repository: '/fixture', tools: ['read_file'], shell: false };
+            if (command.action === 'provision') return { path: '/fixture/event-workspace', branch: 'event-recovery' };
+            if (command.action === 'diff') return { digest: 'event-recovery-diff', changedFiles: ['inventory.json'] };
+            if (command.action === 'remove') return {};
+            assert.fail(`Unexpected runner operation ${command.action}`);
+        }, async close() {} },
+    };
+    let runtime = await createRuntime(options);
+    const close = async () => { if (runtime) { const current = runtime; runtime = null; await current.close(); } };
+    t.after(async () => { await close(); await rm(directory, { recursive: true, force: true }); });
+    const act = (action, input = {}) => runtime.command({ action, client: 'runner-event-recovery', ...input });
+    const project = await act('saveProject', { name: 'Inventory recovery' });
+    await act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+    const ticket = await act('createTicket', { requestId: 'inventory-recovery-ticket', projectId: project.id, title: 'Reconcile stock' });
+    const board = await act('saveBoard', { name: 'Inventory recovery board', projectIds: [project.id], columns: [
+        { id: 'inbox', name: 'Inbox' }, { id: 'review', name: 'Review' },
+    ] });
+    const workflow = { id: 'inventory-runner-recovery', name: 'Inspect v1', nodes: [
+        { id: 'inspect', kind: 'action', name: 'Inspect inventory v1', operation: 'inspect_changes' },
+    ] };
+    await act('saveWorkflow', { projectId: project.id, workflow });
+    await act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+        name: 'Inspect moved inventory', projectId: project.id, enabled: true,
+        when: { event: 'ticket_moved', boardId: board.id, columnId: 'review' }, if: [],
+        then: { action: 'start_workflow', workflowId: workflow.id, workflowVersion: 1 },
+        concurrency: { policy: 'independent', maxActiveRuns: 2 },
+    } });
+    const moved = await act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision,
+        placement: { columnId: 'review' } });
+    const initial = await until(() => runtime.snapshot(), value => value.workflowRuns?.find(run => run.workflowId === workflow.id && ['paused', 'ready'].includes(run.status)));
+    const runSummary = initial.workflowRuns.find(run => run.workflowId === workflow.id);
+    const runId = runSummary.id;
+    const held = await act('getWorkflowRun', { workflowRunId: runId });
+    assert.equal(held.workflowVersion, 1);
+    assert.ok(['paused', 'ready'].includes(held.status), JSON.stringify(held));
+    assert.equal('sessionId' in held, false);
+    assert.equal(initial.sessions.length, 0);
+    assert.equal(runnerCalls.filter(value => value === 'provision').length, 0);
+
+    await act('saveWorkflow', { projectId: project.id, baseVersion: 1, workflow: {
+        ...workflow, name: 'Inspect v2', nodes: [{ ...workflow.nodes[0], name: 'Inspect inventory v2' }],
+    } });
+    await act('registerRunner', { name: 'Inventory recovery runner', kind: 'local', repository: '/fixture' });
+    const runner = (await runtime.snapshot()).runners[0];
+    const currentProject = (await runtime.snapshot()).projects.find(value => value.id === project.id);
+    await act('setPlacement', { projectId: project.id, revision: currentProject.revision,
+        placement: { mode: 'pinned', runnerId: runner.id } });
+    await close();
+    runtime = await createRuntime(options);
+    const afterRestart = await act('getWorkflowRun', { workflowRunId: runId });
+    assert.equal(afterRestart.workflowVersion, 1);
+    await act('claimWorkflowRun', { workflowRunId: runId });
+    await act('continueWorkflowRun', { workflowRunId: runId, instance: afterRestart.instance });
+    const completed = await until(() => act('getWorkflowRun', { workflowRunId: runId }), value => ['completed', 'failed', 'paused'].includes(value.status));
+    const finalState = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+    assert.equal(completed.status, 'completed', JSON.stringify({ completed, flow: finalState.workflowRuns[runId]?.flow,
+        run: finalState.workflowRuns[runId], project: finalState.projects.find(value => value.id === project.id), runnerCalls }));
+    assert.equal(completed.workflowVersion, 1);
+    assert.ok(completed.activityAttempts.some(attempt => attempt.nodeId === 'inspect' && attempt.status === 'completed'));
+    const final = await runtime.snapshot();
+    assert.equal(final.workflowRuns.filter(run => run.provenance?.eventId === held.provenance?.eventId).length, 1);
+    assert.equal(final.workflowRuns.length, 1);
+    assert.equal(final.sessions.length, 0);
+    assert.equal(final.tickets.find(value => value.id === ticket.id).revision, moved.revision,
+        'resuming the original event run does not repeat the ticket move');
+});
 test('agent-created tickets use the board trigger seam, while denied creation has no side effect', async () => {
     let turn = 0;
     const options = { directory: await mkdtemp(join(tmpdir(), 'convoy-agent-trigger-')), models: [{ id: 'fixture' }], auth: { token: async () => 'fixture', status: async () => ({ connected: true }) },

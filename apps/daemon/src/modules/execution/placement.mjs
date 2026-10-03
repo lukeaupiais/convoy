@@ -690,7 +690,12 @@ export function createPlacement({
           return { reason: 'Organization policy does not permit full system access.' };
         }
       }
-      s.placement ??= structuredClone(effective(s));
+      const selectedPlacement = effective(s);
+      // An absent placement is not an authority pin. Keep it absent while the
+      // effective policy is `none`, so a waiting workflow can observe a later
+      // authorized placement update. Concrete policies remain pinned before
+      // runner selection/acquisition as before.
+      if (selectedPlacement.mode !== 'none') s.placement ??= structuredClone(selectedPlacement);
       const chosen = choose(s, requiredTools);
       if (chosen.capacityDemand) await capacity.recordDemand(chosen.capacityDemand);
       if (chosen.reason) {

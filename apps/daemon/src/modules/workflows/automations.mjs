@@ -5,6 +5,8 @@ import { validateActivityValue } from './activity-data.mjs';
 const idPattern = /^[A-Za-z0-9][\w-]{0,79}$/;
 const safePathPart = value => typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(value) &&
   !['__proto__', 'prototype', 'constructor'].includes(value);
+const safeInputKey = value => typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+  !['__proto__', 'prototype', 'constructor'].includes(value);
 
 function validateEventInputBindings(bindings, descriptor, schema) {
   if (bindings === undefined) bindings = {};
@@ -13,7 +15,7 @@ function validateEventInputBindings(bindings, descriptor, schema) {
   const properties = schema?.properties ?? {};
   const fields = new Map((descriptor?.payload ?? []).map(field => [field.path, field]));
   for (const [key, binding] of Object.entries(bindings)) {
-    if (!safePathPart(key) || !Object.hasOwn(properties, key) || !binding || typeof binding !== 'object' || Array.isArray(binding) ||
+    if (!safeInputKey(key) || !Object.hasOwn(properties, key) || !binding || typeof binding !== 'object' || Array.isArray(binding) ||
         Object.getPrototypeOf(binding) !== Object.prototype || Object.keys(binding).length !== 1)
       throw new Error(`Automation run input ${key} has an invalid binding.`);
     if (Object.hasOwn(binding, 'value')) {
@@ -82,8 +84,9 @@ export function createAutomations({ state, save, capabilities, eventDescriptors 
     const resourceRef = rule.when.resourceRef;
     if (event.scope === 'resource' && (!resourceRef || typeof resourceRef !== 'object' || Array.isArray(resourceRef) ||
         Object.getPrototypeOf(resourceRef) !== Object.prototype || Object.keys(resourceRef).length !== 2 ||
-        typeof resourceRef.kind !== 'string' || !/^[A-Za-z][\w.-]{0,79}$/.test(resourceRef.kind) ||
-        typeof resourceRef.id !== 'string' || !/^[A-Za-z0-9][\w.-]{0,119}$/.test(resourceRef.id)) ||
+        Object.keys(resourceRef).some(key => !['kind', 'id'].includes(key)) ||
+        typeof resourceRef.kind !== 'string' || !resourceRef.kind.trim() || resourceRef.kind.length > 80 || /[\u0000-\u001f\u007f]/.test(resourceRef.kind) ||
+        typeof resourceRef.id !== 'string' || !resourceRef.id.trim() || resourceRef.id.length > 160 || /[\u0000-\u001f\u007f]/.test(resourceRef.id)) ||
         event.scope !== 'resource' && resourceRef !== undefined)
       throw new Error('Resource-scoped automation requires an exact resource reference.');
     const descriptor = descriptorForEvent(event.id, rule.when.eventRevision);

@@ -19,15 +19,16 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (!kinds.has(node.kind)) throw new Error(`${node.name}: choose agent, human, check, action, branch or wait.`);
   if (node.kind === 'wait') {
     const waitFor = node.waitFor;
-    const legacy = ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(waitFor?.event);
     if (!waitFor || typeof waitFor.event !== 'string' || !/^[A-Za-z][\w.-]{1,100}$/.test(waitFor.event) ||
-        legacy && !['active_ticket', 'related_ticket'].includes(waitFor.ticketSource ?? 'active_ticket') ||
-        !legacy && waitFor.ticketSource !== undefined ||
+        waitFor.ticketSource !== undefined && !['active_ticket', 'related_ticket'].includes(waitFor.ticketSource) ||
         waitFor.relationKind !== undefined && !safeId(waitFor.relationKind) ||
         waitFor.status !== undefined && (typeof waitFor.status !== 'string' || !waitFor.status.trim() || waitFor.status.length > 80) ||
         waitFor.scope !== undefined && !['organization', 'project', 'resource'].includes(waitFor.scope) ||
         waitFor.resourceRef !== undefined && (!waitFor.resourceRef || typeof waitFor.resourceRef !== 'object' || Array.isArray(waitFor.resourceRef) ||
-          Object.keys(waitFor.resourceRef).some(key => !['kind', 'id'].includes(key)) || !safeId(waitFor.resourceRef.kind) || !safeId(waitFor.resourceRef.id)) ||
+          Object.getPrototypeOf(waitFor.resourceRef) !== Object.prototype || Object.keys(waitFor.resourceRef).length !== 2 ||
+          Object.keys(waitFor.resourceRef).some(key => !['kind', 'id'].includes(key)) ||
+          typeof waitFor.resourceRef.kind !== 'string' || !waitFor.resourceRef.kind.trim() || waitFor.resourceRef.kind.length > 80 || /[\u0000-\u001f\u007f]/.test(waitFor.resourceRef.kind) ||
+          typeof waitFor.resourceRef.id !== 'string' || !waitFor.resourceRef.id.trim() || waitFor.resourceRef.id.length > 160 || /[\u0000-\u001f\u007f]/.test(waitFor.resourceRef.id)) ||
         waitFor.eventRevision !== undefined && (!Number.isInteger(waitFor.eventRevision) || waitFor.eventRevision < 1) ||
         waitFor.timeoutSeconds !== undefined && (!Number.isInteger(waitFor.timeoutSeconds) || waitFor.timeoutSeconds < 1 || waitFor.timeoutSeconds > 31_536_000) ||
         waitFor.timeoutOutcome !== undefined && !safeId(waitFor.timeoutOutcome) ||
@@ -39,7 +40,7 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
           !['exists', 'equals', 'notEquals', 'greaterThan', 'lessThan'].includes(condition.operator) ||
           condition.operator !== 'exists' && !['string', 'number', 'boolean'].includes(typeof condition.value))))
       throw new Error(`${node.name}: configure a registered event wait with bounded correlation, predicates and timeout.`);
-    node.waitFor = { event: waitFor.event, ...(legacy ? { ticketSource: waitFor.ticketSource ?? 'active_ticket' } : {}),
+    node.waitFor = { event: waitFor.event, ...(waitFor.ticketSource ? { ticketSource: waitFor.ticketSource } : {}),
       ...(waitFor.eventRevision ? { eventRevision: waitFor.eventRevision } : {}),
       ...(waitFor.scope ? { scope: waitFor.scope } : {}),
       ...(waitFor.resourceRef ? { resourceRef: structuredClone(waitFor.resourceRef) } : {}),

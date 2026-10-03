@@ -45,7 +45,6 @@ function normalizeDescriptor(input) {
   if (!input || typeof input !== 'object' || !idPattern.test(input.id) || !Number.isInteger(input.revision) || input.revision < 1 ||
       typeof input.label !== 'string' || !input.label.trim() || input.label.length > 120 ||
       !['organization', 'project', 'resource'].includes(input.tenantScope) || !Array.isArray(input.payload) || input.payload.length > 100 ||
-      input.manual === true && input.tenantScope === 'resource' ||
       !input.source || typeof input.source.owner !== 'string' || input.source.owner.length > 80 ||
       !Number.isInteger(input.maxPayloadBytes) || input.maxPayloadBytes < 1 || input.maxPayloadBytes > 256_000)
     throw new Error('Workflow event descriptor is invalid.');

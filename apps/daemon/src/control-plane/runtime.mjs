@@ -2,7 +2,7 @@ import { createVerificationCoordinator } from './verification-runtime.mjs';
 import { createGuidancePreparation } from './workspace-guidance.mjs';
 import { workAutomationCapabilities, workWorkflowEventDescriptors } from '../modules/work/index.mjs';
 import { digest } from '../../../../packages/runner/src/index.mjs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   normalizeWorkflow,
   ensureAgentSessions,
@@ -1372,7 +1372,10 @@ export async function createRuntime({
           await identity.assertPrincipalActive(principal);
           await requireProjectPermission(s.projectId, 'project.execute', principal);
           s.executionPrincipal = structuredClone(principal);
-          s.placement ??= structuredClone(project?.placement ?? { mode: 'none' });
+          // Do not turn an unavailable "none" policy into a durable pin on a
+          // workflow run. A later authorized project/ticket placement may let
+          // this same waiting run acquire the resource. Placement.prepare
+          // persists concrete configured policies and acquired grants.
           s.executionProfile ??= project?.executionProfile ?? 'inherit';
           if (runnerRequired) {
             const placed = await placement.prepare(s, requiredTools, controller.signal);
@@ -1829,6 +1832,8 @@ export async function createRuntime({
     activityAvailable: (ref) => workflowEffects.hasActivity(ref),
     prepareActivityIntent: (...args) => workflowEffects.prepareActivityIntent(...args),
     eventDescriptors: workflowEventDescriptors,
+    validateEventWait: input => work.validateWorkflowWait(input),
+    matchEventWaitSource: input => work.matchesWorkflowWait(input),
     now: eventNow,
   });
   configuration = createSessionConfiguration({
@@ -2129,16 +2134,21 @@ export async function createRuntime({
       const descriptor = workflows.eventJournal.descriptor(command.descriptorRevision === undefined
         ? command.descriptorId : { id: command.descriptorId, revision: command.descriptorRevision });
       if (!descriptor?.manual) throw new Error('This workflow event does not allow manual submission.');
-      if (descriptor.tenantScope === 'resource') throw new Error('Resource-scoped events must be accepted by their registered source.');
+      if ((descriptor.tenantScope === 'resource') !== (command.resourceRef !== undefined))
+        throw new Error('Manual event resource identity must match the registered event scope.');
       if (!['user', 'workload'].includes(actor.kind)) throw new Error('This principal cannot submit a manual workflow event.');
       const key = text(command.idempotencyKey, 160);
       if (!/^[\w.-]+$/.test(key)) throw new Error('Invalid event idempotency key.');
       const project = state.projects.find(value => value.id === projectId);
       const correlationPath = descriptor.correlationPaths[0];
       const correlationValue = correlationPath && workflowEventPath(command.payload, correlationPath);
+      const legacySourceId = `manual.${principalKey(actor)}.${descriptor.id}`;
+      const boundedSourceId = /^[\w.:-]{1,120}$/.test(legacySourceId) ? legacySourceId : `manual.${createHash('sha256')
+        .update(JSON.stringify([principalKey(actor), descriptor.id])).digest('hex')}`;
       const accepted = await workflows.acceptEvent({ descriptor: { id: descriptor.id, revision: descriptor.revision },
-        source: { id: `manual.${principalKey(actor)}.${descriptor.id}`, eventId: key },
+        source: { id: boundedSourceId, eventId: key },
         organizationId: project.organizationId, projectId, origin: { kind: actor.kind, id: actor.kind === 'user' ? actor.userId : actor.workloadIdentityId },
+        ...(descriptor.tenantScope === 'resource' ? { resourceRef: command.resourceRef } : {}),
         payload: command.payload, ...(correlationValue !== undefined ? { correlation: { key: correlationPath, value: String(correlationValue) } } : {}) });
       await processWorkflowEventDecisions();
       await workflows.deliverPendingWaitEvents();

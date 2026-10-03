@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.mjs';
@@ -29,7 +29,13 @@ const inventorySignal = {
   id: 'inventory.stock_counted', revision: 1, label: 'Stock counted',
   source: { owner: 'inventory-adapter' }, tenantScope: 'resource',
   payload: [{ path: 'count', type: 'number', required: true }],
-  correlationPaths: [], maxPayloadBytes: 4096, manual: false,
+  correlationPaths: [], maxPayloadBytes: 4096, manual: true,
+};
+const calculatedEvent = {
+  id: 'inventory.calculated', revision: 1, label: 'Inventory calculation',
+  source: { owner: 'inventory-adapter' }, tenantScope: 'resource',
+  payload: [{ path: 'count', type: 'number', required: true }],
+  correlationPaths: ['count'], maxPayloadBytes: 4096, manual: true,
 };
 const publicationRevision2 = {
   ...callback, revision: 2, label: 'Publication callback v2',
@@ -76,7 +82,16 @@ async function fixture(t, { workflowActivities = [], workflowEvents = [callback]
   return {
     directory, options, act, project, runtime: () => runtime,
     snapshot: (...args) => runtime.snapshot(undefined, 'workflow-events-test', ...args),
-    async restart() { await runtime.close(); runtime = await createRuntime(options); },
+    async restart(mutateState) {
+      await runtime.close(); runtime = null;
+      if (mutateState) {
+        const path = join(directory, 'state.json');
+        const persisted = JSON.parse(await readFile(path, 'utf8'));
+        mutateState(persisted);
+        await writeFile(path, JSON.stringify(persisted));
+      }
+      runtime = await createRuntime(options);
+    },
   };
 }
 
@@ -97,11 +112,12 @@ test('manual event submission binds tenant and principal, deduplicates, and star
   const payload = { requestId: 'publication-42', status: 'published' };
   await assert.rejects(f.act('submitWorkflowEvent', { descriptorId: callback.id, idempotencyKey: 'callback-42', payload: { ...payload, projectId: second.id } }), /not registered/i);
   const first = await f.act('submitWorkflowEvent', { descriptorId: callback.id, idempotencyKey: 'callback-42', payload });
-  const duplicate = await f.act('submitWorkflowEvent', { descriptorId: callback.id, idempotencyKey: 'callback-42', payload });
   assert.equal(first.duplicate, false);
-  assert.equal(duplicate.duplicate, true);
   const acceptedState = JSON.parse(await readFile(join(f.directory, 'state.json'), 'utf8'));
   assert.equal(Object.values(acceptedState.automationDecisionLedger).at(-1)?.status, 'started');
+  const acceptedEvent = acceptedState.workflowEventJournal.find(value => value.id === first.eventId);
+  const originalSourceId = acceptedEvent.source.id;
+  assert.equal(originalSourceId, `manual.user:${acceptedEvent.origin.id}.${callback.id}`);
   const run = await until(async () => {
     const summary = (await f.snapshot()).workflowRuns[0];
     if (!summary) return null;
@@ -112,11 +128,41 @@ test('manual event submission binds tenant and principal, deduplicates, and star
   const decision = Object.values(JSON.parse(await readFile(join(f.directory, 'state.json'), 'utf8')).automationDecisionLedger)[0];
   assert.equal(decision.subscriptionId, (await f.snapshot()).automations[0].id);
   assert.equal((await f.snapshot()).sessions.length, 0);
+  await f.restart();
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: f.project.id } });
+  const duplicate = await f.act('submitWorkflowEvent', { descriptorId: callback.id, idempotencyKey: 'callback-42', payload });
+  assert.equal(duplicate.duplicate, true);
   await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: second.id } });
   await assert.rejects(f.act('submitWorkflowEvent', { descriptorId: callback.id, idempotencyKey: 'callback-42', payload }), /conflicts/i);
   const isolated = await f.snapshot();
   assert.equal(isolated.workflowRuns.length, 1, 'the second-project identity conflict must not append or replace the original decision/run');
   assert.equal(isolated.sessions.length, 0);
+  const restartedEvent = JSON.parse(await readFile(join(f.directory, 'state.json'), 'utf8')).workflowEventJournal.find(value => value.id === first.eventId);
+  assert.equal(restartedEvent.source.id, originalSourceId, 'previously accepted manual source tuples remain unchanged');
+});
+
+test('manual event source identity stays bounded for maximum descriptor and workload IDs', async t => {
+  const longDescriptor = { ...callback, id: `inventory.${'x'.repeat(91)}` };
+  const f = await fixture(t, { workflowEvents: [longDescriptor] });
+  const workload = await f.act('createWorkloadIdentity', { organizationId: 'personal', displayName: 'Long-ID event sender' });
+  const principal = { kind: 'workload', workloadIdentityId: workload.id };
+  await f.act('createMembership', { organizationId: 'personal', principal,
+    scope: { kind: 'organization', organizationId: 'personal' }, roles: ['member'] });
+  await f.act('createMembership', { organizationId: 'personal', principal,
+    scope: { kind: 'project', projectId: f.project.id }, roles: ['contributor'] });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: f.project.id } }, principal);
+  const payload = { requestId: 'bounded-source-identity', status: 'published' };
+  const first = await f.act('submitWorkflowEvent', { descriptorId: longDescriptor.id, idempotencyKey: 'long-descriptor-1', payload }, principal);
+  assert.equal(first.duplicate, false);
+  const accepted = JSON.parse(await readFile(join(f.directory, 'state.json'), 'utf8')).workflowEventJournal.find(value => value.id === first.eventId);
+  assert.ok(accepted.source.id.length <= 120);
+  assert.deepEqual(accepted.origin, { kind: 'workload', id: workload.id });
+  await f.restart();
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: f.project.id } }, principal);
+  const duplicate = await f.act('submitWorkflowEvent', { descriptorId: longDescriptor.id, idempotencyKey: 'long-descriptor-1', payload }, principal);
+  assert.equal(duplicate.duplicate, true);
+  await assert.rejects(f.act('submitWorkflowEvent', { descriptorId: longDescriptor.id, idempotencyKey: 'long-descriptor-1',
+    payload: { ...payload, status: 'rejected' } }, principal), /conflicts/i);
 });
 
 test('resource-scoped inventory subscriptions preserve generic scope without Work import bindings', async t => {
@@ -142,6 +188,85 @@ test('resource-scoped inventory subscriptions preserve generic scope without Wor
   assert.equal(snapshot.automationCapabilities.events.find(value => value.id === inventorySignal.id).scope, 'resource');
   assert.equal(snapshot.workflowRuns.length, 0);
   assert.equal(snapshot.sessions.length, 0);
+});
+
+test('automation bindings accept schema-valid unusual target property names', async t => {
+  const f = await fixture(t, { workflowEvents: [inventorySignal] });
+  const workflow = await f.act('saveWorkflow', { projectId: f.project.id, workflow: {
+    id: 'inventory-input-review', name: 'Inventory input review',
+    runInputSchema: { type: 'object', properties: { _count: { type: 'number' }, 'quoted amount': { type: 'number' } },
+      required: ['_count', 'quoted amount'], additionalProperties: false },
+    nodes: [{ id: 'review', name: 'Review count', kind: 'human', prompt: 'Review the count.' }], edges: [],
+  } });
+  const saved = await f.act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+    name: 'Bind unusual schema keys', projectId: f.project.id,
+    when: { event: inventorySignal.id, eventRevision: 1, resourceRef: { kind: 'inventory.item', id: 'SKU-42' } },
+    if: [], then: { action: 'start_workflow', workflowId: workflow.id, workflowVersion: workflow.version,
+      inputBindings: { _count: { from: { kind: 'event_payload', path: ['count'] } }, 'quoted amount': { value: 0 } } },
+    enabled: true,
+  } });
+  assert.deepEqual(Object.keys(saved.then.inputBindings).sort(), ['_count', 'quoted amount']);
+  await assert.rejects(f.act('saveAutomation', { organizationId: 'personal', revision: saved.revision, rule: {
+    ...saved, then: { ...saved.then, inputBindings: { ...saved.then.inputBindings, undeclared: { value: 1 } } },
+  } }), /invalid binding/i);
+});
+
+test('output-correlated event waits use typed receipt values and exact resource scope after restart', async t => {
+  const calculated = { ...inventory, ref: { id: 'inventory.calculate', revision: 1 },
+    outputSchema: { type: 'object', properties: { count: { type: 'integer', minimum: 0 } }, required: ['count'], additionalProperties: false } };
+  const f = await fixture(t, { workflowEvents: [calculatedEvent, inventorySignal], workflowActivities: [{ descriptor: calculated,
+    implementation: { async prepare() { return {}; }, async dispatch() { return { state: 'completed', output: { count: 24 } }; } } }] });
+  const other = await f.act('saveProject', { name: 'Other inventory' });
+  const workflow = await f.act('saveWorkflow', { projectId: f.project.id, workflow: {
+    id: 'inventory-correlation', name: 'Inventory correlation',
+    nodes: [
+      { id: 'calculate', name: 'Calculate count', kind: 'action', activity: calculated.ref, bindings: {} },
+      { id: 'wait', name: 'Wait for count event', kind: 'wait', waitFor: {
+        event: calculatedEvent.id, resourceRef: { kind: 'inventory.item', id: 'SKU-42' },
+        correlation: { key: 'count', from: 'output.calculate.count' },
+      } },
+    ], edges: [{ from: 'calculate', to: 'wait', outcome: 'success' }],
+  } });
+  const started = await f.act('startWorkflowRun', { projectId: f.project.id, workflowId: workflow.id, workflowVersion: workflow.version });
+  const runId = started.workflowRunId;
+  await until(async () => (await f.act('getWorkflowRun', { workflowRunId: runId })).status === 'waiting_event');
+  await assert.rejects(f.act('saveWorkflow', { projectId: f.project.id, workflow: {
+    id: 'invalid-output-correlation', name: 'Invalid output correlation',
+    nodes: [
+      { id: 'calculate', name: 'Calculate count', kind: 'action', activity: calculated.ref, bindings: {} },
+      { id: 'wait', name: 'Wait for count event', kind: 'wait', waitFor: {
+        event: calculatedEvent.id, resourceRef: { kind: 'inventory.item', id: 'SKU-42' },
+        correlation: { key: 'count', from: 'output.unrelated.count' },
+      } },
+    ], edges: [{ from: 'calculate', to: 'wait', outcome: 'success' }],
+  } }), /upstream registered activity/i);
+  await assert.rejects(f.act('saveWorkflow', { projectId: f.project.id, workflow: {
+    id: 'invalid-output-path-correlation', name: 'Invalid output path correlation',
+    nodes: [
+      { id: 'calculate', name: 'Calculate count', kind: 'action', activity: calculated.ref, bindings: {} },
+      { id: 'wait', name: 'Wait for count event', kind: 'wait', waitFor: {
+        event: calculatedEvent.id, resourceRef: { kind: 'inventory.item', id: 'SKU-42' },
+        correlation: { key: 'count', from: 'output.calculate.missing' },
+      } },
+    ], edges: [{ from: 'calculate', to: 'wait', outcome: 'success' }],
+  } }), /output path is not declared/i);
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: other.id } });
+  await f.act('submitWorkflowEvent', { descriptorId: calculatedEvent.id, idempotencyKey: 'foreign-project-count',
+    payload: { count: 24 }, resourceRef: { kind: 'inventory.item', id: 'SKU-42' } });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: f.project.id } });
+  assert.equal((await f.act('getWorkflowRun', { workflowRunId: runId })).status, 'waiting_event');
+  await f.act('submitWorkflowEvent', { descriptorId: calculatedEvent.id, idempotencyKey: 'wrong-resource-count',
+    payload: { count: 24 }, resourceRef: { kind: 'inventory.item', id: 'SKU-43' } });
+  await assert.rejects(f.act('submitWorkflowEvent', { descriptorId: calculatedEvent.id, idempotencyKey: 'wrong-resource-count',
+    payload: { count: 24 }, resourceRef: { kind: 'inventory.item', id: 'SKU-42' } }), /conflicts/i);
+  await assert.rejects(f.act('submitWorkflowEvent', { descriptorId: 'ticket_moved', idempotencyKey: 'work-not-manual', payload: {} }), /does not allow manual/i);
+  assert.equal((await f.act('getWorkflowRun', { workflowRunId: runId })).status, 'waiting_event');
+  await f.restart();
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: f.project.id } });
+  assert.equal((await f.act('getWorkflowRun', { workflowRunId: runId })).status, 'waiting_event');
+  await f.act('submitWorkflowEvent', { descriptorId: calculatedEvent.id, idempotencyKey: 'matching-resource-count',
+    payload: { count: 24 }, resourceRef: { kind: 'inventory.item', id: 'SKU-42' } });
+  assert.equal((await f.act('getWorkflowRun', { workflowRunId: runId })).status, 'completed');
 });
 
 test('manual event correlation reads declared nested paths', async t => {
@@ -189,6 +314,47 @@ test('legacy Work ticket_moved facts trigger a no-session workflow run through t
   const decision = snapshot.workflowEventDecisions.items.find(value => value.runId === summary.id);
   assert.equal(decision.status, 'started');
   assert.equal(decision.sourceEventId?.startsWith('ticket_moved:'), true);
+});
+
+test('buffered Work waits match the immutable accepted status after the ticket changes again', async t => {
+  const f = await fixture(t);
+  const ticket = await f.act('createTicket', {
+    requestId: 'buffered-work-status-ticket', projectId: f.project.id, title: 'Status history',
+  });
+  const workflow = await f.act('saveWorkflow', { projectId: f.project.id, workflow: {
+    id: 'buffered-work-status', name: 'Review published transition', nodes: [
+      { id: 'gate', kind: 'human', name: 'Review', prompt: 'Continue to the publication wait.' },
+      { id: 'wait', kind: 'wait', name: 'Wait for publication', waitFor: {
+        event: 'ticket_updated', ticketSource: 'active_ticket', status: 'Published',
+      } },
+    ], edges: [{ from: 'gate', to: 'wait', outcome: 'approved' }],
+  } });
+  const started = await f.act('startWorkflowRun', {
+    projectId: f.project.id, workflowId: workflow.id, workflowVersion: workflow.version, activeTicketId: ticket.id,
+  });
+  const gate = await f.act('getWorkflowRun', { workflowRunId: started.workflowRunId });
+  const published = await f.act('updateTicket', {
+    taskId: ticket.id, revision: ticket.revision, patch: { status: 'Published' },
+  });
+  await f.act('updateTicket', {
+    taskId: ticket.id, revision: published.revision, patch: { status: 'Drafting' },
+  });
+  const persisted = JSON.parse(await readFile(join(f.directory, 'state.json'), 'utf8'));
+  const facts = persisted.workflowEventJournal.filter(event => event.payload?.ticketId === ticket.id);
+  assert.ok(facts.some(event => event.payload.status === 'Published'));
+  assert.ok(facts.some(event => event.payload.status === 'Drafting'));
+
+  await f.act('claimWorkflowRun', { workflowRunId: started.workflowRunId });
+  await f.act('decideWorkflowRun', {
+    workflowRunId: started.workflowRunId, instance: gate.instance, decision: 'approve',
+  });
+  await f.runtime().tickWorkflowEvents();
+  const finished = await until(async () => {
+    const run = await f.act('getWorkflowRun', { workflowRunId: started.workflowRunId });
+    return run.status === 'completed' ? run : null;
+  }, 'the buffered immutable status fact did not satisfy the new wait');
+  assert.equal(finished.status, 'completed', 'the accepted Published fact remains eligible after current state changes');
+  assert.equal((await f.snapshot()).sessions.length, 0);
 });
 
 test('event decision restart reuses its reserved run ID and never replays an applied activity', async t => {
@@ -370,6 +536,75 @@ test('event decision restart reuses its reserved run ID and never replays an app
   assert.equal(JSON.parse(await readFile(receiptPath, 'utf8')).dispatches, 1);
 });
 
+test('retry reconciles a failed event acknowledgement through its existing run identity', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'convoy-event-ack-retry-'));
+  const descriptor = { ...inventory, ref: { id: 'inventory.ack-proof', revision: 1 },
+    outputSchema: { type: 'object', properties: { count: { type: 'integer', minimum: 0 } }, required: ['count'], additionalProperties: false } };
+  let dispatches = 0;
+  const registration = { descriptor, implementation: {
+    async prepare() { return {}; },
+    async dispatch() { dispatches++; return { state: 'completed', output: { count: 1 } }; },
+  } };
+  const persistence = await createPersistence({ directory, initialState: initialControlPlaneState(defaultWorkflowDefinition) });
+  const originalSave = persistence.store.save.bind(persistence.store);
+  let failedAcknowledgement = false;
+  persistence.store.save = async (...args) => {
+    const saved = await originalSave(...args);
+    const decision = Object.values(persistence.store.data.automationDecisionLedger ?? {}).find(value =>
+      value.workflowId === 'ack-retry-workflow' && value.status === 'started' && persistence.store.data.workflowRuns?.[value.runId]);
+    if (!failedAcknowledgement && decision) {
+      failedAcknowledgement = true;
+      throw new Error('Injected acknowledgement loss after canonical run creation.');
+    }
+    return saved;
+  };
+  let runtime = await createControlPlaneRuntime({ persistence, models: [{ id: 'fixture' }], workflowEvents: [callback], workflowActivities: [registration],
+    auth: { token: async () => 'fixture', status: async () => ({ connected: true }) },
+    generate: async function* () { assert.fail('No provider is needed for an event-owned activity.'); },
+    runners: { execute: async () => { assert.fail('No runner is needed for a daemon activity.'); }, close: async () => {} },
+  });
+  t.after(async () => { await runtime?.close(); await rm(directory, { recursive: true, force: true }); });
+  const act = (action, input = {}) => runtime.command({ action, client: 'event-ack-retry', ...input });
+  const project = await act('saveProject', { name: 'Event acknowledgement recovery' });
+  await act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
+  const workflow = await act('saveWorkflow', { projectId: project.id, workflow: {
+    id: 'ack-retry-workflow', name: 'Acknowledge after start',
+    nodes: [{ id: 'calculate', kind: 'action', name: 'Calculate inventory', activity: descriptor.ref }], edges: [],
+  } });
+  const rule = await act('saveAutomation', { organizationId: 'personal', revision: 0, rule: {
+    name: 'Start acknowledgement workflow', projectId: project.id,
+    when: { event: callback.id, eventRevision: callback.revision }, if: [],
+    then: { action: 'start_workflow', workflowId: workflow.id, workflowVersion: workflow.version },
+    concurrency: { policy: 'independent', maxActiveRuns: 2 }, enabled: true,
+  } });
+  const event = await act('submitWorkflowEvent', { descriptorId: callback.id, descriptorRevision: callback.revision,
+    idempotencyKey: 'ack-loss-event', payload: { requestId: 'ack-loss', status: 'published' } });
+  await runtime.tickWorkflowEvents();
+  const failed = await until(async () => {
+    const state = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+    const decision = Object.values(state.automationDecisionLedger ?? {}).find(value => value.eventId === event.eventId);
+    return decision?.status === 'failed' ? { state, decision } : null;
+  }, 'The post-create acknowledgement failure was not retained for explicit retry.');
+  assert.equal(failedAcknowledgement, true);
+  assert.ok(failed.state.workflowRuns[failed.decision.runId], 'the canonical run was saved before acknowledgement failed');
+  const originalRunId = failed.decision.runId;
+  await act('retryWorkflowEventDecision', { decisionKey: failed.decision.decisionKey });
+  const retried = await until(async () => {
+    const value = await act('getWorkflowRun', { workflowRunId: originalRunId });
+    return value.status === 'completed' ? value : null;
+  }, 'the existing run did not complete after decision acknowledgement retry');
+  const finalState = JSON.parse(await readFile(join(directory, 'state.json'), 'utf8'));
+  assert.equal(retried.status, 'completed');
+  assert.equal(retried.attempt.status, 'completed');
+  assert.deepEqual(finalState.workflowRuns[originalRunId].attempt.output, { count: 1 });
+  assert.equal(retried.id, originalRunId);
+  assert.equal(finalState.workflowRuns[originalRunId].provenance.decisionKey, failed.decision.decisionKey);
+  assert.equal(Object.keys(finalState.workflowRuns).length, 1);
+  assert.equal(Object.values(finalState.automationDecisionLedger).filter(value => value.ruleId === rule.id).length, 1);
+  assert.equal(finalState.automationDecisionLedger[failed.decision.decisionKey].status, 'started');
+  assert.equal(dispatches, 1, 'explicit retry reconciles the already-created run instead of dispatching again');
+});
+
 test('workflow event publication validates typed predicates against the selected revision', async t => {
   const f = await fixture(t, { workflowEvents: [callback, publicationRevision2] });
   const workflow = await f.act('saveWorkflow', { projectId: f.project.id, workflow: {
@@ -414,6 +649,11 @@ test('workflow event publication validates typed predicates against the selected
   assert.equal(pinnedState.workflows.find(value => value.id === waitWorkflow.id).nodes[0].waitFor.eventRevision, 1);
   const pinnedWait = Object.values(pinnedState.workflowWaits).find(value => value.runId === waiting.workflowRunId && value.nodeId === 'callback');
   assert.equal(pinnedWait.descriptor.revision, 1);
+  await f.restart(persisted => { delete persisted.workflowRuns[waiting.workflowRunId].workflow.nodes[0].waitFor.eventRevision; });
+  await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: f.project.id } });
+  const legacyPinned = JSON.parse(await readFile(join(f.directory, 'state.json'), 'utf8'));
+  assert.equal(legacyPinned.workflowRuns[waiting.workflowRunId].workflow.nodes[0].waitFor.eventRevision, undefined);
+  assert.equal(Object.values(legacyPinned.workflowWaits).find(value => value.runId === waiting.workflowRunId).descriptor.revision, 1);
   await f.act('submitWorkflowEvent', { descriptorId: callback.id, descriptorRevision: 2, idempotencyKey: 'revision-2',
     payload: { requestId: 'revision-request', status: 12 } });
   await f.runtime().tickWorkflowEvents();
