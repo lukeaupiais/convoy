@@ -59,6 +59,11 @@ const kindIcon: Record<NodeKind, typeof Zap> = {
 };
 
 type WorkflowTemplate = 'team-delivery' | 'small-change' | 'bug-fix' | 'blank';
+const legacyTicketWaitEvents = new Set([
+  'ticket_message_received',
+  'ticket_source_updated',
+  'ticket_updated',
+]);
 
 function templateWorkflow(template: WorkflowTemplate): GraphWorkflow {
   if (template === 'blank') return blankWorkflow();
@@ -1527,69 +1532,68 @@ function NodeInspector({
             Event
             <select
               value={node.waitFor?.event ?? 'ticket_message_received'}
-              onChange={(event) =>
-                onPatch(node.id, {
-                  waitFor: {
-                    ...node.waitFor,
-                    event: event.target.value as NonNullable<GraphNode['waitFor']>['event'],
-                    ticketSource: node.waitFor?.ticketSource ?? 'active_ticket',
-                  },
-                })
-              }
+              onChange={(event) => {
+                const selectedEvent = event.target.value;
+                const waitFor: NonNullable<GraphNode['waitFor']> = {
+                  ...node.waitFor,
+                  event: selectedEvent,
+                };
+                if (legacyTicketWaitEvents.has(selectedEvent))
+                  waitFor.ticketSource = node.waitFor?.ticketSource ?? 'active_ticket';
+                else if (legacyTicketWaitEvents.has(node.waitFor?.event ?? '')) {
+                  delete waitFor.ticketSource;
+                  delete waitFor.relationKind;
+                  delete waitFor.status;
+                }
+                onPatch(node.id, { waitFor });
+              }}
             >
+              {node.waitFor?.event && !legacyTicketWaitEvents.has(node.waitFor.event) && (
+                <option value={node.waitFor.event}>{node.waitFor.event}</option>
+              )}
               <option value="ticket_message_received">Source message received</option>
               <option value="ticket_source_updated">Imported ticket updated</option>
               <option value="ticket_updated">Local ticket updated</option>
             </select>
           </label>
-          <label>
-            Ticket
-            <select
-              value={node.waitFor?.ticketSource ?? 'active_ticket'}
-              onChange={(event) =>
-                onPatch(node.id, {
-                  waitFor: {
-                    event: node.waitFor?.event ?? 'ticket_message_received',
-                    ticketSource: event.target.value as NonNullable<
-                      GraphNode['waitFor']
-                    >['ticketSource'],
-                    status: node.waitFor?.status,
-                  },
-                })
-              }
-            >
-              <option value="active_ticket">Active ticket</option>
-              <option value="related_ticket">Related ticket</option>
-            </select>
-          </label>
-          {node.waitFor?.ticketSource === 'related_ticket' && (
-            <label>
-              Relation kind (optional)
-              <input
-                value={node.waitFor.relationKind ?? ''}
-                onChange={(event) =>
-                  onPatch(node.id, {
-                    waitFor: { ...node.waitFor!, relationKind: event.target.value || undefined },
-                  })
-                }
-              />
-            </label>
+          {legacyTicketWaitEvents.has(node.waitFor?.event ?? 'ticket_message_received') && (
+            <>
+              <label>
+                Ticket
+                <select
+                  value={node.waitFor?.ticketSource ?? 'active_ticket'}
+                  onChange={(event) => onPatch(node.id, {
+                    waitFor: { ...node.waitFor!, ticketSource: event.target.value as 'active_ticket' | 'related_ticket' },
+                  })}
+                >
+                  <option value="active_ticket">Active ticket</option>
+                  <option value="related_ticket">Related ticket</option>
+                </select>
+              </label>
+              {node.waitFor?.ticketSource === 'related_ticket' && (
+                <label>
+                  Relation kind (optional)
+                  <input
+                    value={node.waitFor.relationKind ?? ''}
+                    onChange={(event) =>
+                      onPatch(node.id, {
+                        waitFor: { ...node.waitFor!, relationKind: event.target.value || undefined },
+                      })
+                    }
+                  />
+                </label>
+              )}
+              <label>
+                Required status (optional)
+                <input
+                  value={node.waitFor?.status ?? ''}
+                  onChange={(event) => onPatch(node.id, {
+                    waitFor: { ...node.waitFor!, status: event.target.value || undefined },
+                  })}
+                />
+              </label>
+            </>
           )}
-          <label>
-            Required status (optional)
-            <input
-              value={node.waitFor?.status ?? ''}
-              onChange={(event) =>
-                onPatch(node.id, {
-                  waitFor: {
-                    event: node.waitFor?.event ?? 'ticket_message_received',
-                    ticketSource: node.waitFor?.ticketSource ?? 'active_ticket',
-                    status: event.target.value || undefined,
-                  },
-                })
-              }
-            />
-          </label>
         </details>
       )}
       {node.type === 'action' && (

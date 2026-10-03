@@ -12,6 +12,24 @@ export const workAutomationCapabilities = {
   ].map(([id,label]) => ({id,label})),
 };
 
+const workPayload = [
+  { path: 'ticketId', type: 'number', required: true },
+  { path: 'status', type: 'string' },
+  { path: 'workType', type: 'string' },
+  { path: 'boardId', type: 'string' },
+  { path: 'fromColumnId', type: 'string' },
+  { path: 'toColumnId', type: 'string' },
+  { path: 'bindingId', type: 'string' },
+  { path: 'messageId', type: 'string' },
+];
+
+/** Stable Work facts exposed to Workflow subscribers; payloads omit ticket body and thread text. */
+export const workWorkflowEventDescriptors = workAutomationCapabilities.events.map(event => ({
+  id: `work.${event.id}`, revision: 1, label: event.label,
+  source: { owner: 'work' }, tenantScope: 'project', payload: workPayload,
+  correlationPaths: ['ticketId'], maxPayloadBytes: 8192, aliases: [event.id],
+}));
+
 /** Resolve declared command effects against authorized Work configuration only. */
 export function resolveBoardEffect({ operation, input, board, connections = [], bindings = [], tickets = [], projectId }) {
   if (input.boardId && input.boardId !== board.id) return null;

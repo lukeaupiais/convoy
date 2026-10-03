@@ -1,25 +1,38 @@
-export type AutomationEvent =
-  | 'ticket_created'
-  | 'ticket_updated'
-  | 'ticket_moved'
-  | 'board_placement_changed'
-  | 'ticket_imported'
-  | 'ticket_source_updated'
-  | 'ticket_message_received';
+export type AutomationEvent = string;
 export type AutomationCondition = {
   field: string;
-  operator: 'equals';
-  value: string | number | boolean;
+  operator: 'equals' | 'notEquals' | 'exists' | 'greaterThan' | 'lessThan';
+  value?: string | number | boolean;
 };
 export type AutomationRule = {
   id: string;
   name: string;
   organizationId: string;
   projectId: string;
-  when: { event: AutomationEvent; boardId?: string; columnId?: string; bindingId?: string };
+  when: {
+    event: AutomationEvent;
+    eventRevision?: number;
+    boardId?: string;
+    columnId?: string;
+    bindingId?: string;
+    resourceRef?: { kind: string; id: string };
+  };
   if: AutomationCondition[];
-  then: { action: 'start_workflow'; workflowId: string; workflowVersion: number };
+  then: {
+    action: 'start_workflow';
+    workflowId: string;
+    workflowVersion: number;
+    inputBindings?: Record<
+      string,
+      { value: unknown } | { from: { kind: 'event_payload'; path: string[] } }
+    >;
+  };
   enabled: boolean;
+  concurrency?: {
+    policy: 'reject' | 'hold' | 'independent';
+    maxActiveRuns: number;
+    overflowPolicy?: 'reject' | 'hold';
+  };
   principal:
     { kind: 'user'; userId: string } | { kind: 'workload'; workloadIdentityId: string } | null;
   revision: number;
@@ -28,8 +41,17 @@ export type AutomationCapabilities = {
   events: {
     id: AutomationEvent;
     label: string;
-    scope: 'project' | 'board' | 'binding';
+    descriptorId?: string;
+    revision?: number;
+    scope: 'organization' | 'project' | 'resource' | 'board' | 'binding';
     fields: string[];
+    payload?: {
+      path: string;
+      type: 'string' | 'number' | 'boolean' | 'enum';
+      values?: string[];
+      required?: boolean;
+    }[];
+    manual?: boolean;
   }[];
   actions: { id: string; label: string }[];
   ruleActions: { id: 'start_workflow'; label: string }[];

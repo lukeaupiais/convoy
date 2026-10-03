@@ -109,20 +109,29 @@ export function createSnapshotQuery({
       },
     );
 
-    const automationDecisions = Object.entries(state.automationDecisionLedger)
-      .filter(([, trigger]) =>
-        moduleState.tickets?.some((ticket) => ticket.id === trigger.ticketId),
-      )
-      .map(([triggerKey, trigger]) => ({ triggerKey, ...trigger }));
+    const automationDecisions = moduleState.automationDecisions ?? [];
+    const descriptorCapabilities = (moduleState.workflowEventDescriptors ?? []).flatMap(descriptor => {
+      const scope = descriptor.tenantScope;
+      return [descriptor.id, ...(descriptor.aliases ?? [])].map(id => ({
+        id, descriptorId: descriptor.id, revision: descriptor.revision, label: descriptor.label,
+        scope: workAutomationCapabilities.events.find(event => event.id === id)?.scope ?? scope,
+        fields: [...new Set([...(workAutomationCapabilities.events.find(event => event.id === id)?.fields ?? []), ...descriptor.payload.map(field => field.path)])],
+        payload: descriptor.payload,
+        manual: descriptor.manual === true,
+      }));
+    });
+    const automationCapabilities = {
+      ...workAutomationCapabilities,
+      events: descriptorCapabilities.length ? descriptorCapabilities : workAutomationCapabilities.events,
+      ruleActions: [{ id: 'start_workflow', label: 'Start workflow' }],
+    };
     const boardAutomations = boardAutomationRelationships({
       boards: moduleState.boards ?? [],
       projects: moduleState.projects ?? [],
       workflows: moduleState.workflows ?? [],
       rules: moduleState.automations ?? [],
       decisions: automationDecisions,
-      eventLabels: Object.fromEntries(
-        workAutomationCapabilities.events.map((event) => [event.id, event.label]),
-      ),
+      eventLabels: Object.fromEntries(automationCapabilities.events.map((event) => [event.id, event.label])),
       resolveEffect: (input) =>
         resolveBoardEffect({
           ...input,
@@ -138,16 +147,8 @@ export function createSnapshotQuery({
         (rule) => !scope || scope.projectIds.includes(rule.projectId),
       ),
       workflowEffects: workflowEffectSummaries(scope?.projectIds),
-      automationFailures: state.automationFailures
-        .filter((failure) => {
-          const ticket = state.tickets.find((candidate) => candidate.id === failure.ticketId);
-          return !scope || scope.projectIds.includes(ticket?.projectId);
-        })
-        .slice(-100),
-      automationCapabilities: {
-        ...workAutomationCapabilities,
-        ruleActions: [{ id: 'start_workflow', label: 'Start workflow' }],
-      },
+      automationFailures: moduleState.automationFailures ?? [],
+      automationCapabilities,
       automationDecisions,
       sessions: publicSessions,
       auth: legacyProviderVisible

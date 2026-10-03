@@ -190,18 +190,20 @@ export function createBuiltinWorkflowActivityImplementations({ workCommand, work
   });
   implementations.set('runner.inspect-changes@1', {
     async prepare(input, _identity, context) {
-      const session = context.session ?? (context.run?.sessionId ? state.sessions?.[context.run.sessionId] : null);
-      if (!session?.workspace || !session.runnerId) throw new Error('Inspect changes requires an active workspace and runner.');
-      return { workspace: { runnerId: session.runnerId, workspaceId: session.workspace.id ?? session.workspace.path,
-        grantDigest: session.executionGrant?.digest ?? null }, ignoreArtifact: input.ignoreArtifact ?? null };
+      const resourceContext = context.session ?? (context.run?.sessionId ? state.sessions?.[context.run.sessionId] :
+        context.run?.independentRun ? context.run : null);
+      if (!resourceContext?.workspace || !resourceContext.runnerId) throw new Error('Inspect changes requires an active workspace and runner.');
+      return { workspace: { runnerId: resourceContext.runnerId, workspaceId: resourceContext.workspace.id ?? resourceContext.workspace.path,
+        grantDigest: resourceContext.executionGrant?.digest ?? null }, ignoreArtifact: input.ignoreArtifact ?? null };
     },
     async dispatch(context, _input, intent, signal) {
-      const session = context.session ?? (context.run?.sessionId ? state.sessions?.[context.run.sessionId] : null);
-      if (!session?.workspace || !session.runnerId || session.runnerId !== intent.workspace.runnerId ||
-          (session.workspace.id ?? session.workspace.path) !== intent.workspace.workspaceId ||
-          (session.executionGrant?.digest ?? null) !== intent.workspace.grantDigest)
+      const resourceContext = context.session ?? (context.run?.sessionId ? state.sessions?.[context.run.sessionId] :
+        context.run?.independentRun ? context.run : null);
+      if (!resourceContext?.workspace || !resourceContext.runnerId || resourceContext.runnerId !== intent.workspace.runnerId ||
+          (resourceContext.workspace.id ?? resourceContext.workspace.path) !== intent.workspace.workspaceId ||
+          (resourceContext.executionGrant?.digest ?? null) !== intent.workspace.grantDigest)
         throw new Error('Inspect changes workspace authority changed before dispatch.');
-      const observed = await inspectChanges(session, intent.ignoreArtifact ?? undefined, signal);
+      const observed = await inspectChanges(resourceContext, intent.ignoreArtifact ?? undefined, signal);
       if (!observed || typeof observed.digest !== 'string') throw new Error('Runner returned invalid change evidence.');
       return { state: 'completed', output: { digest: observed.digest,
         changedFiles: Array.isArray(observed.changedFiles) ? observed.changedFiles.slice(0, 256) : [] } };

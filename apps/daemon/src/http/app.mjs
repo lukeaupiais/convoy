@@ -74,6 +74,25 @@ export function createApp({
           json(404, { error: 'Session not found.' });
         return;
       }
+      const workflowWebhookRoute = /^\/api\/workflow-events\/([A-Za-z0-9][\w.-]{0,99})$/.exec(req.url ?? '');
+      if (workflowWebhookRoute && req.method === 'POST') {
+        if (requestIdentity.source !== 'bearer' || requestIdentity.principal?.kind !== 'service-principal')
+          return json(401, { error: 'A service-principal bearer credential is required.' }, { 'WWW-Authenticate': 'Bearer' });
+        let body = '';
+        for await (const chunk of req) {
+          body += chunk;
+          if (Buffer.byteLength(body) > 256_000) return json(413, { error: 'Request too large.' });
+        }
+        let payload;
+        try { payload = JSON.parse(body); }
+        catch { return json(400, { error: 'Invalid JSON.' }); }
+        try {
+          return json(200, await runtime.receiveWorkflowWebhook(workflowWebhookRoute[1], payload, requestIdentity.principal));
+        } catch (error) {
+          return json(/credential|principal|not authorized|permission|unavailable/i.test(error.message) ? 403 : 400,
+            { error: error.message });
+        }
+      }
       const contextRoute = /^\/api\/context\/(\d{1,10}|chat-[a-f0-9-]{36})\/([a-f0-9]{64})$/.exec(
         req.url ?? '',
       );

@@ -165,6 +165,26 @@ export type WorkflowCondition = {
   trueOutcome: string;
   falseOutcome: string;
 };
+export type WorkflowWaitPredicate = {
+  path: string;
+  operator: 'exists' | 'equals' | 'notEquals' | 'greaterThan' | 'lessThan';
+  value?: string | number | boolean;
+};
+export type WorkflowWaitFor = {
+  /** Event IDs are registered by an event owner; the contract stays owner-neutral. */
+  event: string;
+  eventRevision?: number;
+  scope?: 'organization' | 'project' | 'resource';
+  resourceRef?: { kind: string; id: string };
+  correlation?: { key: string; from: string };
+  if?: WorkflowWaitPredicate[];
+  timeoutSeconds?: number;
+  timeoutOutcome?: string;
+  /** Work-owned compatibility filters for the historical ticket wait aliases. */
+  ticketSource?: 'active_ticket' | 'related_ticket';
+  relationKind?: string;
+  status?: string;
+};
 export type WorkflowStep = {
   id: string;
   name: string;
@@ -206,12 +226,7 @@ export type WorkflowStep = {
   skills?: string[];
   model?: string;
   condition?: WorkflowCondition;
-  waitFor?: {
-    event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated';
-    ticketSource?: 'active_ticket' | 'related_ticket';
-    relationKind?: string;
-    status?: string;
-  };
+  waitFor?: WorkflowWaitFor;
   x?: number;
   y?: number;
 };
@@ -257,7 +272,7 @@ export type AutomationDecisionFailure = {
   at?: string;
 };
 export type AutomationDecision = AutomationDecisionFailure & {
-  status: 'pending' | 'started' | 'failed' | 'conflict' | 'blocked_active' | 'coalesced';
+  status: 'pending' | 'reserved' | 'started' | 'failed' | 'held' | 'conflict' | 'blocked_active' | 'coalesced';
   ruleId?: string;
   ruleRevision?: number;
   activeSessionId?: string;

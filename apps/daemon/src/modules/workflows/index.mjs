@@ -7,5 +7,6 @@ export { workflowActionInput } from './action-input.mjs';
 export { boardAutomationRelationships } from './board-automations.mjs';
 export { validateActivityBindings, validateActivitySchema, validateActivityValue, validateWorkflowResultBindings, activityDigest } from './activity-data.mjs';
 export { createActivityCatalog, builtinActivityDescriptors, legacyActivityRef } from './activity-catalog.mjs';
+export { createWorkflowEventJournal, workflowEventPath } from './event-journal.mjs';
 
 export { submissionContract, submissionToolSchema, validateSubmissionContract } from './submission-contract.mjs';
