@@ -247,6 +247,7 @@ export async function createRuntime({
   });
   migrateWorkflowEffectState(state);
   let queue = Promise.resolve();
+  let compositionAdvance = Promise.resolve();
   let closing = false;
   let closePromise;
   function event(session, type, data = {}) {
@@ -1368,6 +1369,7 @@ export async function createRuntime({
     now,
   });
   function launch(s, input, step, instance) {
+    if (step && ['child', 'parallel', 'map'].includes(step.kind)) return false;
     if (s.independentRun) {
       if (!step || step.kind === 'agent') return false;
       const project = state.projects.find((candidate) => candidate.id === s.projectId);
@@ -1561,6 +1563,7 @@ export async function createRuntime({
         }
     }
     await engine.pump();
+    await advanceWorkflowCompositions();
     for (const s of Object.values(state.sessions)) {
       if (
         jobs.has(s.id) ||
@@ -1578,6 +1581,53 @@ export async function createRuntime({
         s.status = 'running';
         launch(s, CONTINUE_INPUT);
       }
+    }
+  }
+  function advanceWorkflowCompositions() {
+    if (!workflows) return Promise.resolve();
+    const current = compositionAdvance.then(runWorkflowCompositionAdvance);
+    compositionAdvance = current.catch(() => {});
+    return current;
+  }
+  async function runWorkflowCompositionAdvance() {
+    for (let pass = 0; pass < 4; pass++) {
+      await workflows.settleCompositions();
+      let started = 0;
+      for (const candidate of workflows.compositionCandidates()) {
+        const limits = execution.workflowComposition.resolveWorkflowCompositionLimits(candidate.organizationId ?? 'personal', candidate.projectId);
+        let slots;
+        try { slots = await workflows.prepareComposition(candidate.runId, candidate.nodeId, candidate.instance, limits); }
+        catch (error) {
+          await workflows.failComposition(candidate.runId, candidate.nodeId, candidate.instance, error.message);
+          continue;
+        }
+        for (const slot of slots) {
+          const root = state.workflowRuns?.[slot.rootRunId];
+          const orgCurrent = limits.organization.limits.maxActiveDescendantRuns;
+          const projectCurrent = limits.project.limits?.maxActiveDescendantRuns ?? orgCurrent;
+          const orgPinned = root?.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? orgCurrent;
+          const projectPinned = root?.compositionPolicyPin?.project?.limits?.maxActiveDescendantRuns ?? orgPinned;
+          const active = workflows.activeCompositionReservations();
+          const orgActive = active.filter(run => run.organizationId === slot.organizationId).length;
+          const projectActive = active.filter(run => run.projectId === slot.projectId).length;
+          const rootActive = active.filter(run => run.rootRunId === slot.rootRunId).length;
+          if (orgActive >= Math.min(orgCurrent, orgPinned) || projectActive >= Math.min(projectCurrent, projectPinned)) continue;
+          const rootPinned = root?.compositionPolicyPin?.limits?.maxActiveDescendantsPerRoot ?? limits.effective.maxActiveDescendantsPerRoot;
+          if (rootActive >= Math.min(limits.effective.maxActiveDescendantsPerRoot, rootPinned)) continue;
+          try {
+            await identity.assertPrincipalActive(slot.principal);
+            await requireProjectPermission(slot.projectId, 'project.execute', slot.principal);
+            await workflows.admitCompositionSlot({ runId: slot.runId, nodeId: slot.nodeId, instance: slot.instance,
+              slotId: slot.slotId, limits });
+            started++;
+          } catch (error) {
+            await workflows.failComposition(slot.runId, slot.nodeId, slot.instance, error.message);
+          }
+        }
+      }
+      await workflows.settleCompositions();
+      if (!started) break;
+      await engine.pump();
     }
   }
   async function requestStop(s, interrupt = false, { awaitWork = true } = {}) {
@@ -1861,6 +1911,12 @@ export async function createRuntime({
     activityCatalog,
     activityAvailable: (ref) => workflowEffects.hasActivity(ref),
     prepareActivityIntent: (...args) => workflowEffects.prepareActivityIntent(...args),
+    resolveCompositionLimits: (organizationId, projectId) => execution.workflowComposition.resolveWorkflowCompositionLimits(organizationId, projectId),
+    authorizeCompositionTransition: async run => {
+      const principal = run.executionPrincipal ?? run.principal;
+      await identity.assertPrincipalActive(principal);
+      await requireProjectPermission(run.projectId, 'project.execute', principal);
+    },
     eventDescriptors: workflowEventDescriptors,
     validateEventWait: input => work.validateWorkflowWait(input),
     matchEventWaitSource: input => work.matchesWorkflowWait(input),

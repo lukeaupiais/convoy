@@ -1,5 +1,5 @@
 import { createWorkflowRegistry } from './workflow-registry.mjs';
-import { activityDigest, validateActivityValue, resolveActivityBindings, activitySchemaAtPath } from './activity-data.mjs';
+import { activityDigest, validateActivityValue, resolveActivityBindings, resolveActivityPath, activitySchemaAtPath, schemaAssignable, validateWorkflowResultBindings, agentSubmissionSchema } from './activity-data.mjs';
 import { humanFormSchema } from './activity-data.mjs';
 import { legacyActivityRef } from './activity-catalog.mjs';
 import { createWorkflowEventJournal, workflowEventPath } from './event-journal.mjs';
@@ -18,6 +18,40 @@ const sessionCommands = [
   'reviseSubmission',
 ];
 const activityIntentSchema = { type: 'object', properties: {}, additionalProperties: true };
+function schemaFromJson(value, depth = 0) {
+  if (depth > 12) throw new Error('Composition literal is too deeply nested.');
+  if (value === null) return { type: 'null' };
+  if (Array.isArray(value)) return { type: 'array', items: value.length ? schemaFromJson(value[0], depth + 1) : { type: 'object', properties: {}, additionalProperties: true }, minItems: value.length, maxItems: value.length };
+  if (typeof value === 'string') return { type: 'string', minLength: value.length, maxLength: value.length };
+  if (typeof value === 'number') return Number.isInteger(value) ? { type: 'integer', minimum: value, maximum: value } : { type: 'number', minimum: value, maximum: value };
+  if (typeof value === 'boolean') return { type: 'boolean', enum: [value] };
+  if (value && typeof value === 'object') return { type: 'object', properties: Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, schemaFromJson(nested, depth + 1)])), required: Object.keys(value), additionalProperties: false };
+  throw new Error('Composition literal must contain JSON values.');
+}
+function runBindingSources(run, workflow, { responseId, submission } = {}) {
+  const humanResponses = {};
+  const acceptedIds = new Map((run.flow?.history ?? []).filter(item => item.humanResponseId)
+    .map(item => [item.humanResponseId, item]));
+  const currentNode = workflow.nodes.find(item => item.id === run.flow?.nodeId);
+  if (responseId && currentNode?.kind === 'human')
+    acceptedIds.set(responseId, { humanResponseId: responseId, nodeId: run.flow.nodeId, instance: run.flow.instance });
+  for (const [id, entry] of acceptedIds) {
+    const response = run.humanResponses?.find(item => item.id === id && item.nodeId === entry.nodeId && item.instance === entry.instance);
+    const node = workflow.nodes.find(item => item.id === entry.nodeId);
+    if (response && node?.kind === 'human') humanResponses[node.id] = { value: response.values, schema: humanFormSchema(node), responseId: id };
+  }
+  const agentSubmissions = {};
+  const addSubmission = (nodeId, instance, value) => {
+    const node = workflow.nodes.find(item => item.id === nodeId);
+    if (node?.kind === 'agent' && value?.instance === instance && value?.nodeId === nodeId)
+      agentSubmissions[nodeId] = { value: { summary: value.summary, ...(value.details ? { details: value.details } : {}) }, schema: agentSubmissionSchema(node) };
+  };
+  for (const entry of run.flow?.history ?? []) if (entry.submission && entry.outcome === 'success')
+    addSubmission(entry.nodeId, entry.instance, entry.submission);
+  if (submission && submission.nodeId === run.flow?.nodeId && submission.instance === run.flow?.instance)
+    addSubmission(submission.nodeId, submission.instance, submission);
+  return { runInputSchema: workflow.runInputSchema, runInput: run.runInput ?? {}, activityOutputs: run.activityOutputs ?? {}, humanResponses, agentSubmissions };
+}
 function checkedActivityIntent(value) {
   const intent = validateActivityValue(value ?? {}, activityIntentSchema);
   if (Buffer.byteLength(JSON.stringify(intent)) > 16_000) throw new Error('Activity intent is too large.');
@@ -44,12 +78,6 @@ export function migrateWorkflowState(state, { defaultWorkflow, normalize }) {
     }
   }
   state.workflows ??= [];
-  if (!state.workflows.length) state.workflows.push(structuredClone(defaultWorkflow));
-  // Templates are additive: upgrading Convoy must never rewrite an operator's
-  // published graph or active-run pin, but every workspace should receive the
-  // current proven delivery starting point exactly once.
-  if (!state.workflows.some((workflow) => workflow.id === defaultWorkflow.id))
-    state.workflows.push(structuredClone(defaultWorkflow));
   state.workflowDrafts ??= {};
   state.defaultWorkflowIds ??= { organizations: {}, projects: {} };
   state.defaultWorkflowIds.organizations ??= {};
@@ -61,15 +89,6 @@ export function migrateWorkflowState(state, { defaultWorkflow, normalize }) {
   // operation nodes at read/dispatch boundaries; never rewrite their bytes here.
   for (const draft of Object.values(state.workflowDrafts)) {
     draft.workflow.organizationId ??= 'personal';
-  }
-  const latest = state.workflows.at(-1);
-  const latestNodes = latest?.nodes ?? latest?.steps ?? [];
-  if (latestNodes.some((step) => step.requiresCheck && !step.checkCommand)) {
-    const upgraded = structuredClone(latest);
-    upgraded.version = state.workflows.length + 1;
-    for (const step of upgraded.nodes ?? upgraded.steps)
-      if (step.requiresCheck && !step.checkCommand) step.checkCommand = 'npm test';
-    state.workflows.push(upgraded);
   }
 }
 
@@ -145,6 +164,8 @@ export function createWorkflows({
   activityCatalog,
   activityAvailable = () => true,
   prepareActivityIntent = async () => { throw new Error('Activity intent preparation is unavailable.'); },
+  resolveCompositionLimits = () => ({ effective: { maxDescendantRuns: 128, maxMapItems: 100, maxConcurrentChildren: 8, maxDeadlineMs: 604_800_000, maxActiveDescendantRuns: 32, maxActiveDescendantsPerRoot: 8 }, organization: { revision: 0 }, project: { revision: 0 } }),
+  authorizeCompositionTransition = async () => {},
   eventDescriptors = [],
   validateEventWait = () => {},
   matchEventWaitSource = () => undefined,
@@ -225,6 +246,106 @@ export function createWorkflows({
       if (!descriptor.aliases.includes(wait.event)) wait.event = descriptor.id;
       wait.eventRevision = descriptor.revision;
       wait.scope = descriptor.tenantScope;
+    }
+    validateWorkflowResultBindings(workflow, activityCatalog);
+    const reachable = (from, to) => {
+      const pending = [from], seen = new Set();
+      while (pending.length) {
+        const id = pending.pop();
+        if (id === to && id !== from) return true;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        for (const edge of edges) if (edge.from === id) pending.push(edge.to);
+      }
+      return false;
+    };
+    const schemaForSource = from => {
+      if (from.kind === 'run_input') return activitySchemaAtPath(workflow.runInputSchema, from.path);
+      const source = byId.get(from.nodeId);
+      if (!source || !reachable(source.id, workflow.currentValidationNodeId ?? source.id)) throw new Error('Workflow binding source must precede its consumer.');
+      if (from.kind === 'activity_output') {
+        const descriptor = source.activity ? activityCatalog?.get(source.activity) : null;
+        const schema = descriptor?.outputSchema ?? (['child', 'parallel', 'map'].includes(source.kind) ? source.outputSchema : null);
+        if (!schema) throw new Error('Workflow binding source has no declared output schema.');
+        return activitySchemaAtPath(schema, from.path);
+      }
+      if (from.kind === 'human_response') {
+        if (source.kind !== 'human') throw new Error('Workflow binding source is not a human task.');
+        return activitySchemaAtPath(humanFormSchema(source), from.path);
+      }
+      if (from.kind === 'agent_submission') {
+        if (source.kind !== 'agent' || !source.submissionRequirements) throw new Error('Workflow binding source is not a configured agent submission.');
+        return activitySchemaAtPath(agentSubmissionSchema(source), from.path);
+      }
+      throw new Error('Workflow binding source is unsupported.');
+    };
+    const validateBindingMap = (bindings, targetSchema, nodeId, label, additionalSources = {}) => {
+      const properties = targetSchema.properties ?? {};
+      if (Object.keys(bindings).some(key => !Object.hasOwn(properties, key)) || Object.keys(additionalSources).some(key => !Object.hasOwn(properties, key)) ||
+          (targetSchema.required ?? []).some(key => !Object.hasOwn(bindings, key) && !Object.hasOwn(additionalSources, key)))
+        throw new Error(`${label}: input bindings must provide every required child field.`);
+      for (const [key, binding] of Object.entries(bindings)) {
+        if (Object.hasOwn(binding, 'literal')) validateActivityValue(binding.literal, properties[key], `${label}.${key}`);
+        else {
+          const previousNodeId = workflow.currentValidationNodeId;
+          workflow.currentValidationNodeId = nodeId;
+          let source;
+          try { source = schemaForSource(binding.from); } finally { delete workflow.currentValidationNodeId; }
+          if (!schemaAssignable(source, properties[key])) throw new Error(`${label}.${key}: source schema is incompatible with the child input.`);
+        }
+      }
+      for (const [key, sourceSchema] of Object.entries(additionalSources))
+        if (!schemaAssignable(sourceSchema, properties[key])) throw new Error(`${label}.${key}: configured map value is incompatible with the child input.`);
+    };
+    const validateOutputMap = (bindings, sourceSchema, targetSchema, label) => {
+      for (const mapping of Object.values(bindings)) {
+        const source = activitySchemaAtPath(sourceSchema, mapping.from);
+        const target = activitySchemaAtPath(targetSchema.type === 'array' ? targetSchema.items : targetSchema, mapping.to);
+        if (!schemaAssignable(source, target)) throw new Error(`${label}: mapped child result is incompatible with the composite output.`);
+      }
+    };
+    const published = new Map((state.workflows ?? []).map(item => [`${item.id}@${item.version ?? 1}`, item]));
+    const readChild = (ref, label) => {
+      const child = published.get(`${ref.id}@${ref.version}`);
+      if (!child) throw new Error(`${label}: pinned child workflow revision is unavailable.`);
+      const normalized = normalize(child);
+      if ((child.organizationId ?? 'personal') !== (workflow.organizationId ?? 'personal') ||
+          child.projectId && child.projectId !== workflow.projectId || child.teamId && child.teamId !== workflow.teamId)
+        throw new Error(`${label}: child workflow must be available in the same project scope.`);
+      if (!normalized.resultSchema) throw new Error(`${label}: child workflow needs a declared result contract.`);
+      return { raw: child, normalized };
+    };
+    for (const node of nodes.filter(item => ['child', 'parallel', 'map'].includes(item.kind))) {
+      if (node.kind === 'map') {
+        let itemSource;
+        if (Object.hasOwn(node.itemsBinding, 'literal')) {
+          itemSource = schemaFromJson(node.itemsBinding.literal);
+          validateActivityValue(node.itemsBinding.literal, itemSource, `${node.name}.items`);
+        }
+        else {
+          workflow.currentValidationNodeId = node.id;
+          try { itemSource = schemaForSource(node.itemsBinding.from); } finally { delete workflow.currentValidationNodeId; }
+        }
+        if (itemSource.type !== 'array') throw new Error(`${node.name}: map items must resolve to a declared array.`);
+      }
+      const entries = node.kind === 'parallel' ? node.branches : [{ id: 'child', workflow: node.workflow, inputBindings: node.inputBindings,
+        outputBindings: node.outputBindings }];
+      for (const entry of entries) {
+        const { raw, normalized } = readChild(entry.workflow, node.name);
+        entry.workflowDigest = activityDigest(raw);
+        entry.inputSchemaDigest = activityDigest(normalized.runInputSchema);
+        entry.resultSchemaDigest = activityDigest(normalized.resultSchema);
+        const additionalSources = node.kind === 'map'
+          ? (() => {
+              const itemsSchema = Object.hasOwn(node.itemsBinding, 'literal') ? schemaFromJson(node.itemsBinding.literal) : bindingSchema(workflow, node.itemsBinding);
+              if (itemsSchema.type !== 'array') throw new Error(`${node.name}: map items must be an array.`);
+              return { [node.itemField]: itemsSchema.items, ...(node.indexField ? { [node.indexField]: { type: 'integer', minimum: 0, maximum: node.maxItems - 1 } } : {}) };
+            })()
+          : {};
+        validateBindingMap(entry.inputBindings, normalized.runInputSchema, node.id, `${node.name}/${entry.id}`, additionalSources);
+        const targetSchema = node.kind === 'map' ? node.outputSchema.items : node.outputSchema;
+        validateOutputMap(entry.outputBindings, normalized.resultSchema, targetSchema, `${node.name}/${entry.id}`);
+      }
     }
     validateBindings(workflow);
   }
@@ -594,7 +715,7 @@ export function createWorkflows({
     return { processed };
   }
   async function startRunInternal({ projectId, organizationId, principal, workflow, activeTicketId = null, runInput = {},
-    reservedRunId, provenance }) {
+    reservedRunId, provenance, parentComposition }) {
     if (!principal) throw new Error('A governed principal is required to start a workflow run.');
     state.workflowRuns ??= {};
     const id = reservedRunId ?? randomUUID();
@@ -606,6 +727,7 @@ export function createWorkflows({
       id, projectId, organizationId, principal: structuredClone(principal), executionPrincipal: structuredClone(principal),
       workflow: pinnedWorkflow, independentRun: true,
       runInput: checkedRunInput, runInputDigest: activityDigest(checkedRunInput), activityOutputs: {},
+      ...(parentComposition ? { parentComposition: structuredClone(parentComposition), compositionRootRunId: parentComposition.rootRunId } : {}),
       activeTicketId, title: workflow.name, status: 'ready', sequence: 0, events: [],
       checks: [], messages: [], lease: null, startedAt: now(), eventEligibilityCursor: eventJournal.cursor(),
       ...(provenance ? { provenance: structuredClone(provenance) } : {}),
@@ -616,6 +738,338 @@ export function createWorkflows({
     catch (error) { delete state.workflowRuns[id]; throw error; }
     await save();
     return structuredClone(run);
+  }
+  function workflowNode(run, nodeId) {
+    const workflow = normalize(run.workflow);
+    const node = workflow.nodes.find(value => value.id === nodeId);
+    if (!node) throw new Error('Composition node is no longer present in its pinned workflow.');
+    return { workflow, node };
+  }
+  function childDefinition(run, ref, digest) {
+    const definition = state.workflows.find(value => value.id === ref.id && (value.version ?? 1) === ref.version);
+    if (!definition || digest && activityDigest(definition) !== digest)
+      throw new Error(`Pinned child workflow ${ref.id}@${ref.version} is unavailable or changed.`);
+    const project = state.projects.find(value => value.id === run.projectId);
+    if ((definition.organizationId ?? 'personal') !== (run.organizationId ?? project?.organizationId ?? 'personal') ||
+        definition.projectId && definition.projectId !== run.projectId || definition.teamId && definition.teamId !== project?.teamId)
+      throw new Error('Child workflow is not available in the parent project scope.');
+    const normalized = normalize(definition);
+    if (!normalized.resultSchema) throw new Error('Pinned child workflow has no declared result contract.');
+    return { definition, normalized };
+  }
+  function bindingSchema(workflow, binding) {
+    if (Object.hasOwn(binding, 'literal')) return null;
+    const from = binding.from;
+    if (from.kind === 'run_input') return activitySchemaAtPath(workflow.runInputSchema, from.path);
+    const node = workflow.nodes.find(value => value.id === from.nodeId);
+    if (from.kind === 'activity_output') {
+      const descriptor = node?.activity ? activityCatalog?.get(node.activity) : null;
+      const schema = descriptor?.outputSchema ?? (['child', 'parallel', 'map'].includes(node?.kind) ? node.outputSchema : null);
+      return activitySchemaAtPath(schema, from.path);
+    }
+    if (from.kind === 'human_response') return activitySchemaAtPath(humanFormSchema(node), from.path);
+    if (from.kind === 'agent_submission') return activitySchemaAtPath(agentSubmissionSchema(node), from.path);
+    throw new Error('Workflow binding source is unavailable.');
+  }
+  function resolveBinding(run, workflow, binding) {
+    if (Object.hasOwn(binding, 'literal')) return structuredClone(binding.literal);
+    const sources = runBindingSources(run, workflow);
+    const schema = bindingSchema(workflow, binding);
+    return resolveActivityBindings({ value: binding }, { type: 'object', properties: { value: schema }, required: ['value'], additionalProperties: false }, sources).value;
+  }
+  function resolveChildInput(run, parentWorkflow, childWorkflow, bindings) {
+    return resolveActivityBindings(bindings, childWorkflow.runInputSchema, runBindingSources(run, parentWorkflow));
+  }
+  function setMappedPath(target, path, value) {
+    let cursor = target;
+    for (const part of path.slice(0, -1)) {
+      if (!Object.hasOwn(cursor, part)) cursor[part] = {};
+      cursor = cursor[part];
+      if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) throw new Error('Composition output path conflicts with an existing value.');
+    }
+    cursor[path.at(-1)] = structuredClone(value);
+  }
+  function mapChildResult(result, resultSchema, outputSchema, outputBindings) {
+    validateActivityValue(result, resultSchema, 'child.result');
+    const output = {};
+    for (const mapping of Object.values(outputBindings ?? {}))
+      setMappedPath(output, mapping.to, resolveActivityPath(result, mapping.from));
+    return outputSchema ? validateActivityValue(output, outputSchema, 'composition.output') : output;
+  }
+  function compositionRoot(run) { return state.workflowRuns?.[run.compositionRootRunId ?? run.id] ?? run; }
+  function initializeComposition(run, node, limits) {
+    const { workflow } = workflowNode(run, node.id);
+    const instance = run.flow.instance;
+    run.compositionAttempts ??= [];
+    let attempt = run.compositionAttempts.find(value => value.nodeId === node.id && value.instance === instance);
+    if (attempt) return attempt;
+    const root = compositionRoot(run);
+    const effective = structuredClone(limits.effective);
+    if (!root.compositionPolicyPin) root.compositionPolicyPin = {
+      organization: structuredClone(limits.organization), project: structuredClone(limits.project), limits: effective,
+    };
+    const pinnedLimits = Object.fromEntries(Object.keys(effective).map(key => [key, Math.min(effective[key], root.compositionPolicyPin.limits[key] ?? effective[key])]));
+    const deadlineMs = Math.min(node.deadlineMs ?? pinnedLimits.maxDeadlineMs, pinnedLimits.maxDeadlineMs);
+    if (node.kind === 'map' && node.maxItems > pinnedLimits.maxMapItems) throw new Error(`${node.name}: item limit exceeds the current workflow policy.`);
+    const slots = [];
+    const makeSlot = (slotId, ref, digest, childWorkflow, input, index) => ({ slotId, runId: randomUUID(), index, workflow: structuredClone(ref),
+      workflowDigest: digest, inputSchemaDigest: activityDigest(childWorkflow.runInputSchema),
+      resultSchemaDigest: activityDigest(childWorkflow.resultSchema), input: structuredClone(input),
+      inputDigest: activityDigest(input), status: 'queued', reservedAt: now() });
+    if (node.kind === 'child') {
+      const child = childDefinition(run, node.workflow, node.workflowDigest);
+      slots.push(makeSlot('call', node.workflow, node.workflowDigest, child.normalized,
+        resolveChildInput(run, workflow, child.normalized, node.inputBindings), 0));
+    } else if (node.kind === 'parallel') {
+      for (const [index, branch] of node.branches.entries()) {
+        const child = childDefinition(run, branch.workflow, branch.workflowDigest);
+        slots.push(makeSlot(branch.id, branch.workflow, branch.workflowDigest, child.normalized,
+          resolveChildInput(run, workflow, child.normalized, branch.inputBindings), index));
+      }
+    } else {
+      const itemSchema = Object.hasOwn(node.itemsBinding, 'literal') ? schemaFromJson(node.itemsBinding.literal) : bindingSchema(workflow, node.itemsBinding);
+      const items = Object.hasOwn(node.itemsBinding, 'literal') ? structuredClone(node.itemsBinding.literal) : resolveBinding(run, workflow, node.itemsBinding);
+      if (!Array.isArray(items) || items.length > node.maxItems || items.length > pinnedLimits.maxMapItems)
+        throw new Error(`${node.name}: input item count exceeds its declared or current policy limit.`);
+      validateActivityValue(items, itemSchema, `${node.name}.items`);
+      const child = childDefinition(run, node.workflow, node.workflowDigest);
+      for (const [index, item] of items.entries()) {
+        const bindings = { ...node.inputBindings, [node.itemField]: { literal: item }, ...(node.indexField ? { [node.indexField]: { literal: index } } : {}) };
+        slots.push(makeSlot(String(index), node.workflow, node.workflowDigest, child.normalized,
+          resolveChildInput(run, workflow, child.normalized, bindings), index));
+      }
+    }
+    const budget = root.compositionBudget ??= { reservedDescendantRuns: 0, mapItems: 0 };
+    if (budget.reservedDescendantRuns + slots.length > pinnedLimits.maxDescendantRuns)
+      throw new Error(`${node.name}: descendant run budget is exhausted.`);
+    budget.reservedDescendantRuns += slots.length;
+    if (node.kind === 'map') budget.mapItems += slots.length;
+    attempt = { id: `${run.id}:${instance}`, nodeId: node.id, instance, kind: node.kind,
+      ...(node.join ? { join: node.join } : {}), status: 'queued', startedAt: now(), deadlineAt: new Date(Date.parse(now()) + deadlineMs).toISOString(),
+      rootRunId: root.id, limits: pinnedLimits, policy: { organizationRevision: limits.organization.revision, projectRevision: limits.project.revision },
+      outputSchema: structuredClone(node.outputSchema), slots };
+    run.compositionAttempts.push(attempt);
+    if (run.compositionAttempts.length > 100) run.compositionAttempts = run.compositionAttempts.slice(-100);
+    return attempt;
+  }
+  function childActive(child) {
+    return !['completed', 'failed', 'cancelled'].includes(child?.flow?.status) || child?.attempt?.status === 'uncertain';
+  }
+  function isCoordinatorOnlyRun(run) {
+    if (!run?.independentRun || !run.attempt?.instance || !run.attempt?.nodeId) return false;
+    const ownsComposition = (run.compositionAttempts ?? []).some(attempt =>
+      attempt.nodeId === run.attempt.nodeId && attempt.instance === run.attempt.instance &&
+      !['completed', 'failed', 'cancelled'].includes(attempt.status));
+    return ownsComposition && !run.attempt.dispatchStarted && !run.assignment;
+  }
+  function activeCompositionReservations() {
+    return Object.values(state.workflowRuns ?? {}).filter(run => Boolean(run.parentComposition) && childActive(run) &&
+      !isCoordinatorOnlyRun(run)).map(run => ({
+        runId: run.id, organizationId: run.organizationId, projectId: run.projectId,
+        rootRunId: run.compositionRootRunId,
+      }));
+  }
+  function compositionContext(run) { return run.sessionId ? state.sessions?.[run.sessionId] : run; }
+  function compositeNodeFor(attempt, run) { return normalize(run.workflow).nodes.find(value => value.id === attempt.nodeId); }
+  function compositionCandidateRuns() {
+    return Object.values(state.workflowRuns ?? {}).filter(run => {
+      if (!run.flow || !['ready', 'running'].includes(run.flow.status)) return false;
+      const node = workflowNode(run, run.flow.nodeId).node;
+      return ['child', 'parallel', 'map'].includes(node.kind);
+    }).map(run => ({ runId: run.id, nodeId: run.flow.nodeId, instance: run.flow.instance,
+      organizationId: run.organizationId, projectId: run.projectId }));
+  }
+  async function queuedCompositionSlots(runId, nodeId, instance, limits) {
+    const run = state.workflowRuns?.[runId];
+    if (!run || run.flow?.nodeId !== nodeId || run.flow?.instance !== instance || !['ready', 'running'].includes(run.flow.status)) return [];
+    const { node } = workflowNode(run, nodeId);
+    const attempt = initializeComposition(run, node, limits);
+    if (run.flow.status === 'ready') {
+      const context = compositionContext(run);
+      await engine.beginComposition(context, instance);
+    }
+    attempt.status = 'running';
+    await save();
+    if (Date.parse(attempt.deadlineAt) <= Date.parse(now())) attempt.deadlineExpired = true;
+    if (attempt.winnerSlotId || attempt.failurePolicyTriggered || attempt.deadlineExpired || run.flow.status === 'cancelled') return [];
+    const activeCount = attempt.slots.filter(slot => {
+      if (!['started', 'uncertain', 'starting'].includes(slot.status)) return false;
+      const child = state.workflowRuns?.[slot.runId];
+      return childActive(child) && !isCoordinatorOnlyRun(child);
+    }).length;
+    const maxConcurrent = Math.min(node.maxConcurrent ?? 1, attempt.limits.maxConcurrentChildren, limits.effective.maxConcurrentChildren);
+    return attempt.slots.filter(slot => slot.status === 'queued' || slot.status === 'starting' && !state.workflowRuns?.[slot.runId])
+      .slice(0, Math.max(0, maxConcurrent - activeCount))
+      .map(slot => ({ runId, nodeId, instance, slotId: slot.slotId, childRunId: slot.runId,
+        workflow: structuredClone(slot.workflow), projectId: run.projectId, organizationId: run.organizationId,
+        principal: structuredClone(run.executionPrincipal ?? run.principal), rootRunId: attempt.rootRunId }));
+  }
+  async function admitCompositionSlot({ runId, nodeId, instance, slotId, limits }) {
+    const run = state.workflowRuns?.[runId];
+    const attempt = run?.compositionAttempts?.find(value => value.nodeId === nodeId && value.instance === instance);
+    const slot = attempt?.slots.find(value => value.slotId === slotId);
+    if (!run || !attempt || !slot || run.flow?.nodeId !== nodeId || run.flow?.instance !== instance || run.flow.status === 'cancelled' ||
+        attempt.winnerSlotId && attempt.winnerSlotId !== slotId || attempt.failurePolicyTriggered || attempt.deadlineExpired || !['queued', 'starting'].includes(slot.status))
+      throw new Error('Composition slot is no longer eligible for admission.');
+    const current = limits.effective;
+    const pinned = attempt.limits;
+    const effective = Object.fromEntries(Object.keys(current).map(key => [key, Math.min(current[key], pinned[key])]));
+    const root = compositionRoot(run);
+    if ((root.compositionBudget?.reservedDescendantRuns ?? 0) > effective.maxDescendantRuns)
+      throw new Error('Current descendant policy is below the reserved composition budget.');
+    const childInfo = childDefinition(run, slot.workflow, slot.workflowDigest);
+    if (activityDigest(slot.input) !== slot.inputDigest ||
+        activityDigest(childInfo.normalized.runInputSchema) !== slot.inputSchemaDigest ||
+        activityDigest(childInfo.normalized.resultSchema) !== slot.resultSchemaDigest)
+      throw new Error('Reserved child input or pinned workflow changed.');
+    slot.status = 'starting'; slot.admittedAt = now();
+    await save();
+    const existing = state.workflowRuns?.[slot.runId];
+    if (existing) {
+      if (existing.parentComposition?.parentRunId !== run.id || existing.parentComposition?.slotId !== slot.slotId ||
+          existing.runInputDigest !== slot.inputDigest || activityDigest(existing.workflow) !== slot.workflowDigest)
+        throw new Error('Reserved child run identity conflicts with an existing run.');
+      slot.status = ['completed', 'failed', 'cancelled'].includes(existing.flow?.status) ? existing.flow.status : 'started';
+      await save();
+      return structuredClone(existing);
+    }
+    try {
+      const child = await startRunInternal({ projectId: run.projectId, organizationId: run.organizationId,
+        principal: run.executionPrincipal ?? run.principal, workflow: childInfo.definition, runInput: slot.input,
+        reservedRunId: slot.runId, parentComposition: { parentRunId: run.id, parentNodeId: nodeId,
+          parentInstance: instance, slotId: slot.slotId, rootRunId: attempt.rootRunId, policyLimits: effective } });
+      slot.status = 'started'; slot.startedAt = now();
+      await save();
+      return child;
+    } catch (error) {
+      slot.status = 'failed'; slot.message = String(error?.message ?? error).slice(0, 500); slot.failedAt = now();
+      await save();
+      throw error;
+    }
+  }
+  async function settleCompositions() {
+    for (const parent of Object.values(state.workflowRuns ?? {})) for (const attempt of parent.compositionAttempts ?? []) {
+      const node = compositeNodeFor(attempt, parent);
+      if (!node || attempt.status === 'completed' || attempt.status === 'failed') continue;
+      const canceledParent = parent.flow?.status === 'cancelled';
+      const expired = Date.parse(attempt.deadlineAt) <= Date.parse(now());
+      if (expired) attempt.deadlineExpired = true;
+      if (canceledParent || attempt.deadlineExpired || attempt.failurePolicyTriggered || attempt.winnerSlotId) {
+        for (const slot of attempt.slots) {
+          if (slot.status === 'queued') { slot.status = 'cancelled'; slot.completedAt = now(); continue; }
+          const child = state.workflowRuns?.[slot.runId];
+          if (child && childActive(child) && !slot.cancelRequestedAt) {
+            slot.cancelRequestedAt = now();
+            const context = compositionContext(child);
+            try { await engine.pause(context, true); } catch { /* terminal children stay terminal */ }
+            if (child.attempt?.effect === 'durable-effect' && child.attempt.dispatchStarted && !['completed', 'failed'].includes(child.attempt.status))
+              child.attempt.status = 'uncertain';
+          }
+        }
+      }
+      for (const slot of attempt.slots) {
+        const child = state.workflowRuns?.[slot.runId];
+        if (!child) continue;
+        if (child.attempt?.instance) slot.instance = child.attempt.instance;
+        if (child.attempt?.effectKey) slot.effectKey = child.attempt.effectKey;
+        if (child.flow?.status === 'completed' && child.result && child.resultDigest) {
+          const childWorkflow = normalize(child.workflow);
+          try {
+            const outputSchema = node.kind === 'map' ? node.outputSchema.items
+              : node.kind === 'parallel' ? null : node.outputSchema;
+            const mapped = mapChildResult(child.result, childWorkflow.resultSchema, outputSchema, slotOutputBindings(node, slot));
+            slot.status = 'completed'; slot.output = mapped; slot.outputDigest = activityDigest(mapped);
+            slot.completedAt ??= child.flow.history?.at(-1)?.at ?? now();
+          } catch (error) { slot.status = 'failed'; slot.message = String(error?.message ?? error).slice(0, 500); }
+        } else if (child.attempt?.status === 'uncertain' || child.flow?.status === 'interrupted') {
+          slot.status = 'uncertain'; slot.message = child.attempt?.message ?? 'Child effect requires reconciliation.';
+        } else if (['failed', 'cancelled'].includes(child.flow?.status)) {
+          slot.status = child.flow.status; slot.message = child.attempt?.message;
+        }
+      }
+      if (attempt.join === 'first_success' && !attempt.winnerSlotId) {
+        const successes = attempt.slots.filter(slot => slot.status === 'completed')
+          .sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)) || a.index - b.index);
+        if (successes.length) attempt.winnerSlotId = successes[0].slotId;
+      }
+      if (attempt.join === 'all' && node.kind === 'parallel' && attempt.slots.some(slot => ['failed', 'cancelled'].includes(slot.status))) attempt.failurePolicyTriggered = true;
+      if (node.kind === 'map' && node.failurePolicy === 'fail_fast' && attempt.slots.some(slot => ['failed', 'cancelled'].includes(slot.status))) attempt.failurePolicyTriggered = true;
+      if (canceledParent || attempt.deadlineExpired || attempt.failurePolicyTriggered || attempt.winnerSlotId) {
+        attempt.status = canceledParent ? 'cancelling' : attempt.deadlineExpired ? 'deadline_cancelling' : attempt.winnerSlotId ? 'joining_winner' : 'cancelling';
+      }
+      await save();
+      const allSettled = attempt.slots.every(slot => ['completed', 'failed', 'cancelled'].includes(slot.status));
+      const winner = attempt.winnerSlotId && attempt.slots.find(slot => slot.slotId === attempt.winnerSlotId);
+      const shouldSucceed = node.kind === 'child' ? attempt.slots[0]?.status === 'completed'
+        : node.kind === 'parallel' && node.join === 'first_success' ? Boolean(winner?.status === 'completed') && allSettled
+          : node.kind === 'map' && node.failurePolicy === 'collect_errors' ? allSettled : allSettled && attempt.slots.every(slot => slot.status === 'completed');
+      if (!shouldSucceed && !allSettled) continue;
+      if (!shouldSucceed) {
+        attempt.status = canceledParent ? 'cancelled' : 'failed';
+        await save();
+        if (!canceledParent && parent.flow?.nodeId === attempt.nodeId && parent.flow?.instance === attempt.instance)
+          await engine.fail(compositionContext(parent), attempt.instance, new Error('A composed child did not complete successfully.'));
+        continue;
+      }
+      if (parent.flow?.status === 'cancelled') { attempt.status = 'cancelled'; await save(); continue; }
+      if (parent.flow?.nodeId !== attempt.nodeId || parent.flow?.instance !== attempt.instance) continue;
+      try {
+        await authorizeCompositionTransition(parent);
+      } catch (error) {
+        // Child receipts remain settled, but a join cannot advance a successor
+        // under a revoked stored principal. Keep the exact composition result
+        // pending so a restored authority can resume this same instance.
+        attempt.status = 'waiting_authority';
+        attempt.message = String(error?.message ?? 'The stored workflow principal is no longer authorized.').slice(0, 500);
+        parent.compositionTransitionBlocked = { nodeId: attempt.nodeId, instance: attempt.instance };
+        parent.flow.resumeStatus = 'ready'; parent.flow.status = 'paused'; parent.status = 'paused';
+        await save();
+        continue;
+      }
+      if (parent.compositionTransitionBlocked?.nodeId === attempt.nodeId && parent.compositionTransitionBlocked?.instance === attempt.instance) {
+        delete parent.compositionTransitionBlocked;
+        parent.flow.status = 'running'; parent.status = 'running';
+        attempt.status = 'running';
+      }
+      let checked;
+      try { checked = validateActivityValue(composeNodeOutput(node, attempt), node.outputSchema, `${node.name}.output`); }
+      catch (error) {
+        attempt.status = 'failed'; attempt.message = String(error?.message ?? error).slice(0, 1000); await save();
+        await engine.fail(compositionContext(parent), attempt.instance, error);
+        continue;
+      }
+      attempt.outputDigest = activityDigest(checked); attempt.status = 'completed'; attempt.completedAt = now();
+      parent.activityOutputs ??= {};
+      parent.activityOutputs[node.id] = { status: 'completed', activityRef: { id: `workflow.${node.kind}`, revision: 1 },
+        schema: structuredClone(node.outputSchema), value: checked, digest: attempt.outputDigest, instance: attempt.instance };
+      await save();
+      await engine.finishAutomated(compositionContext(parent), attempt.instance, 'success', checked);
+    }
+  }
+  function slotOutputBindings(node, slot) {
+    if (node.kind === 'parallel') return node.branches.find(branch => branch.id === slot.slotId)?.outputBindings;
+    return node.outputBindings;
+  }
+  function composeNodeOutput(node, attempt) {
+    if (node.kind === 'child') return attempt.slots[0].output;
+    if (node.kind === 'parallel') {
+      const output = {};
+      for (const branch of node.branches) {
+        const slot = attempt.slots.find(value => value.slotId === branch.id);
+        if (attempt.join === 'first_success' && slot.slotId !== attempt.winnerSlotId) continue;
+        // Each slot stores its child result after the branch's declared output
+        // mapping has been applied. Merge from that mapped value; resolving the
+        // original source path here would apply the mapping twice.
+        for (const mapping of Object.values(branch.outputBindings)) setMappedPath(output, mapping.to, resolveActivityPath(slot.output, mapping.to));
+      }
+      return output;
+    }
+    const values = attempt.slots.sort((a, b) => a.index - b.index).map(slot => {
+      if (slot.status === 'completed') return slot.output;
+      const error = { index: slot.index, status: slot.status, message: slot.message ?? slot.status };
+      return error;
+    });
+    return values;
   }
   const activityDescriptors = scope => {
     const descriptors = new Map((activityCatalog?.all() ?? []).map(descriptor => [activityCatalog.key(descriptor.ref), {
@@ -790,6 +1244,21 @@ export function createWorkflows({
       return engine.decide(session, command);
     },
     startRun: startRunInternal,
+    compositionCandidates: compositionCandidateRuns,
+    activeCompositionReservations,
+    async prepareComposition(runId, nodeId, instance, limits) {
+      return queuedCompositionSlots(runId, nodeId, instance, limits);
+    },
+    admitCompositionSlot,
+    async failComposition(runId, nodeId, instance, message) {
+      const run = state.workflowRuns?.[runId];
+      if (!run || run.flow?.nodeId !== nodeId || run.flow?.instance !== instance || ['cancelled', 'completed'].includes(run.flow.status)) return;
+      const attempt = run.compositionAttempts?.find(value => value.nodeId === nodeId && value.instance === instance);
+      if (attempt) { attempt.status = 'failed'; attempt.message = String(message ?? 'Composition admission failed.').slice(0, 1000); }
+      await save();
+      await engine.fail(compositionContext(run), instance, new Error(message));
+    },
+    settleCompositions,
     registerWait,
     deliverPendingWaitEvents,
     processDueDeadlines,
@@ -1296,13 +1765,17 @@ export function createWorkflows({
           ...(effect.reconciledAt ? { reconciledAt: effect.reconciledAt } : {}), ...(effect.message ? { message: effect.message } : {}),
           ...(effect.blockingReplyRequestId ? { blockingReplyRequestId: effect.blockingReplyRequestId } : {}) }));
     },
-    resolveWorkflowResult(context) {
+    resolveWorkflowResult(context, { terminalNodeId, outcome, responseId, submission } = {}) {
       const run = context?.independentRun ? context : state.workflowRuns?.[context?.workflowRunId];
       if (!run || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
       const workflow = normalize(run.workflow);
       if (!workflow.resultSchema) return null;
-      const result = resolveActivityBindings(workflow.resultBindings, workflow.resultSchema, {
-        runInputSchema: workflow.runInputSchema, runInput: run.runInput, activityOutputs: run.activityOutputs,
+      const terminal = terminalNodeId ?? run.flow?.previousNodeId ?? run.flow?.nodeId;
+      const bindings = workflow.resultBindingsByTerminal?.[terminal] ?? workflow.resultBindings;
+      if (!bindings) throw new Error(`Workflow terminal ${terminal} has no declared result mapping.`);
+      const sources = runBindingSources(run, workflow, { responseId, submission: outcome === 'success' ? submission : undefined });
+      const result = resolveActivityBindings(bindings, workflow.resultSchema, {
+        ...sources,
       });
       const resultDigest = activityDigest(result);
       if (run.resultDigest && run.resultDigest !== resultDigest)
@@ -1783,6 +2256,19 @@ export function createWorkflows({
           run.flow.status = 'interrupted';
           run.status = 'interrupted';
         }
+        const compositionAttempt = run.compositionAttempts?.find(candidate =>
+          candidate.instance === run.attempt?.instance && candidate.nodeId === run.attempt?.nodeId);
+        if (run.independentRun && compositionAttempt && ['running', 'uncertain'].includes(run.attempt?.status) &&
+            ['running', 'interrupted'].includes(run.flow?.status)) {
+          // The parent attempt coordinates child runs; it has no effect of its
+          // own that could have escaped. Keep child receipts and require an
+          // explicit continue to resume this same composition instance.
+          run.attempt.status = 'ready';
+          run.flow.resumeStatus = 'ready';
+          run.flow.status = 'interrupted';
+          run.status = 'interrupted';
+          continue;
+        }
         if (run.independentRun && run.attempt?.status === 'running' && run.flow) {
           const safelyRecomputable = ['pure', 'observation'].includes(run.attempt.effect);
           const mayHaveDispatched = run.attempt.dispatchStarted === true || run.attempt.dispatchStarted === undefined;
@@ -1882,6 +2368,18 @@ function publicRun(run, leaseIdentity, projection = {}) {
         activityRef: structuredClone(reservation.activityRef), inputDigest: reservation.inputDigest, intentDigest: reservation.intentDigest,
         digest: reservation.digest }] } : {};
     })(),
+    ...(run.compositionAttempts?.length ? { compositions: run.compositionAttempts.slice(-50).map(value => ({
+      nodeId: value.nodeId, instance: value.instance, kind: value.kind, status: value.status,
+      ...(value.join ? { join: value.join } : {}), ...(value.deadlineAt ? { deadlineAt: value.deadlineAt } : {}),
+      ...(value.winnerSlotId ? { winnerSlotId: value.winnerSlotId } : {}),
+      policy: { ...structuredClone(value.policy), limits: structuredClone(value.limits) },
+      slots: value.slots.slice(0, 100).map(slot => ({ slotId: slot.slotId, runId: slot.runId,
+        ...(Number.isInteger(slot.index) ? { index: slot.index } : {}), status: slot.status,
+        workflowId: slot.workflow.id, workflowVersion: slot.workflow.version, inputDigest: slot.inputDigest,
+        ...(slot.outputDigest ? { outputDigest: slot.outputDigest } : {}), ...(slot.effectKey ? { effectKey: slot.effectKey } : {}),
+        ...(slot.instance ? { instance: slot.instance } : {}), ...(slot.message ? { message: String(slot.message).slice(0, 500) } : {}) })),
+      slotsTruncated: value.slots.length > 100, ...(value.outputDigest ? { outputDigest: value.outputDigest } : {}),
+    })), compositionAttemptsTotal: run.compositionAttempts.length } : {}),
     attempt: safeAttempt(run.attempt), activityAttempts: [...(run.activityAttempts ?? []).slice(-50).map(safeAttempt), ...(run.attempt ? [safeAttempt(run.attempt)] : [])],
     history: (run.flow?.history ?? []).slice(-200).map(({ nodeId, instance, outcome, at, to, submission, humanResponseId, humanMaterialDigest }) => ({ nodeId, instance, outcome, at, to,
       ...(typeof submission?.summary === 'string' ? { summary: submission.summary.slice(0, 500) } : {}),

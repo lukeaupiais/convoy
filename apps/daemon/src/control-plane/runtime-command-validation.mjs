@@ -276,6 +276,7 @@ export const runtimeCommandContracts = {
   setExecutionProfile: contract(['revision', 'profile'], ['taskId', 'projectId']),
   setProjectProfile: contract(['projectId', 'profile'], ['expected']),
   setScheduler: contract(['maxConcurrent'], ['organizationId']),
+  setWorkflowCompositionPolicy: contract(['organizationId', 'baseRevision', 'limits'], ['projectId']),
   setToolEnabled: contract(['id', 'enabled'], ['organizationId', 'projectId']),
   start: session(['requestId', 'text', 'model']),
   startWorkflow: session(),

@@ -39,7 +39,7 @@ import type {
   Ticket,
   TicketConnection,
 } from './model/work';
-import type { WorkflowDefinition, AutomationRule } from './model/workflows';
+import type { WorkflowDefinition, AutomationRule, WorkflowCompositionLimits } from './model/workflows';
 
 type SessionTarget = { sessionId?: string; taskId?: string | number };
 type RequestIdentity = { requestId: string };
@@ -561,6 +561,7 @@ export type RuntimeCommandInputMap = {
     expected?: ProfileReference | null;
   };
   setScheduler: { organizationId?: string; maxConcurrent: number };
+  setWorkflowCompositionPolicy: { organizationId: string; projectId?: string; baseRevision: number; limits: WorkflowCompositionLimits };
   setToolEnabled: {
     organizationId?: string;
     projectId?: string;

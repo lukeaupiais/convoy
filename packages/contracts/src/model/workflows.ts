@@ -1,4 +1,4 @@
-export type WorkflowNodeKind = 'agent' | 'human' | 'check' | 'action' | 'branch' | 'wait';
+export type WorkflowNodeKind = 'agent' | 'human' | 'check' | 'action' | 'branch' | 'wait' | 'child' | 'parallel' | 'map';
 
 export type WorkflowHumanOutcome = { id: string; label: string; effect?: 'approve_activity' };
 export type WorkflowHumanTask = {
@@ -50,6 +50,45 @@ export type WorkflowActivityAttempt = {
   idempotencyKey?: string;
   effectResult?: Record<string, unknown>;
 };
+export type WorkflowCompositionLimits = {
+  maxDescendantRuns: number;
+  maxMapItems: number;
+  maxConcurrentChildren: number;
+  maxDeadlineMs: number;
+  maxActiveDescendantRuns: number;
+  maxActiveDescendantsPerRoot: number;
+};
+export type WorkflowCompositionPolicySnapshot = {
+  defaults: WorkflowCompositionLimits;
+  organizations: Record<string, { revision: number; limits: WorkflowCompositionLimits }>;
+  projects: Record<string, { organizationId: string; revision: number; limits: WorkflowCompositionLimits }>;
+};
+export type WorkflowCompositionSlot = {
+  slotId: string;
+  runId: string;
+  index?: number;
+  status: string;
+  workflowId: string;
+  workflowVersion: number;
+  inputDigest: string;
+  outputDigest?: string;
+  effectKey?: string;
+  instance?: string;
+  message?: string;
+};
+export type WorkflowCompositionAttempt = {
+  nodeId: string;
+  instance: string;
+  kind: 'child' | 'parallel' | 'map';
+  status: string;
+  join?: 'all' | 'first_success';
+  deadlineAt?: string;
+  winnerSlotId?: string;
+  policy: { organizationRevision: number; projectRevision: number; limits: WorkflowCompositionLimits };
+  slots: WorkflowCompositionSlot[];
+  slotsTruncated?: boolean;
+  outputDigest?: string;
+};
 export type WorkflowActivityReservation = {
   id: string;
   digest: string;
@@ -81,6 +120,8 @@ export type WorkflowRun = {
   activityReservations?: (WorkflowActivityReservation & { gateNodeId: string; gateInstance: string; targetNodeId: string; targetInstance: string; activityRef: WorkflowActivityRef; inputDigest: string; intentDigest: string; consumedAt?: string })[];
   attempt?: WorkflowActivityAttempt;
   activityAttempts?: WorkflowActivityAttempt[];
+  compositions?: WorkflowCompositionAttempt[];
+  compositionAttemptsTotal?: number;
   history: {
     nodeId: string;
     instance?: string;
@@ -182,7 +223,16 @@ export type WorkflowActivityBinding =
   | { literal: unknown }
   | { from: { kind: 'run_input'; path: string[] } }
   | { from: { kind: 'activity_output'; nodeId: string; path: string[] } }
-  | { from: { kind: 'human_response'; nodeId: string; path: string[] } };
+  | { from: { kind: 'human_response'; nodeId: string; path: string[] } }
+  | { from: { kind: 'agent_submission'; nodeId: string; path: string[] } };
+export type WorkflowCompositionWorkflowRef = { id: string; version: number };
+export type WorkflowCompositionOutputBinding = { from: string[]; to?: string[] };
+export type WorkflowCompositionBranch = {
+  id: string;
+  workflow: WorkflowCompositionWorkflowRef;
+  inputBindings: Record<string, WorkflowActivityBinding>;
+  outputBindings: Record<string, WorkflowCompositionOutputBinding>;
+};
 export type WorkflowActivityDescriptor = {
   ref: WorkflowActivityRef;
   /** Canonical digest of the registered descriptor metadata at this revision. */
@@ -281,6 +331,19 @@ export type WorkflowStep = {
   model?: string;
   condition?: WorkflowCondition;
   waitFor?: WorkflowWaitFor;
+  workflow?: WorkflowCompositionWorkflowRef;
+  inputBindings?: Record<string, WorkflowActivityBinding>;
+  outputSchema?: WorkflowJsonSchema;
+  outputBindings?: Record<string, WorkflowCompositionOutputBinding>;
+  join?: 'all' | 'first_success';
+  branches?: WorkflowCompositionBranch[];
+  maxItems?: number;
+  maxConcurrent?: number;
+  deadlineMs?: number;
+  failurePolicy?: 'fail_fast' | 'collect_errors';
+  itemsBinding?: WorkflowActivityBinding;
+  itemField?: string;
+  indexField?: string;
   x?: number;
   y?: number;
 };
@@ -302,6 +365,7 @@ export type WorkflowDefinition = {
   runInputSchema?: WorkflowJsonSchema;
   resultSchema?: WorkflowJsonSchema;
   resultBindings?: Record<string, WorkflowActivityBinding>;
+  resultBindingsByTerminal?: Record<string, Record<string, WorkflowActivityBinding>>;
   /** Compatibility projection for older clients. New code must use nodes. */
   steps: WorkflowStep[];
 };
