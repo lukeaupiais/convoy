@@ -706,7 +706,7 @@ export function TicketDetails({
                       .filter(
                         (entry) =>
                           entry.body === uncertainReply.body &&
-                          !['user', 'customer'].includes(entry.authorRole.toLowerCase()),
+                          entry.direction === 'outbound',
                       )
                       .map((entry) => (
                         <button

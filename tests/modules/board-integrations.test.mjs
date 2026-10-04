@@ -38,7 +38,7 @@ test('an external reply has durable identity and uncertain outcomes require reco
   let signalConcurrentStart;
   const concurrentStarted = new Promise(resolve => { signalConcurrentStart = resolve; });
   const concurrentRelease = new Promise(resolve => { releaseConcurrentSend = resolve; });
-  const comments = [{ remoteId: 'reply-2', body: 'A second reply', authorRole: 'dev', createdAt: '2026-09-23T12:00:00Z' }];
+  const comments = [{ remoteId: 'reply-2', body: 'A second reply', authorRole: 'dev', direction: 'outbound', createdAt: '2026-09-23T12:00:00Z' }];
   const { catalog, state } = fixture({
     listIssues: async () => [{ remoteId: 'case-9', remoteKey: 'CASE-9', title: 'Question', description: 'Need help', remoteVersion: 'v1' }],
     postReply: async (_source, _remoteId, body, requestId) => {
@@ -47,11 +47,11 @@ test('an external reply has durable identity and uncertain outcomes require reco
       if (requestId === 'concurrent-first') {
         signalConcurrentStart();
         await concurrentRelease;
-        comments.push({ remoteId: 'reply-concurrent', body, authorRole: 'dev', createdAt: '2026-09-23T12:02:00Z' });
+        comments.push({ remoteId: 'reply-concurrent', body, authorRole: 'dev', direction: 'outbound', createdAt: '2026-09-23T12:02:00Z' });
         return { remoteId: 'reply-concurrent', deliveryStatus: 'pending' };
       }
       assert.equal(body, 'We are checking.');
-      comments.push({ remoteId: 'reply-1', body, authorRole: 'dev', createdAt: '2026-09-23T12:01:00Z', deliveryStatus: 'delivered' });
+      comments.push({ remoteId: 'reply-1', body, authorRole: 'dev', direction: 'outbound', createdAt: '2026-09-23T12:01:00Z', deliveryStatus: 'delivered' });
       return { remoteId: 'reply-1', deliveryStatus: 'pending' };
     },
     listComments: async () => comments,
@@ -62,7 +62,7 @@ test('an external reply has durable identity and uncertain outcomes require reco
       thread: { method: 'GET', path: 'tickets/${remoteId}/comments', response: { items: '$.items' } },
       reply: { method: 'POST', path: 'tickets/${remoteId}/comments', response: { commentId: '$.commentId' } } },
     mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', remoteVersion: '$.version' },
-    threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt' } };
+    threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', directionByAuthorRole: { dev: 'outbound' } } };
   const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Support', manifest });
   await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
   const ticketId = state.tickets[0].id;
@@ -103,7 +103,7 @@ test('source status follows a delivered reply and is idempotent on the ticket pr
   const { catalog, state } = fixture({
     listIssues: async () => [{ remoteId: '41', remoteKey: 'SUP-41', title: 'Question', status: 'Open', rawStatus: 'open', remoteVersion: '4' }],
     postReply: async () => ({ remoteId: '12', deliveryStatus: 'pending' }),
-    listComments: async () => [{ remoteId: '12', body: 'Please clarify', authorRole: 'team', createdAt: '2026-09-24T12:00:00Z', deliveryStatus: delivered ? 'delivered' : 'pending' }],
+    listComments: async () => [{ remoteId: '12', body: 'Please clarify', authorRole: 'team', direction: 'outbound', createdAt: '2026-09-24T12:00:00Z', deliveryStatus: delivered ? 'delivered' : 'pending' }],
     setStatus: async (_source, _remoteId, input) => {
       writes++;
       assert.deepEqual(input, { status: 'waiting', remoteVersion: '4', evidenceMessageId: '12', requestId: 'status-41' });
@@ -118,7 +118,7 @@ test('source status follows a delivered reply and is idempotent on the ticket pr
       reply: { method: 'POST', path: 'tickets/${remoteId}/comments', response: { commentId: '$.commentId' } },
       status: { method: 'PATCH', path: 'tickets/${remoteId}/status', request: { status: 'status', remoteVersion: 'expectedRevision', evidenceMessageId: 'replyId' }, response: { item: '$.ticket' } } },
     mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', status: '$.status', remoteVersion: '$.revision' },
-    threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' } };
+    threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery', directionByAuthorRole: { team: 'outbound' } } };
   const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Support', manifest });
   await catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
   const ticketId = state.tickets[0].id;
@@ -210,6 +210,56 @@ test('one project uses source membership and work type to feed separate boards',
   assert.equal(state.ticketRelations[0].sourceTicketId, imported.id);
   assert.deepEqual(await catalog.command({ action: 'syncTicketImportBinding', id: binding.id }), { imported: 0, updated: 0, complete: true, pages: 1 });
   assert.equal(state.tickets.length, 2);
+});
+
+test('adding participant mappings to a linked source preserves its baseline and classifies only new messages', async () => {
+  const sourceMessages = [
+    { remoteId: 'legacy-1', body: 'Original procurement request', authorRole: 'procurement-contact', createdAt: '2026-09-23T12:00:00Z' },
+  ];
+  const externalTickets = {
+    listIssuesPage: async () => ({ items: [{ remoteId: 'request-1', remoteKey: 'REQ-1', title: 'Purchase review' }] }),
+    listComments: async (source) => sourceMessages.map(message => ({
+      ...message,
+      direction: Object.hasOwn(source.manifest.threadMapping.directionByAuthorRole ?? {}, message.authorRole)
+        ? source.manifest.threadMapping.directionByAuthorRole[message.authorRole] : 'unknown',
+    })),
+  };
+  const { catalog, state } = fixture(externalTickets);
+  const manifest = {
+    apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+    connection: { baseUrl: 'https://support.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_SOURCE_TOKEN_TEST' } },
+    operations: { list: { method: 'GET', path: 'requests', response: { items: '$.items' } },
+      thread: { method: 'GET', path: 'requests/${remoteId}/messages', response: { items: '$.items' } } },
+    mapping: { remoteId: '$.id', remoteKey: '$.key', title: '$.title', remoteVersion: '$.version' },
+    threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt' },
+  };
+  const source = await catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Procurement', manifest });
+  const binding = await catalog.command({ action: 'saveTicketImportBinding', connectionId: source.id, projectId: 'alpha', name: 'Purchases', workType: 'purchase-review' });
+  await catalog.command({ action: 'syncTicketImportBinding', id: binding.id });
+  const ticket = state.tickets[0];
+  assert.equal(state.ticketThreads[0].messages[0].direction, 'unknown');
+  assert.equal(state.ticketImportFacts.some(fact => fact.event === 'ticket_message_received'), false);
+
+  const configured = structuredClone(source.manifest);
+  const oldRevision = source.revision;
+  configured.threadMapping.directionByAuthorRole = {
+    'procurement-contact': 'inbound', 'bulletin-editor': 'outbound',
+  };
+  const updatedSource = await catalog.command({ action: 'saveTicketConnection', id: source.id, revision: source.revision,
+    organizationId: 'org', provider: 'custom-http', name: source.name, manifest: configured });
+  assert.equal(updatedSource.revision, oldRevision + 1);
+  await catalog.command({ action: 'syncExternalTicketThread', ticketId: ticket.id, connectionId: source.id });
+  assert.equal(state.ticketThreads[0].messages[0].direction, 'inbound');
+  assert.equal(state.ticketImportFacts.some(fact => fact.event === 'ticket_message_received'), false);
+
+  sourceMessages.push(
+    { remoteId: 'internal-2', body: 'Published internally', authorRole: 'bulletin-editor', createdAt: '2026-09-23T13:00:00Z' },
+    { remoteId: 'new-3', body: 'Additional purchase detail', authorRole: 'procurement-contact', createdAt: '2026-09-23T14:00:00Z' },
+  );
+  await catalog.command({ action: 'syncExternalTicketThread', ticketId: ticket.id, connectionId: source.id });
+  const facts = state.ticketImportFacts.filter(fact => fact.event === 'ticket_message_received');
+  assert.deepEqual(facts.map(fact => fact.messageId), ['new-3']);
+  assert.equal(state.ticketThreads[0].messages[1].direction, 'outbound');
 });
 
 test('paged binding resumes after failure and prunes membership only after a complete scan', async () => {

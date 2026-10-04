@@ -169,7 +169,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     const reply = state.ticketReplies.find(reply => reply.id === command.requestId && reply.ticketId === ticketId &&
       reply.connectionId === input.connectionId && reply.body === body && reply.workflowRunId === session.flow.id);
     const delivered = thread.messages.some(message => message.remoteId === reply?.remoteId && message.body === body &&
-      !['user', 'customer'].includes(message.authorRole.toLowerCase()) && message.deliveryStatus === 'delivered');
+      message.direction === 'outbound' && message.deliveryStatus === 'delivered');
     if (reply?.status !== 'queued' || !delivered)
       return { awaitingDelivery: true, replyRequestId: command.requestId, deliveryStatus: reply?.deliveryStatus ?? 'pending',
         message: 'Approved reply sent; delivery is not confirmed. Continue to check delivery without resending.' };

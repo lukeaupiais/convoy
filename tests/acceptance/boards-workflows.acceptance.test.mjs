@@ -210,7 +210,7 @@ test('acceptance: imported support starts once and approved escalation starts li
 });
 test('acceptance: a new customer message resumes the matching support wait after a restart', async (t) => {
     const issue = { remoteId: 'report-3', remoteKey: 'R-3', title: 'Request', description: 'Initial report', remoteVersion: '1' };
-    let comments = [{ remoteId: '1', body: 'Initial report', authorRole: 'user', createdAt: '2026-09-23T12:00:00Z' }];
+    let comments = [{ remoteId: '1', body: 'Initial report', authorRole: 'requester', direction: 'inbound', createdAt: '2026-09-23T12:00:00Z' }];
     let threadUnavailable = true;
     const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: {
             listIssuesPage: async () => ({ items: [issue] }),
@@ -223,7 +223,7 @@ test('acceptance: a new customer message resumes the matching support wait after
         operations: { list: { method: 'GET', path: 'tickets', response: { items: '$.items' } },
             thread: { method: 'GET', path: 'tickets/${remoteId}/comments', response: { items: '$.items' } } },
         mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', remoteVersion: '$.version' },
-        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt' } };
+        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', directionByAuthorRole: { requester: 'inbound' } } };
     const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Service', manifest });
     const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Reports', workType: 'support' });
     await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
@@ -247,7 +247,7 @@ test('acceptance: a new customer message resumes the matching support wait after
     assert.equal(state.ticketThreads.find(value => value.ticketId === support.id).messages.length, 1);
     assert.equal(Object.values(state.sessions).find(value => value.activeTicketId === support.id).flow.status, 'waiting_event');
     await f.restart();
-    comments = [...comments, { remoteId: '2', body: 'More details', authorRole: 'user', createdAt: '2026-09-23T13:00:00Z' }];
+    comments = [...comments, { remoteId: '2', body: 'More details', authorRole: 'requester', direction: 'inbound', createdAt: '2026-09-23T13:00:00Z' }];
     await f.act('syncTicketImportBinding', { id: binding.id });
     state = await f.snapshot();
     const session = Object.values(state.sessions).find(value => value.activeTicketId === support.id);
@@ -259,7 +259,7 @@ test('acceptance: a new customer message resumes the matching support wait after
 });
 test('acceptance: customer messages blocked by an active review remain held until explicit retry', async (t) => {
     const issue = { remoteId: 'request-7', remoteKey: 'R-7', title: 'Request', description: 'Initial report', remoteVersion: '1' };
-    const comments = [{ remoteId: '1', body: 'Initial report', authorRole: 'user', createdAt: '2026-09-23T12:00:00Z' }];
+    const comments = [{ remoteId: '1', body: 'Initial report', authorRole: 'report-originator', direction: 'inbound', createdAt: '2026-09-23T12:00:00Z' }];
     const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: {
             listIssuesPage: async () => ({ items: [issue] }),
             listComments: async () => comments,
@@ -270,7 +270,7 @@ test('acceptance: customer messages blocked by an active review remain held unti
         operations: { list: { method: 'GET', path: 'requests', response: { items: '$.items' } },
             thread: { method: 'GET', path: 'requests/${remoteId}/comments', response: { items: '$.items' } } },
         mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', remoteVersion: '$.version' },
-        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt' } };
+        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', directionByAuthorRole: { 'report-originator': 'inbound' } } };
     const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Reports', manifest });
     const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Requests', workType: 'request' });
     await f.act('selectActiveContext', { context: { organizationId: 'personal', projectId: project.id } });
@@ -286,7 +286,7 @@ test('acceptance: customer messages blocked by an active review remain held unti
         } });
     await f.act('syncTicketImportBinding', { id: binding.id });
     const ticket = (await f.snapshot()).tickets.find(value => value.projectId === project.id);
-    comments.push({ remoteId: '2', body: 'First update', authorRole: 'user', createdAt: '2026-09-23T13:00:00Z' });
+    comments.push({ remoteId: '2', body: 'First update', authorRole: 'report-originator', direction: 'inbound', createdAt: '2026-09-23T13:00:00Z' });
     await f.act('syncTicketImportBinding', { id: binding.id });
     let state = await until(async () => {
         const snapshot = await f.snapshot();
@@ -295,7 +295,7 @@ test('acceptance: customer messages blocked by an active review remain held unti
     const session = state.sessions.find(value => value.activeTicketId === ticket.id);
     const firstRun = session.flow.id;
     assert.equal(session.flow.status, 'waiting_gate');
-    comments.push({ remoteId: '3', body: 'Another update', authorRole: 'user', createdAt: '2026-09-23T14:00:00Z' });
+    comments.push({ remoteId: '3', body: 'Another update', authorRole: 'report-originator', direction: 'inbound', createdAt: '2026-09-23T14:00:00Z' });
     await f.act('syncTicketImportBinding', { id: binding.id });
     state = await f.snapshot();
     assert.equal(state.automationDecisions.some(value => value.ticketId === ticket.id && value.status === 'blocked_active'), true);
@@ -324,7 +324,7 @@ test('acceptance: approved delivered clarification advances a source-owned board
     const f = await fixture(t, { persistenceBackend: 'sqlite', externalTickets: {
             listIssuesPage: async () => ({ items: [issue()] }),
             postReply: async () => {
-                comments.push({ remoteId: 'message-7', body: 'Which edition?', authorRole: 'team',
+                comments.push({ remoteId: 'message-7', body: 'Which edition?', authorRole: 'desk-publisher', direction: 'outbound',
                     createdAt: '2026-09-24T13:00:00Z', deliveryStatus: 'delivered' });
                 return { remoteId: 'message-7', deliveryStatus: 'pending' };
             },
@@ -348,7 +348,7 @@ test('acceptance: approved delivered clarification advances a source-owned board
             reply: { method: 'POST', path: 'requests/${remoteId}/messages', response: { commentId: '$.id' } },
             status: { method: 'PATCH', path: 'requests/${remoteId}/status', request: { status: 'status', remoteVersion: 'expectedVersion', evidenceMessageId: 'messageId' }, response: { item: '$.item' } } },
         mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', status: '$.status', remoteVersion: '$.version' },
-        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' } };
+        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery', directionByAuthorRole: { 'desk-publisher': 'outbound', requester: 'inbound' } } };
     const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Desk', manifest });
     const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Requests', workType: 'request' });
     const board = await f.act('saveBoard', { name: 'Requests', projectIds: [project.id], grouping: { mode: 'field', field: 'status' },
@@ -391,7 +391,7 @@ test('acceptance: approved delivered clarification advances a source-owned board
         } });
     sourceStatus = 'Open';
     remoteRevision = '5';
-    comments.push({ remoteId: 'message-8', body: 'The current edition', authorRole: 'user',
+    comments.push({ remoteId: 'message-8', body: 'The current edition', authorRole: 'requester', direction: 'inbound',
         createdAt: '2026-09-24T14:00:00Z' });
     await f.act('syncTicketImportBinding', { id: binding.id });
     const resumed = await until(async () => {
@@ -779,7 +779,7 @@ for (const sendOutcome of ['pending', 'uncertain', 'spoofed-pre-dispatch-metadat
             listIssuesPage: async () => ({ items: [issue()] }),
             postReply: async (_source, _id, body) => {
                 sends++; assert.equal(body, approvedBody);
-                comments.push({ remoteId: 'message-7', body: approvedBody, authorRole: 'team',
+                comments.push({ remoteId: 'message-7', body: approvedBody, authorRole: 'case-publisher', direction: 'outbound',
                     createdAt: '2026-09-24T13:00:00Z', deliveryStatus: 'pending' });
                 if (sendOutcome === 'spoofed-pre-dispatch-metadata') {
                     const error = new Error('Connection lost after posting');
@@ -811,7 +811,7 @@ for (const sendOutcome of ['pending', 'uncertain', 'spoofed-pre-dispatch-metadat
             reply: { method: 'POST', path: 'requests/${remoteId}/messages', response: { commentId: '$.id' } },
             status: { method: 'PATCH', path: 'requests/${remoteId}/status', request: { status: 'status', remoteVersion: 'expectedVersion', evidenceMessageId: 'messageId' }, response: { item: '$.item' } } },
         mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', status: '$.status', remoteVersion: '$.version' },
-        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' } };
+        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery', directionByAuthorRole: { 'case-publisher': 'outbound' } } };
     const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Desk', manifest });
     const binding = await f.act('saveTicketImportBinding', { connectionId: source.id, projectId: project.id, name: 'Requests', workType: 'request' });
     const board = await f.act('saveBoard', { name: 'Requests', projectIds: [project.id], grouping: { mode: 'field', field: 'status' },
@@ -887,11 +887,11 @@ test('acceptance: workflow reply waits for an unresolved manual reply, then cont
             postReply: async (_source, _remoteId, body) => {
                 sends++;
                 if (body === 'Manual reply already in flight') {
-                    comments.push({ remoteId: 'manual-message', body, authorRole: 'team', createdAt: '2026-09-24T13:00:00Z' });
+                    comments.push({ remoteId: 'manual-message', body, authorRole: 'case-publisher', direction: 'outbound', createdAt: '2026-09-24T13:00:00Z' });
                     throw new Error('Connection lost after posting manual reply');
                 }
                 assert.equal(body, approvedBody);
-                comments.push({ remoteId: 'workflow-message', body, authorRole: 'team', createdAt: '2026-09-24T13:01:00Z', deliveryStatus: 'delivered' });
+                comments.push({ remoteId: 'workflow-message', body, authorRole: 'case-publisher', direction: 'outbound', createdAt: '2026-09-24T13:01:00Z', deliveryStatus: 'delivered' });
                 return { remoteId: 'workflow-message', deliveryStatus: 'delivered' };
             },
             listComments: async () => comments.map(message => ({ ...message, deliveryStatus: 'delivered' })),
@@ -904,7 +904,7 @@ test('acceptance: workflow reply waits for an unresolved manual reply, then cont
             thread: { method: 'GET', path: 'requests/${remoteId}/messages', response: { items: '$.items' } },
             reply: { method: 'POST', path: 'requests/${remoteId}/messages', response: { commentId: '$.id' } } },
         mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', description: '$.description' },
-        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery' } };
+        threadMapping: { id: '$.id', body: '$.body', authorRole: '$.role', createdAt: '$.createdAt', deliveryStatus: '$.delivery', directionByAuthorRole: { 'case-publisher': 'outbound' } } };
     const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Desk', manifest });
     await f.act('importExternalTickets', { connectionId: source.id, projectId: 'agent-platform' });
     const ticket = (await f.snapshot()).tickets.find(value => value.externalLinks?.some(link => link.connectionId === source.id));

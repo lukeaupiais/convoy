@@ -19,3 +19,9 @@ inject adapters so module and acceptance tests can use deterministic fakes.
 | `ticket-sources` | provider routing behind one normalized ticket interface |
 | `runners` | local process or SSH worker transport |
 | `deployment` | durable deployment identity and fail-closed server configuration |
+
+Custom ticket source manifests normalize thread messages at this boundary.
+`threadMapping.directionByAuthorRole` maps exact source role values to `inbound`
+or `outbound`; `threadMapping.direction` can instead select an already canonical
+direction value. Original role text remains display data. Missing or unsupported
+direction becomes `unknown` and cannot trigger inbound facts or prove delivery.
