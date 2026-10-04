@@ -30,6 +30,45 @@ export function activityPermissionEditor(descriptor: WorkflowActivityDescriptor 
 
 export type JsonEditResult = { value: unknown } | { error: string };
 
+export function parseWorkflowJsonEdit(text: string): JsonEditResult {
+  if (text.length > 128_000) return { error: 'This JSON value exceeds the editor limit.' };
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { error: 'Enter valid JSON.' };
+  }
+  let entries = 0;
+  const visit = (item: unknown, depth: number): string | null => {
+    entries += 1;
+    if (entries > 4096) return 'This JSON value has too many entries.';
+    if (depth > 16) return 'This JSON value is nested too deeply.';
+    if (typeof item === 'number' && !Number.isFinite(item)) return 'Numbers must be finite.';
+    if (typeof item === 'string' && item.length > 64_000) return 'A text value exceeds the editor limit.';
+    if (Array.isArray(item)) {
+      if (item.length > 256) return 'An array exceeds the editor limit.';
+      for (const child of item) {
+        const error = visit(child, depth + 1);
+        if (error) return error;
+      }
+    } else if (item && typeof item === 'object') {
+      const object = item as Record<string, unknown>;
+      const keys = Object.keys(object);
+      if (keys.length > 128) return 'An object exceeds the editor limit.';
+      if (keys.some((key) => ['__proto__', 'prototype', 'constructor'].includes(key)))
+        return 'This JSON value contains a reserved field name.';
+      for (const key of keys) {
+        if (key.length > 128) return 'A field name exceeds the editor limit.';
+        const error = visit(object[key], depth + 1);
+        if (error) return error;
+      }
+    }
+    return null;
+  };
+  const error = visit(value, 0);
+  return error ? { error } : { value };
+}
+
 export function parseActivityJsonEdit(text: string, schema: WorkflowJsonSchema): JsonEditResult {
   let value: unknown;
   try { value = JSON.parse(text); }

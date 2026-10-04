@@ -7,7 +7,7 @@ const source = await readFile(new URL('../../apps/web/src/features/workflows/wor
 const js = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const { parseActivityJsonEdit, parseRunInputSchemaEdit, activityBindingSourceKey, activityBindingSelectionValue, activityBindingSourceIsAvailable, declaredObjectPaths, activityEnumOptionIndex, activityEnumValueAt, activityPinIsStale, changedActivityPin, activityPermissionEditor, activityDeclaresWorkflowTools, workflowPermissionIsUnavailable, workflowPermissionOptions } =
+const { parseActivityJsonEdit, parseRunInputSchemaEdit, parseWorkflowJsonEdit, activityBindingSourceKey, activityBindingSelectionValue, activityBindingSourceIsAvailable, declaredObjectPaths, activityEnumOptionIndex, activityEnumValueAt, activityPinIsStale, changedActivityPin, activityPermissionEditor, activityDeclaresWorkflowTools, workflowPermissionIsUnavailable, workflowPermissionOptions } =
   await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
 
 test('JSON authoring keeps invalid intermediate text out of the configured value and accepts valid nested values', () => {
@@ -28,6 +28,14 @@ test('run-input JSON editor rejects invalid schema drafts instead of accepting t
     value: { type: 'object', properties: { amount: { type: 'number' } }, required: ['amount'] },
   });
   assert.match(parseRunInputSchemaEdit('{"type":"object","properties":{"amount":{"type":"money"}}}').error, /unsupported type/);
+});
+
+test('composition JSON drafts are bounded and reject reserved property paths', () => {
+  assert.deepEqual(parseWorkflowJsonEdit('{'), { error: 'Enter valid JSON.' });
+  assert.deepEqual(parseWorkflowJsonEdit('{"safe":{"amount":2}}'), { value: { safe: { amount: 2 } } });
+  assert.match(parseWorkflowJsonEdit('{"__proto__":{"unsafe":true}}').error, /reserved field/);
+  assert.match(parseWorkflowJsonEdit('"x"'.padEnd(128_001, ' ')).error, /editor limit/);
+  assert.match(parseWorkflowJsonEdit(JSON.stringify({ values: Array(257).fill(1) })).error, /array exceeds/);
 });
 
 test('binding source identity retains exact declared path elements and activity revisions', () => {

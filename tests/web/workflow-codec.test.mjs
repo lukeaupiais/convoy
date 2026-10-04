@@ -117,6 +117,45 @@ test('workflow wait codec preserves generic event pins and legacy ticket filters
   assert.deepEqual(saved.nodes[1].waitFor, legacyWait);
 });
 
+test('fresh waits stay unbound and existing waits preserve every selected field', () => {
+  assert.equal(fresh('wait').waitFor, undefined);
+  const graph = fromWorkflow({ id: 'explicit-wait', name: 'Explicit wait', nodes: [
+    { id: 'wait', kind: 'wait', name: 'Wait', prompt: '' },
+  ], edges: [] });
+  assert.equal(graph.nodes[0].waitFor, undefined);
+  graph.nodes[0].name = 'Edited metadata';
+  assert.equal(toWorkflow(graph).nodes[0].waitFor, undefined);
+});
+
+test('composition node kinds and exact mappings survive unrelated edits', () => {
+  const nodes = [
+    { id: 'child', kind: 'child', name: 'Assess vendor', advance: 'automatic', workflow: { id: 'vendor-assessment', version: 3 },
+      inputBindings: { amount: { from: { kind: 'run_input', path: ['quote', 'amount'] } } },
+      outputSchema: { type: 'object', properties: { accepted: { type: 'boolean' } }, required: ['accepted'], additionalProperties: false },
+      outputBindings: { accepted: { from: ['accepted'], to: ['accepted'] } } },
+    { id: 'parallel', kind: 'parallel', name: 'Compare', advance: 'automatic', join: 'first_success',
+      branches: [
+        { id: 'review-a', workflow: { id: 'document-review', version: 2 }, inputBindings: {}, outputBindings: { score: { from: ['score'] } } },
+        { id: 'review-b', workflow: { id: 'document-review', version: 2 }, inputBindings: {}, outputBindings: { score: { from: ['score'] } } },
+      ], outputSchema: { type: 'object', properties: { score: { type: 'number' } }, additionalProperties: false }, maxConcurrent: 2, deadlineMs: 90000 },
+    { id: 'map', kind: 'map', name: 'Extract documents', advance: 'automatic', workflow: { id: 'document-parser', version: 5 },
+      itemsBinding: { from: { kind: 'run_input', path: ['documents'] } }, inputBindings: { locale: { literal: 'pt-BR' } },
+      itemField: 'document', indexField: 'position', outputSchema: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' } } } },
+      outputBindings: { id: { from: ['document', 'id'], to: ['id'] } }, maxItems: 20, maxConcurrent: 4, deadlineMs: 300000, failurePolicy: 'collect_errors' },
+  ];
+  const terminalBindings = { accept: { accepted: { from: { kind: 'human_response', nodeId: 'review', path: ['approved'] } } } };
+  const graph = fromWorkflow({ id: 'composed', name: 'Composed', nodes, edges: [], entryNode: 'child', resultSchema: { type: 'object', properties: { accepted: { type: 'boolean' } } }, resultBindingsByTerminal: terminalBindings });
+  assert.deepEqual(graph.nodes.map(({ type }) => type), ['child', 'parallel', 'map']);
+  graph.nodes[0].name = 'Edited metadata';
+  const saved = toWorkflow(graph);
+  assert.deepEqual(saved.nodes[0].workflow, nodes[0].workflow);
+  assert.deepEqual(saved.nodes[0].inputBindings, nodes[0].inputBindings);
+  assert.deepEqual(saved.nodes[1].branches, nodes[1].branches);
+  assert.deepEqual(saved.nodes[2].itemsBinding, nodes[2].itemsBinding);
+  assert.equal(saved.nodes[2].failurePolicy, 'collect_errors');
+  assert.deepEqual(saved.resultBindingsByTerminal, terminalBindings);
+});
+
 test('fresh generic actions have no tutorial prompt and legacy action prompts survive round trips', () => {
   const action = fresh('action');
   assert.equal(action.prompt, '');

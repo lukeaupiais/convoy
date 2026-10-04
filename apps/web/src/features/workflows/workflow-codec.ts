@@ -1,8 +1,14 @@
 import type { WorkflowDefinition, WorkflowStep } from '../../shared/api/runtime';
-import type { WorkflowActivityBinding, WorkflowActivityRef, WorkflowJsonSchema, WorkflowWaitFor } from '../../shared/api/runtime';
+import type {
+  WorkflowActivityBinding,
+  WorkflowActivityRef,
+  WorkflowJsonSchema,
+  WorkflowWaitFor,
+} from '../../shared/api/runtime';
 import { newId } from '../../shared/lib/browser';
 
-export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait';
+export type NodeKind =
+  'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait' | 'child' | 'parallel' | 'map';
 export type SessionMode = 'continue' | 'new' | 'reuse';
 export type ActionOperation =
   | 'inspect_changes'
@@ -51,6 +57,19 @@ export type GraphNode = {
   bindings?: Record<string, WorkflowActivityBinding>;
   condition?: Condition;
   waitFor?: WorkflowWaitFor;
+  workflow?: WorkflowStep['workflow'];
+  inputBindings?: WorkflowStep['inputBindings'];
+  outputSchema?: WorkflowStep['outputSchema'];
+  outputBindings?: WorkflowStep['outputBindings'];
+  join?: WorkflowStep['join'];
+  branches?: WorkflowStep['branches'];
+  maxItems?: WorkflowStep['maxItems'];
+  maxConcurrent?: WorkflowStep['maxConcurrent'];
+  deadlineMs?: WorkflowStep['deadlineMs'];
+  failurePolicy?: WorkflowStep['failurePolicy'];
+  itemsBinding?: WorkflowStep['itemsBinding'];
+  itemField?: WorkflowStep['itemField'];
+  indexField?: WorkflowStep['indexField'];
   session?: { mode: SessionMode; name?: string; target?: string };
   permissions?: string;
   maxRounds?: number;
@@ -79,6 +98,7 @@ export type GraphWorkflow = {
   runInputSchema?: WorkflowJsonSchema;
   resultSchema?: WorkflowJsonSchema;
   resultBindings?: Record<string, WorkflowActivityBinding>;
+  resultBindingsByTerminal?: WorkflowDefinition['resultBindingsByTerminal'];
 };
 
 export function canAddPresentationBinding(
@@ -100,6 +120,9 @@ export const kindLabels: Record<NodeKind, string> = {
   action: 'Action',
   branch: 'Branch',
   wait: 'Wait for event',
+  child: 'Child workflow',
+  parallel: 'Parallel workflows',
+  map: 'Map workflow',
 };
 export const outcomesFor = (node: GraphNode): string[] =>
   node.type === 'branch'
@@ -109,7 +132,9 @@ export const outcomesFor = (node: GraphNode): string[] =>
         ? node.outcomes
         : ['yes', 'no']
     : node.type === 'approval'
-      ? node.humanTask?.outcomes?.length ? node.humanTask.outcomes.map((outcome) => outcome.id) : ['approved', 'changes_requested']
+      ? node.humanTask?.outcomes?.length
+        ? node.humanTask.outcomes.map((outcome) => outcome.id)
+        : ['approved', 'changes_requested']
       : node.type === 'check'
         ? ['success', 'failed']
         : ['success'];
@@ -251,9 +276,9 @@ export function fresh(type: NodeKind = 'agent', index = 0): GraphNode {
   if (type === 'wait')
     return {
       ...common,
-      prompt: 'Wait for the selected ticket event.',
-      waitFor: { event: 'ticket_message_received', ticketSource: 'active_ticket' },
+      prompt: '',
     };
+  if (type !== 'branch') return { ...common, prompt: '' };
   return {
     ...common,
     prompt: '',
@@ -295,7 +320,17 @@ export function safeNode(raw: unknown, index: number): GraphNode {
   const type: NodeKind =
     rawType === 'human'
       ? 'approval'
-      : ['agent', 'check', 'approval', 'action', 'branch', 'wait'].includes(rawType)
+      : [
+            'agent',
+            'check',
+            'approval',
+            'action',
+            'branch',
+            'wait',
+            'child',
+            'parallel',
+            'map',
+          ].includes(rawType)
         ? (rawType as NodeKind)
         : 'agent';
   const node = fresh(type, index);
@@ -336,16 +371,32 @@ export function safeNode(raw: unknown, index: number): GraphNode {
     !Array.isArray(value.decisionLabels)
       ? (structuredClone(value.decisionLabels) as DecisionLabels)
       : undefined;
-  const humanTask = type === 'approval' && value.humanTask && typeof value.humanTask === 'object' && !Array.isArray(value.humanTask)
-    ? structuredClone(value.humanTask as WorkflowStep['humanTask']) : undefined;
+  const humanTask =
+    type === 'approval' &&
+    value.humanTask &&
+    typeof value.humanTask === 'object' &&
+    !Array.isArray(value.humanTask)
+      ? structuredClone(value.humanTask as WorkflowStep['humanTask'])
+      : undefined;
   const rawActivity = value.activity as Record<string, unknown> | undefined;
-  const activity = rawActivity && typeof rawActivity === 'object' && typeof rawActivity.id === 'string' && Number.isInteger(rawActivity.revision)
-    ? structuredClone(rawActivity as unknown as WorkflowActivityRef) : undefined;
-  const activityDescriptorDigest = typeof value.activityDescriptorDigest === 'string' && /^[a-f0-9]{64}$/.test(value.activityDescriptorDigest)
-    ? value.activityDescriptorDigest : undefined;
-  const bindings = value.bindings && typeof value.bindings === 'object' && !Array.isArray(value.bindings)
-    ? structuredClone(value.bindings as Record<string, WorkflowActivityBinding>) : undefined;
-  const operation = value.operation === undefined ? undefined : String(value.operation) as ActionOperation;
+  const activity =
+    rawActivity &&
+    typeof rawActivity === 'object' &&
+    typeof rawActivity.id === 'string' &&
+    Number.isInteger(rawActivity.revision)
+      ? structuredClone(rawActivity as unknown as WorkflowActivityRef)
+      : undefined;
+  const activityDescriptorDigest =
+    typeof value.activityDescriptorDigest === 'string' &&
+    /^[a-f0-9]{64}$/.test(value.activityDescriptorDigest)
+      ? value.activityDescriptorDigest
+      : undefined;
+  const bindings =
+    value.bindings && typeof value.bindings === 'object' && !Array.isArray(value.bindings)
+      ? structuredClone(value.bindings as Record<string, WorkflowActivityBinding>)
+      : undefined;
+  const operation =
+    value.operation === undefined ? undefined : (String(value.operation) as ActionOperation);
   const outcomes = Array.isArray(value.outcomes) ? value.outcomes.map(String) : undefined;
   const conditionOutcomes =
     rawCondition?.outcomes && typeof rawCondition.outcomes === 'object'
@@ -426,11 +477,12 @@ export function safeNode(raw: unknown, index: number): GraphNode {
             target: session?.target ? String(session.target) : undefined,
           }
         : undefined,
-    permissions: type === 'agent'
-      ? String(value.permissions ?? node.permissions)
-      : type === 'action' && activity && typeof value.permissions === 'string'
-        ? value.permissions
-        : undefined,
+    permissions:
+      type === 'agent'
+        ? String(value.permissions ?? node.permissions)
+        : type === 'action' && activity && typeof value.permissions === 'string'
+          ? value.permissions
+          : undefined,
     maxRounds:
       type === 'agent' && Number.isFinite(Number(value.maxRounds))
         ? Number(value.maxRounds)
@@ -482,12 +534,48 @@ export function safeNode(raw: unknown, index: number): GraphNode {
         ? rawWait && typeof rawWait.event === 'string'
           ? {
               ...(structuredClone(rawWait) as unknown as WorkflowWaitFor),
-              ...(rawWait.event === 'ticket_message_received' || rawWait.event === 'ticket_source_updated' || rawWait.event === 'ticket_updated'
-                ? { ticketSource: rawWait.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket' }
+              ...(rawWait.event === 'ticket_message_received' ||
+              rawWait.event === 'ticket_source_updated' ||
+              rawWait.event === 'ticket_updated'
+                ? {
+                    ticketSource:
+                      rawWait.ticketSource === 'related_ticket'
+                        ? 'related_ticket'
+                        : 'active_ticket',
+                  }
                 : {}),
             }
-          : { event: 'ticket_message_received', ticketSource: 'active_ticket' }
+          : undefined
         : undefined,
+    ...(type === 'child' || type === 'parallel' || type === 'map'
+      ? {
+          workflow: value.workflow
+            ? structuredClone(value.workflow as WorkflowStep['workflow'])
+            : undefined,
+          inputBindings: value.inputBindings
+            ? structuredClone(value.inputBindings as WorkflowStep['inputBindings'])
+            : undefined,
+          outputSchema: value.outputSchema
+            ? structuredClone(value.outputSchema as WorkflowStep['outputSchema'])
+            : undefined,
+          outputBindings: value.outputBindings
+            ? structuredClone(value.outputBindings as WorkflowStep['outputBindings'])
+            : undefined,
+          join: value.join as WorkflowStep['join'],
+          branches: value.branches
+            ? structuredClone(value.branches as WorkflowStep['branches'])
+            : undefined,
+          maxItems: value.maxItems as WorkflowStep['maxItems'],
+          maxConcurrent: value.maxConcurrent as WorkflowStep['maxConcurrent'],
+          deadlineMs: value.deadlineMs as WorkflowStep['deadlineMs'],
+          failurePolicy: value.failurePolicy as WorkflowStep['failurePolicy'],
+          itemsBinding: value.itemsBinding
+            ? structuredClone(value.itemsBinding as WorkflowStep['itemsBinding'])
+            : undefined,
+          itemField: value.itemField as WorkflowStep['itemField'],
+          indexField: value.indexField as WorkflowStep['indexField'],
+        }
+      : {}),
     outcomes,
   };
   normalized.outcomes = outcomesFor(normalized);
@@ -556,12 +644,12 @@ export function backendNode(node: GraphNode): WorkflowStep {
     } else if (operation) {
       result.operation = operation;
       const actionInput = { ...(input ?? {}) };
-      if (operation === 'create_ticket' && actionInput.projectId === '') delete actionInput.projectId;
+      if (operation === 'create_ticket' && actionInput.projectId === '')
+        delete actionInput.projectId;
       result.input = actionInput;
     }
   }
-  if (type === 'wait')
-    result.waitFor = waitFor ?? { event: 'ticket_message_received', ticketSource: 'active_ticket' };
+  if (type === 'wait' && waitFor) result.waitFor = structuredClone(waitFor);
   if (type === 'branch' && condition)
     result.condition = {
       source: condition.source,
@@ -570,6 +658,25 @@ export function backendNode(node: GraphNode): WorkflowStep {
       trueOutcome: condition.trueOutcome || 'yes',
       falseOutcome: condition.falseOutcome || 'no',
     };
+  if (type === 'child' || type === 'parallel' || type === 'map') {
+    for (const key of [
+      'workflow',
+      'inputBindings',
+      'outputSchema',
+      'outputBindings',
+      'join',
+      'branches',
+      'maxItems',
+      'maxConcurrent',
+      'deadlineMs',
+      'failurePolicy',
+      'itemsBinding',
+      'itemField',
+      'indexField',
+    ] as const) {
+      if (node[key] !== undefined) result[key] = structuredClone(node[key]);
+    }
+  }
   return result as unknown as WorkflowStep;
 }
 
@@ -625,6 +732,9 @@ export function toWorkflow(graph: GraphWorkflow): WorkflowDefinition {
     ...(graph.runInputSchema ? { runInputSchema: structuredClone(graph.runInputSchema) } : {}),
     ...(graph.resultSchema ? { resultSchema: structuredClone(graph.resultSchema) } : {}),
     ...(graph.resultBindings ? { resultBindings: structuredClone(graph.resultBindings) } : {}),
+    ...(graph.resultBindingsByTerminal
+      ? { resultBindingsByTerminal: structuredClone(graph.resultBindingsByTerminal) }
+      : {}),
     nodes,
     edges: graph.edges,
     steps: nodes,
@@ -633,8 +743,13 @@ export function toWorkflow(graph: GraphWorkflow): WorkflowDefinition {
 
 export function blankWorkflow(): GraphWorkflow {
   return fromWorkflow({
-    id: newId(), name: 'Untitled workflow', version: 0,
-    nodes: [], edges: [], entryNode: '', maxRevisions: 3,
+    id: newId(),
+    name: 'Untitled workflow',
+    version: 0,
+    nodes: [],
+    edges: [],
+    entryNode: '',
+    maxRevisions: 3,
   });
 }
 
@@ -750,7 +865,8 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
         (edge) =>
           edge.from === node.id &&
           !(node.humanTask
-            ? node.humanTask.outcomes.some((outcome) => outcome.id === edge.outcome) || ['*', 'default'].includes(edge.outcome)
+            ? node.humanTask.outcomes.some((outcome) => outcome.id === edge.outcome) ||
+              ['*', 'default'].includes(edge.outcome)
             : ['approved', 'changes_requested', '*', 'default'].includes(edge.outcome)),
       )
     )

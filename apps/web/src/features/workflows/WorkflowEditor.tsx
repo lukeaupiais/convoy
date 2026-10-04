@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   GitBranch,
+  Link2,
   MoreHorizontal,
   Plus,
   Settings2,
@@ -56,6 +57,9 @@ const kindIcon: Record<NodeKind, typeof Zap> = {
   action: Sparkles,
   branch: GitBranch,
   wait: MoreHorizontal,
+  child: Link2,
+  parallel: GitBranch,
+  map: MoreHorizontal,
 };
 
 type WorkflowTemplate = 'team-delivery' | 'small-change' | 'bug-fix' | 'blank';
