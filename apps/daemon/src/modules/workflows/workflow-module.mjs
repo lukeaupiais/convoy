@@ -239,8 +239,14 @@ export function createWorkflows({
   state.workflowWebhookBindings ??= [];
   const readDefinition = workflow => {
     try {
+      const definition = normalize(workflow);
+      definition.nodes = definition.nodes.map(node => {
+        if (!node.legacyHumanTask) return node;
+        const { humanTask: _humanTask, legacyHumanTask: _legacyHumanTask, ...authoringNode } = node;
+        return authoringNode;
+      });
       return {
-        ...normalize(workflow), organizationId: workflow.organizationId ?? 'personal',
+        ...definition, organizationId: workflow.organizationId ?? 'personal',
         ...(workflow.teamId ? { teamId: workflow.teamId } : {}),
         ...(workflow.projectId ? { projectId: workflow.projectId } : {}), version: workflow.version ?? 1,
       };
@@ -769,7 +775,7 @@ export function createWorkflows({
       if (command.action === 'saveAutomation')
         return automations.save(command, principal);
       return command.action === 'saveWorkflow'
-        ? registry.publish(command)
+        ? registry.publish(command).then(readDefinition)
         : registry.saveDraft(command);
     },
     async sessionCommand(session, command) {

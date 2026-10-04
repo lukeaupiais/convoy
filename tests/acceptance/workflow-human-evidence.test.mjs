@@ -295,6 +295,78 @@ test('session-backed configured human tasks reject legacy approve and request-ch
   assert.deepEqual(unchanged.flow.history, []);
 });
 
+test('legacy definition read and publish responses are safe to edit and republish', async t => {
+  const f = await fixture(t);
+  const reviewer = f.principals['procurement-reviewer'];
+  const projectId = f.projects.procurement.id;
+  const organizationId = f.organizations.procurement.id;
+  const membership = (await f.snapshot(reviewer)).memberships.find(value =>
+    value.principal.userId === reviewer.userId && value.scope.kind === 'project' && value.scope.projectId === projectId);
+  await f.act('updateMembership', { organizationId, membershipId: membership.id, roles: ['maintainer'] });
+  await f.act('selectActiveContext', { context: { organizationId, projectId } });
+  await f.act('publishProfile', { organizationId, id: 'editorial-profile', name: 'Editorial profile', tools: [], skills: [] });
+  await f.act('selectActiveContext', { context: { organizationId, projectId } }, reviewer);
+
+  const inputSchema = { type: 'object', properties: { requestId: bounded }, required: ['requestId'], additionalProperties: false };
+  const resultSchema = { type: 'object', properties: { requestId: bounded }, required: ['requestId'], additionalProperties: false };
+  const resultBindings = { requestId: { from: { kind: 'run_input', path: ['requestId'] } } };
+  const saved = await f.act('saveWorkflow', { projectId, workflow: {
+    id: 'legacy-definition-edit', name: 'Legacy definition edit', runInputSchema: inputSchema, resultSchema, resultBindings,
+    nodes: [
+      { id: 'legacy-review', kind: 'human', name: 'Legacy review', prompt: 'Review the record.',
+        decisionLabels: { approved: 'Accept record', changes_requested: 'Return record' } },
+      { id: 'configured-review', kind: 'human', name: 'Configured review', prompt: 'Choose a route.', humanTask: {
+        outcomes: [{ id: 'publish', label: 'Publish record' }, { id: 'hold', label: 'Hold record' }],
+        form: { fields: [{ id: 'audience', label: 'Audience', type: 'choice', required: true,
+          options: [{ value: 'members', label: 'Members' }, { value: 'public', label: 'Public' }] }] },
+      } },
+      { id: 'wait', kind: 'wait', name: 'Wait for record update', waitFor: {
+        event: 'ticket_updated', ticketSource: 'active_ticket', status: 'Published',
+      } },
+    ],
+    edges: [
+      { from: 'legacy-review', to: 'configured-review', outcome: 'approved' },
+      { from: 'configured-review', to: 'wait', outcome: 'publish' },
+    ],
+  } }, reviewer);
+  const snapshot = await f.snapshot(reviewer);
+  const definition = snapshot.workflows.find(value => value.id === 'legacy-definition-edit');
+  assert.ok(definition);
+
+  for (const authoringValue of [saved, definition]) {
+    const legacy = authoringValue.nodes.find(node => node.id === 'legacy-review');
+    assert.equal(legacy.legacyHumanTask, undefined, 'the internal legacy-authorization marker is not exposed as authoring data');
+    assert.equal(legacy.humanTask, undefined, 'synthetic compatibility outcomes do not become caller-selected task policy');
+    assert.deepEqual(legacy.decisionLabels, { approved: 'Accept record', changes_requested: 'Return record' });
+    assert.deepEqual(authoringValue.runInputSchema, inputSchema);
+    assert.deepEqual(authoringValue.resultSchema, resultSchema);
+    assert.deepEqual(authoringValue.resultBindings, resultBindings);
+    assert.equal(authoringValue.nodes.find(node => node.id === 'wait').waitFor.status, 'Published');
+    assert.equal(authoringValue.nodes.find(node => node.id === 'wait').waitFor.ticketSource, 'active_ticket');
+    assert.deepEqual(authoringValue.nodes.find(node => node.id === 'configured-review').humanTask.form.fields[0].options,
+      [{ value: 'members', label: 'Members' }, { value: 'public', label: 'Public' }]);
+  }
+
+  const edited = await f.act('saveWorkflow', { projectId, baseVersion: definition.version, workflow: {
+    ...definition, capabilityProfile: { id: 'editorial-profile', version: 1 },
+  } }, reviewer);
+  assert.equal(edited.version, definition.version + 1);
+  assert.deepEqual(edited.capabilityProfile, { id: 'editorial-profile', version: 1 });
+  const responseEdit = await f.act('saveWorkflow', { projectId, baseVersion: edited.version, workflow: {
+    ...edited, name: 'Legacy definition edit from publication response',
+  } }, reviewer);
+  assert.equal(responseEdit.version, edited.version + 1,
+    'the successful publication response is safe to edit and republish too');
+  assert.equal(responseEdit.nodes.find(node => node.id === 'legacy-review').legacyHumanTask, undefined);
+  await assert.rejects(f.act('saveWorkflow', { projectId, baseVersion: responseEdit.version, workflow: {
+    ...responseEdit,
+    nodes: edited.nodes.map(node => node.id === 'legacy-review' ? { ...node, legacyHumanTask: true } : node),
+  } }, reviewer), /legacy human-task markers are not accepted/i,
+  'a caller still cannot add the internal compatibility marker to a new publication');
+  const unchanged = await f.snapshot(reviewer);
+  assert.deepEqual(unchanged.workflows.filter(value => value.id === 'legacy-definition-edit').map(value => value.version), [1, 2, 3]);
+});
+
 test('published legacy gates retain their approve path across read, restart, and re-normalization', { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   await f.act('saveWorkflow', { workflow: { id: 'legacy-session-review', name: 'Legacy session review', nodes: [
