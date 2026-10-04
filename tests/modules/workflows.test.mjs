@@ -327,6 +327,87 @@ test('human decision labels normalize, pin with a run, and reject invalid metada
   ] }), /supported human outcomes/);
 });
 
+test('configured human outcomes, bounded forms, reviewer selectors, and deadlines normalize without outcome-name authority', () => {
+  const workflow = normalizeWorkflow({ id: 'configured-review', name: 'Configured review', nodes: [
+    { id: 'review', name: 'Procurement review', kind: 'human', humanTask: {
+      outcomes: [{ id: 'authorize_purchase', label: 'Authorize purchase' }, { id: 'request_revision', label: 'Request revision' }],
+      form: { fields: [
+        { id: 'total', label: 'Total', type: 'number', required: true, minimum: 1, maximum: 100_000 },
+        { id: 'delivery', label: 'Delivery date', type: 'date' },
+      ] },
+      reviewerPolicy: { permission: 'project.write', userIds: ['finance-1'] }, dueAfterSeconds: 3600,
+    } },
+  ], edges: [] }, { publishing: true });
+  const task = workflow.nodes[0].humanTask;
+  assert.deepEqual(task.outcomes, [{ id: 'authorize_purchase', label: 'Authorize purchase' }, { id: 'request_revision', label: 'Request revision' }]);
+  assert.equal(task.outcomes[0].effect, undefined, 'effect authority is explicit, never derived from a label or identifier');
+  assert.deepEqual(task.form.fields.map(field => field.type), ['number', 'date']);
+  assert.deepEqual(task.reviewerPolicy, { permission: 'project.write', userIds: ['finance-1'] });
+  assert.equal(task.dueAfterSeconds, 3600);
+  assert.equal(workflow.nodes[0].legacyHumanTask, undefined);
+  const legacy = normalizeWorkflow({ id: 'legacy-review', name: 'Legacy review', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', decisionLabels: { approved: 'Accept estimate' } },
+  ] }, { publishing: true });
+  assert.equal(legacy.nodes[0].legacyHumanTask, true);
+  assert.deepEqual(legacy.nodes[0].humanTask.outcomes.map(value => value.id), ['approved', 'changes_requested']);
+  assert.deepEqual(normalizeWorkflow(legacy), legacy, 'legacy compatibility data stays idempotent through read normalization');
+  assert.throws(() => normalizeWorkflow({ id: 'forged-legacy-marker', name: 'Forged marker', nodes: [{
+    id: 'review', name: 'Review', kind: 'human', legacyHumanTask: true,
+    humanTask: { outcomes: [{ id: 'release', label: 'Release' }, { id: 'revise', label: 'Revise' }], form: { fields: [] } },
+  }] }), /legacy compatibility cannot be combined/i);
+  const exactLegacyMarker = { id: 'exact-forged-legacy-marker', name: 'Forged marker', nodes: [{
+    id: 'review', name: 'Review', kind: 'human', legacyHumanTask: true,
+    humanTask: { outcomes: [
+      { id: 'approved', label: 'Approved', effect: 'approve_activity' },
+      { id: 'changes_requested', label: 'Request changes' },
+    ] },
+  }] };
+  assert.throws(() => normalizeWorkflow(exactLegacyMarker, { publishing: true }), /markers are not accepted/i,
+    'the exact generated compatibility projection is still untrusted at publication');
+  for (const humanTask of [
+    { outcomes: [{ id: 'same', label: 'One' }, { id: 'same', label: 'Two' }] },
+    { outcomes: [{ id: 'yes', label: 'Yes', effect: 'approve_activity' }, { id: 'no', label: 'No' }], form: { fields: [{ id: 'amount', label: 'Amount', type: 'number', minimum: 2, maximum: 1 }] } },
+    { outcomes: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }], reviewerPolicy: {} },
+  ]) assert.throws(() => normalizeWorkflow({ id: 'invalid-review', name: 'Invalid review', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', humanTask },
+  ] }), /outcome|field|reviewer|bounds/i);
+  for (const id of ['__proto__', 'prototype', 'constructor']) {
+    const unsafeField = { id, label: 'Required value', type: 'text', required: true };
+    const definition = { id: `unsafe-${id}`, name: 'Unsafe field', nodes: [{ id: 'review', name: 'Review', kind: 'human', humanTask: {
+      outcomes: [{ id: 'accept', label: 'Accept' }, { id: 'decline', label: 'Decline' }], form: { fields: [unsafeField] },
+    } }] };
+    assert.throws(() => normalizeWorkflow(definition), /human form fields require unique safe IDs/i, `normalization must reject ${id}`);
+    assert.throws(() => normalizeWorkflow(definition, { publishing: true }), /human form fields require unique safe IDs/i,
+      `publication must reject ${id}`);
+  }
+  assert.throws(() => normalizeWorkflow({ id: 'bad-route', name: 'Bad route', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', humanTask: { outcomes: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }] } },
+    { id: 'next', name: 'Next', kind: 'human', humanTask: { outcomes: [{ id: 'done', label: 'Done' }, { id: 'stop', label: 'Stop' }] } },
+  ], edges: [{ from: 'review', to: 'next', outcome: 'unconfigured' }] }), /not configured/i);
+});
+
+test('session-backed configured human tasks reject legacy decisions without mutating the gate', async () => {
+  const workflow = normalizeWorkflow({ id: 'configured-task-bypass', name: 'Configured task bypass', nodes: [
+    { id: 'review', name: 'Review', kind: 'human', humanTask: { outcomes: [
+      { id: 'release', label: 'Release' }, { id: 'revise', label: 'Revise' },
+    ], form: { fields: [{ id: 'summary', label: 'Summary', type: 'text', required: true }] } } },
+  ] });
+  const session = { id: 'configured-task-bypass', messages: [], checks: [], events: [], workflow };
+  const engine = createWorkflowEngine({ state: { sessions: { [session.id]: session } }, save: async () => {},
+    event: (value, type, data) => value.events.push({ type, ...data }), busy: () => false, launch: () => true });
+  await engine.start(session);
+  const instance = session.flow.instance;
+  for (const command of [
+    { action: 'approveGate', instance },
+    { action: 'requestChanges', instance, feedback: 'Please revise' },
+    { action: 'decideHumanTask', instance, outcomeId: 'approved' },
+  ]) await assert.rejects(engine.decide(session, command), /configured|outcome/i);
+  assert.equal(session.flow.status, 'waiting_gate');
+  assert.equal(session.flow.instance, instance);
+  assert.deepEqual(session.flow.history, []);
+  assert.equal(session.flow.reviewedHumanResponseId, undefined);
+});
+
 test('approval preserves the captured draft and rejects a missing draft without advancing', async () => {
   const session = { id: 'reply', messages: [], checks: [], events: [], workspace: null, workflow: normalizeWorkflow({ id: 'reply', name: 'Reply', nodes: [
     { id: 'draft', name: 'Draft', kind: 'agent', submissionRequirements: { success: { fields: ['message'], minReferences: 0 } } },
@@ -416,19 +497,47 @@ test('a pinned human decision cannot approve when its exact source package is mi
 
 test('workflow publication rejects unsupported human choices while preserving supported wildcards', async () => {
   const supported = { id: 'wildcard', name: 'Wildcard review', nodes: [
-    { id: 'review', name: 'Review', kind: 'human' },
+    { id: 'review', name: 'Review', kind: 'human', humanTask: { outcomes: [
+      { id: 'approved', label: 'Approved', effect: 'approve_activity' },
+      { id: 'changes_requested', label: 'Request changes' },
+    ] } },
     { id: 'done', name: 'Done', kind: 'agent' },
   ], edges: [{ from: 'review', to: 'done', outcome: '*' }] };
   const state = { workflows: [], workflowDrafts: {} };
   const registry = createWorkflowRegistry({ state, save: async () => {}, normalize: normalizeWorkflow, validateBindings: () => {} });
-  await assert.rejects(registry.publish({ workflow: { ...supported, edges: [{ from: 'review', to: 'done', outcome: 'rejected' }] } }), /unsupported human outcome rejected/);
+  await assert.rejects(registry.publish({ workflow: { ...supported, edges: [{ from: 'review', to: 'done', outcome: 'rejected' }] } }), /outcome rejected is not configured/);
   const published = await registry.publish({ workflow: supported });
   assert.equal(published.edges[0].outcome, '*');
-  const legacy = await registry.publish({ workflow: { id: 'legacy', name: 'Legacy review', steps: [
-    { id: 'start', kind: 'agent', name: 'Start' }, { id: 'review', kind: 'human', name: 'Review' }, { id: 'done', kind: 'agent', name: 'Done' },
+  const oldClientLegacy = await registry.publish({ workflow: { id: 'new-legacy', name: 'New legacy', nodes: [
+    { id: 'review', name: 'Review', kind: 'human' },
   ] } });
+  assert.equal(oldClientLegacy.nodes[0].legacyHumanTask, true,
+    'older clients may continue publishing bare human gates through compatibility normalization');
+  const publishedCountBeforeForgery = state.workflows.length;
+  await assert.rejects(registry.publish({ workflow: { id: 'legacy', name: 'Legacy review', baseVersion: 1, nodes: [
+    { id: 'review', name: 'Review', kind: 'human', legacyHumanTask: true,
+      humanTask: { outcomes: [
+        { id: 'approved', label: 'Approved', effect: 'approve_activity' },
+        { id: 'changes_requested', label: 'Request changes' },
+      ] } },
+  ] } }), /markers are not accepted/i);
+  assert.equal(state.workflows.length, publishedCountBeforeForgery, 'rejected caller markers do not append a published revision');
+  const legacySteps = { id: 'legacy-steps', name: 'Legacy steps', steps: [
+    { id: 'start', kind: 'agent', name: 'Start', prompt: 'Start' },
+    { id: 'review', kind: 'human', name: 'Review', prompt: 'Review', decisionLabels: { approved: 'Approved', changes_requested: 'Request changes' } },
+    { id: 'done', kind: 'agent', name: 'Done', prompt: 'Done' },
+  ] };
+  await assert.rejects(registry.publish({ workflow: { ...legacySteps, edges: [
+    { from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: 'rejected' },
+  ] } }), /unsupported human outcome rejected/);
+  const legacy = await registry.publish({ workflow: { ...legacySteps, edges: [
+    { from: 'start', to: 'review', outcome: 'success' }, { from: 'review', to: 'done', outcome: '*' },
+  ] } });
+  assert.equal(legacy.nodes.find(node => node.id === 'review').legacyHumanTask, true,
+    'legacy ordered-step publication retains its compatibility projection');
   assert.deepEqual(legacy.edges.map(({ from, to, outcome }) => ({ from, to, outcome })), [
     { from: 'start', to: 'review', outcome: 'success' },
+    { from: 'review', to: 'done', outcome: '*' },
     { from: 'review', to: 'done', outcome: 'approved' },
   ]);
 });

@@ -187,11 +187,31 @@ export function resolveActivityBindings(bindings, inputSchema, sources) {
         if (!output || output.status !== 'completed' || !Object.hasOwn(output, 'value')) throw new Error(`Activity output ${from.nodeId} is not complete in this run.`);
         activitySchemaAtPath(output.schema, from.path);
         value[key] = resolveActivityPath(output.value, from.path);
+      } else if (from.kind === 'human_response') {
+        const response = sources.humanResponses?.[from.nodeId];
+        if (!response || !response.value || !response.schema) throw new Error(`Human response ${from.nodeId} is not available for this workflow effect.`);
+        activitySchemaAtPath(response.schema, from.path);
+        value[key] = resolveActivityPath(response.value, from.path);
       } else throw new Error(`Activity input ${key} has an unsupported reference kind.`);
     }
   }
   for (const key of inputSchema.required ?? []) if (!Object.hasOwn(value, key)) throw new Error(`Activity input ${key} is required.`);
   return validateActivityValue(value, inputSchema);
+}
+
+export function humanFormSchema(node) {
+  const properties = {};
+  const required = [];
+  for (const field of node?.humanTask?.form?.fields ?? []) {
+    const schema = field.type === 'text' ? { type: 'string', minLength: field.minLength ?? 0, maxLength: field.maxLength ?? 2000 }
+      : field.type === 'number' ? { type: 'number', ...(field.minimum !== undefined ? { minimum: field.minimum } : {}), ...(field.maximum !== undefined ? { maximum: field.maximum } : {}) }
+        : field.type === 'boolean' ? { type: 'boolean' }
+          : field.type === 'date' ? { type: 'string', minLength: 10, maxLength: 10 }
+            : { type: 'string', enum: field.options.map(option => option.value) };
+    properties[field.id] = schema;
+    if (field.required) required.push(field.id);
+  }
+  return { type: 'object', properties, required, additionalProperties: false };
 }
 
 export function validateActivityBindings(node, workflow, activityCatalog) {
@@ -242,6 +262,14 @@ export function validateActivityBindings(node, workflow, activityCatalog) {
         throw new Error(`${node.name}: activity output reference must name a prior registered activity.`);
       const sourceSchema = activitySchemaAtPath(sourceDescriptor.outputSchema, binding.from.path);
       if (!schemaAssignable(sourceSchema, properties[key])) throw new Error(`${node.name}: activity output reference is incompatible with activity input ${key}.`);
+    } else if (binding.from?.kind === 'human_response') {
+      const sourceIndex = nodeIndex.get(binding.from.nodeId);
+      const source = workflow.nodes[sourceIndex];
+      if (Object.keys(binding.from).some(field => !['kind', 'nodeId', 'path'].includes(field)) || typeof binding.from.nodeId !== 'string' ||
+          sourceIndex === undefined || !canReach(source.id, node.id) || source.kind !== 'human' || !Array.isArray(binding.from.path) || binding.from.path.some(part => !safePathPart(part)))
+        throw new Error(`${node.name}: form response reference must name a prior human task field.`);
+      const sourceSchema = activitySchemaAtPath(humanFormSchema(source), binding.from.path);
+      if (!schemaAssignable(sourceSchema, properties[key])) throw new Error(`${node.name}: human response reference is incompatible with activity input ${key}.`);
     } else throw new Error(`${node.name}: activity input ${key} has an invalid binding.`);
   }
 }

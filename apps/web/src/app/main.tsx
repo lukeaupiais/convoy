@@ -572,6 +572,7 @@ function App() {
           <SettingsPage
             key={`workflow-settings:${workflowContextKey}`}
             view="Workflows"
+            projectId={project?.id}
             workflowReference={workflowReference}
             onCloseReference={() => setWorkflowReference(undefined)}
           />
