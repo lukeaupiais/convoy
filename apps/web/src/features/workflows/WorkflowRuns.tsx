@@ -36,9 +36,16 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   const [refreshKey, setRefreshKey] = useState(0);
   const [humanValues, setHumanValues] = useState<Record<string, unknown>>({});
   const [humanResponseId, setHumanResponseId] = useState('');
+  const [humanResponseContext, setHumanResponseContext] = useState('');
   const [humanOutcomeId, setHumanOutcomeId] = useState('');
+  const [humanOutcomeContext, setHumanOutcomeContext] = useState('');
   const [humanReview, setHumanReview] = useState<WorkflowHumanReview | null>(null);
+  const [humanReviewContext, setHumanReviewContext] = useState('');
   const detailRef = useRef<WorkflowRun | null>(null);
+  const humanMaterialGeneration = useRef(0);
+  const humanContextRef = useRef('');
+  const committedHumanContext = useRef('');
+  const canReviewTaskRef = useRef(false);
   detailRef.current = detail;
 
   useEffect(() => {
@@ -51,8 +58,12 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     setRefreshError('');
     setHumanValues({});
     setHumanResponseId('');
+    setHumanResponseContext('');
     setHumanOutcomeId('');
+    setHumanOutcomeContext('');
     setHumanReview(null);
+    setHumanReviewContext('');
+    humanMaterialGeneration.current += 1;
   }, [projectId]);
 
   useEffect(() => {
@@ -187,9 +198,13 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     setDetail(null);
     setSelectedRunId(runId);
     setHumanValues({});
+    humanMaterialGeneration.current += 1;
     setHumanResponseId('');
+    setHumanResponseContext('');
     setHumanOutcomeId('');
+    setHumanOutcomeContext('');
     setHumanReview(null);
+    setHumanReviewContext('');
     if (
       previous?.id !== runId &&
       previous?.lease?.ownedByCurrentCaller &&
@@ -241,6 +256,12 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     !busy,
   );
   const canReviewTask = Boolean(canAct && currentDetail?.humanTaskReviewerEligible === true);
+  canReviewTaskRef.current = Boolean(
+    currentDetail &&
+    control?.ownsControl &&
+    (currentDetail.lease?.expiresAt ?? 0) > Date.now() &&
+    currentDetail.humanTaskReviewerEligible === true,
+  );
   const humanContextKey = JSON.stringify([
     selectedRunId,
     currentDetail?.nodeId,
@@ -250,6 +271,7 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     state.activeContext?.projectId,
     state.activeContext?.principal,
   ]);
+  humanContextRef.current = humanContextKey;
   const error = actionError || refreshError;
   const currentResponse = currentDetail?.humanResponses
     ?.slice()
@@ -257,25 +279,53 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     .find((response) => response.instance === currentDetail.instance);
 
   useEffect(() => {
-    if (ownsRunControl) return;
-    setHumanValues({});
+    const contextChanged = committedHumanContext.current !== humanContextKey;
+    committedHumanContext.current = humanContextKey;
+    if (!contextChanged && ownsRunControl) return;
+    humanMaterialGeneration.current += 1;
+    if (!ownsRunControl) setHumanValues({});
     setHumanResponseId('');
+    setHumanResponseContext('');
     setHumanOutcomeId('');
+    setHumanOutcomeContext('');
     setHumanReview(null);
+    setHumanReviewContext('');
   }, [humanContextKey, ownsRunControl]);
+
+  function invalidateHumanMaterial() {
+    humanMaterialGeneration.current += 1;
+    setHumanResponseId('');
+    setHumanResponseContext('');
+    setHumanOutcomeId('');
+    setHumanOutcomeContext('');
+    setHumanReview(null);
+    setHumanReviewContext('');
+  }
 
   async function submitHumanResponse() {
     if (!currentDetail?.instance || !canAct) return;
+    const generation = humanMaterialGeneration.current;
+    const contextKey = humanContextKey;
+    const instance = currentDetail.instance;
     setBusy(true);
     setActionError('');
     setHumanReview(null);
+    setHumanReviewContext('');
     try {
       const result = await command('submitWorkflowHumanResponse', {
         workflowRunId: currentDetail.id,
         instance: currentDetail.instance,
         values: humanValues,
       });
-      setHumanResponseId(result.result.id);
+      if (
+        generation === humanMaterialGeneration.current &&
+        canReviewTaskRef.current &&
+        contextKey === humanContextRef.current &&
+        instance === detailRef.current?.instance
+      ) {
+        setHumanResponseId(result.result.id);
+        setHumanResponseContext(contextKey);
+      }
       setRefreshKey((value) => value + 1);
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : String(caught));
@@ -286,9 +336,13 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
 
   async function captureHumanDocument(file?: File) {
     if (!file || !currentDetail?.instance || !canAct) return;
+    const generation = humanMaterialGeneration.current;
+    const contextKey = humanContextKey;
+    const instance = currentDetail.instance;
     setBusy(true);
     setActionError('');
     setHumanReview(null);
+    setHumanReviewContext('');
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -313,8 +367,17 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
                 : 'text/plain'),
         data,
       });
-      setHumanResponseId('');
-      setHumanReview(null);
+      if (
+        generation === humanMaterialGeneration.current &&
+        canReviewTaskRef.current &&
+        contextKey === humanContextRef.current &&
+        instance === detailRef.current?.instance
+      ) {
+        setHumanResponseId('');
+        setHumanResponseContext('');
+        setHumanReview(null);
+        setHumanReviewContext('');
+      }
       setRefreshKey((value) => value + 1);
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : String(caught));
@@ -325,6 +388,10 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
 
   async function prepareHumanReview(outcomeId: string) {
     if (!currentDetail?.instance || !currentNode || !humanResponseId || !canAct) return;
+    const generation = humanMaterialGeneration.current;
+    const contextKey = humanContextKey;
+    const responseId = humanResponseId;
+    const instance = currentDetail.instance;
     const route =
       workflow?.edges.find((edge) => edge.from === currentNode.id && edge.outcome === outcomeId) ??
       workflow?.edges.find(
@@ -337,12 +404,22 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
       const response = await command('prepareWorkflowHumanReview', {
         workflowRunId: currentDetail.id,
         instance: currentDetail.instance,
-        responseId: humanResponseId,
+        responseId,
         outcomeId,
         ...(route ? { targetNodeId: route.to } : {}),
       });
-      setHumanOutcomeId(outcomeId);
-      setHumanReview(response.result);
+      if (
+        generation === humanMaterialGeneration.current &&
+        canReviewTaskRef.current &&
+        contextKey === humanContextRef.current &&
+        instance === detailRef.current?.instance &&
+        responseId === humanResponseId &&
+        outcomeId === humanOutcomeId &&
+        contextKey === humanOutcomeContext
+      ) {
+        setHumanReview(response.result);
+        setHumanReviewContext(contextKey);
+      }
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -351,7 +428,14 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   }
 
   async function decideHumanOutcome() {
-    if (!currentDetail?.instance || !humanReview || !humanOutcomeId || !canAct) return;
+    if (
+      !currentDetail?.instance ||
+      !humanReview ||
+      humanReviewContext !== humanContextKey ||
+      !humanOutcomeId ||
+      !canAct
+    )
+      return;
     setBusy(true);
     setActionError('');
     try {
@@ -369,7 +453,11 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
           : {}),
       });
       setHumanReview(null);
+      setHumanReviewContext('');
       setHumanResponseId('');
+      setHumanResponseContext('');
+      setHumanOutcomeId('');
+      setHumanOutcomeContext('');
       setRefreshKey((value) => value + 1);
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : String(caught));
@@ -642,8 +730,11 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
                     node={currentNode}
                     values={humanValues}
                     onValuesChange={setHumanValues}
+                    onMaterialChange={invalidateHumanMaterial}
                     response={
-                      canReviewTask && currentResponse?.id === humanResponseId
+                      canReviewTask &&
+                      humanResponseContext === humanContextKey &&
+                      currentResponse?.id === humanResponseId
                         ? currentResponse
                         : undefined
                     }
@@ -651,13 +742,20 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
                       (item) => item.source.attemptInstance === currentDetail.instance,
                     )}
                     review={
-                      ownsRunControl && canReviewTask ? (humanReview ?? undefined) : undefined
+                      ownsRunControl && canReviewTask && humanReviewContext === humanContextKey
+                        ? (humanReview ?? undefined)
+                        : undefined
                     }
-                    selectedOutcomeId={humanOutcomeId}
+                    selectedOutcomeId={
+                      humanOutcomeContext === humanContextKey ? humanOutcomeId : ''
+                    }
                     disabled={!canReviewTask || busy}
                     onOutcomeChange={(id) => {
+                      humanMaterialGeneration.current += 1;
                       setHumanOutcomeId(id);
+                      setHumanOutcomeContext(humanContextKey);
                       setHumanReview(null);
+                      setHumanReviewContext('');
                     }}
                     onSubmit={() => void submitHumanResponse()}
                     onCaptureDocument={(file) => void captureHumanDocument(file)}

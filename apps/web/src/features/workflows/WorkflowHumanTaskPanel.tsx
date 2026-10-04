@@ -11,6 +11,7 @@ export type WorkflowHumanTaskPanelProps = {
   node: WorkflowStep;
   values: Record<string, unknown>;
   onValuesChange: (values: Record<string, unknown>) => void;
+  onMaterialChange: () => void;
   response?: WorkflowHumanResponse;
   evidence: WorkflowEvidenceRef[];
   review?: WorkflowHumanReview;
@@ -28,6 +29,7 @@ export function WorkflowHumanTaskPanel({
   node,
   values,
   onValuesChange,
+  onMaterialChange,
   response,
   evidence,
   review,
@@ -46,11 +48,13 @@ export function WorkflowHumanTaskPanel({
     const next = { ...values };
     if (empty) delete next[fieldId];
     else next[fieldId] = value;
+    onMaterialChange();
     onValuesChange(next);
   }
   function capture(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.currentTarget.value = '';
+    if (file) onMaterialChange();
     onCaptureDocument(file);
   }
   return (
