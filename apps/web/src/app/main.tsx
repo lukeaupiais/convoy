@@ -111,6 +111,7 @@ function App() {
     if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return;
     if (value !== 'Wiki' && parseWikiLocation(window.location.hash))
       window.history.pushState(null, '', window.location.pathname + window.location.search);
+    if (value !== 'Workflows') setWorkflowRunId(undefined);
     setPageState(value);
   }
   const routeProjects = (liveRuntime?.projects ?? [])
@@ -143,6 +144,7 @@ function App() {
     return () => window.removeEventListener('hashchange', followWikiLink);
   }, [routeProjects]);
   const [workflowReference, setWorkflowReference] = useState<WorkflowReference>();
+  const [workflowRunId, setWorkflowRunId] = useState<string>();
   const workflowContextKey = JSON.stringify([
     liveRuntime?.deployment?.id,
     liveRuntime?.currentUser?.id,
@@ -150,6 +152,12 @@ function App() {
     liveRuntime?.activeContext?.projectId,
   ]);
   useEffect(() => setWorkflowReference(undefined), [workflowContextKey]);
+  useEffect(() => setWorkflowRunId(undefined), [workflowContextKey]);
+  function openWorkflowRun(runId: string) {
+    setWorkflowReference(undefined);
+    setWorkflowRunId(runId);
+    navigate('Workflows');
+  }
   const [selected, setSelected] = useState<number | null>(null);
   const [newTask, setNewTask] = useState<Status | null>(null);
   const [newTaskDestination, setNewTaskDestination] = useState('');
@@ -566,6 +574,7 @@ function App() {
             select={setChatConversationId}
             create={() => void newChat()}
             openTicket={setSelected}
+            openWorkflowRun={openWorkflowRun}
           />
         )}
         {page === 'Workflows' && (
@@ -574,6 +583,7 @@ function App() {
             view="Workflows"
             projectId={project?.id}
             workflowReference={workflowReference}
+            workflowRunId={workflowRunId}
             onCloseReference={() => setWorkflowReference(undefined)}
           />
         )}
@@ -708,6 +718,7 @@ function App() {
                   ticket={currentTicket}
                   runLabel={runLabel}
                   onRun={() => dispatchTicketNavigation({ type: 'show', view: 'execution' })}
+                  onOpenWorkflowRun={openWorkflowRun}
                   runtimeAvailable={!runtimeError}
                   onSelectTicket={(id) => {
                     setSelected(id);
@@ -729,6 +740,7 @@ function App() {
                     state={liveRuntime}
                     ticket={currentTicket}
                     runtimeAvailable={!runtimeError}
+                    onOpenWorkflowRun={openWorkflowRun}
                     focusRecovery={ticketRecoveryRequested}
                     onOpenTicketMessages={() => {
                       dispatchTicketNavigation({ type: 'show', view: 'details' });

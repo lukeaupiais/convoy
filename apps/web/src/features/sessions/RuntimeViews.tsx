@@ -15,6 +15,7 @@ export function SessionControls({
   runtimeAvailable = true,
   openRecovery = false,
   onOpenTicketMessages,
+  onOpenWorkflowRun,
 }: {
   session: Session;
   state: RuntimeState;
@@ -23,6 +24,7 @@ export function SessionControls({
   runtimeAvailable?: boolean;
   openRecovery?: boolean;
   onOpenTicketMessages?: () => void;
+  onOpenWorkflowRun?: (runId: string) => void;
 }) {
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
@@ -278,6 +280,7 @@ export function SessionControls({
           session={s}
           activityReservation={preparedActivityReservation}
           working={working || !owned || !runtimeAvailable}
+          onOpenWorkflowRun={onOpenWorkflowRun}
           actions={{
             ...workflowHumanTaskActions(s),
             requiresActivityReservation: !!approvalTargetNodeId,

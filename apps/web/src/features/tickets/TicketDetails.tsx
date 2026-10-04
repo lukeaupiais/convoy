@@ -192,6 +192,7 @@ export function TicketDetails({
   onRun,
   runtimeAvailable = true,
   onSelectTicket,
+  onOpenWorkflowRun,
 }: {
   state: RuntimeState;
   ticket: Ticket;
@@ -199,6 +200,7 @@ export function TicketDetails({
   onRun: () => void;
   runtimeAvailable?: boolean;
   onSelectTicket: (id: number) => void;
+  onOpenWorkflowRun?: (runId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -512,6 +514,7 @@ export function TicketDetails({
                   activityReservation={preparedActivityReservation}
                   working={workflowWorking || !runtimeAvailable}
                   onRecovery={onRun}
+                  onOpenWorkflowRun={onOpenWorkflowRun}
                   actions={{
                     ...ticketWorkflowActions(session, (action, input) => void actWorkflow(action, input)),
                     ...workflowHumanTaskActions(session),

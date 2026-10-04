@@ -58,11 +58,24 @@ export type GraphNode = {
   condition?: Condition;
   waitFor?: WorkflowWaitFor;
   workflow?: WorkflowStep['workflow'];
+  workflowDigest?: string;
+  inputSchemaDigest?: string;
+  resultSchemaDigest?: string;
+  compensations?: {
+    id: string;
+    trigger: 'failure' | 'cancelled';
+    workflow: { id: string; version: number };
+    inputBindings: Record<string, WorkflowActivityBinding>;
+  }[];
   inputBindings?: WorkflowStep['inputBindings'];
   outputSchema?: WorkflowStep['outputSchema'];
   outputBindings?: WorkflowStep['outputBindings'];
   join?: WorkflowStep['join'];
-  branches?: WorkflowStep['branches'];
+  branches?: (NonNullable<WorkflowStep['branches']>[number] & {
+    workflowDigest?: string;
+    inputSchemaDigest?: string;
+    resultSchemaDigest?: string;
+  })[];
   maxItems?: WorkflowStep['maxItems'];
   maxConcurrent?: WorkflowStep['maxConcurrent'];
   deadlineMs?: WorkflowStep['deadlineMs'];
@@ -87,6 +100,9 @@ export type GraphWorkflow = {
   runtime?: WorkflowDefinition['runtime'];
   capabilityProfile?: WorkflowDefinition['capabilityProfile'];
   id: string;
+  organizationId?: string;
+  teamId?: string;
+  projectId?: string;
   name: string;
   version?: number;
   schemaVersion?: number;
@@ -306,7 +322,10 @@ function inferConditionValue(raw: unknown): Pick<Condition, 'value' | 'valueType
 function encodeConditionValue(condition: Condition): unknown {
   if (condition.operator === 'exists') return condition.value !== 'false';
   if (condition.valueType === 'null') return null;
-  if (condition.valueType === 'boolean') return condition.value === 'true';
+  if (condition.valueType === 'boolean') {
+    if (!condition.value) return undefined;
+    return condition.value === 'true';
+  }
   if (condition.valueType === 'number') {
     const number = Number(condition.value);
     return Number.isFinite(number) ? number : condition.value;
@@ -552,6 +571,15 @@ export function safeNode(raw: unknown, index: number): GraphNode {
           workflow: value.workflow
             ? structuredClone(value.workflow as WorkflowStep['workflow'])
             : undefined,
+          workflowDigest:
+            typeof value.workflowDigest === 'string' ? value.workflowDigest : undefined,
+          inputSchemaDigest:
+            typeof value.inputSchemaDigest === 'string' ? value.inputSchemaDigest : undefined,
+          resultSchemaDigest:
+            typeof value.resultSchemaDigest === 'string' ? value.resultSchemaDigest : undefined,
+          compensations: Array.isArray(value.compensations)
+            ? structuredClone(value.compensations as GraphNode['compensations'])
+            : undefined,
           inputBindings: value.inputBindings
             ? structuredClone(value.inputBindings as WorkflowStep['inputBindings'])
             : undefined,
@@ -661,6 +689,10 @@ export function backendNode(node: GraphNode): WorkflowStep {
   if (type === 'child' || type === 'parallel' || type === 'map') {
     for (const key of [
       'workflow',
+      'workflowDigest',
+      'inputSchemaDigest',
+      'resultSchemaDigest',
+      'compensations',
       'inputBindings',
       'outputSchema',
       'outputBindings',
@@ -722,6 +754,9 @@ export function toWorkflow(graph: GraphWorkflow): WorkflowDefinition {
   const nodes = graph.nodes.map(backendNode);
   return {
     id: graph.id,
+    ...(graph.organizationId ? { organizationId: graph.organizationId } : {}),
+    ...(graph.teamId ? { teamId: graph.teamId } : {}),
+    ...(graph.projectId ? { projectId: graph.projectId } : {}),
     capabilityProfile: graph.capabilityProfile,
     runtime: graph.runtime,
     name: graph.name,
@@ -786,6 +821,15 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
   );
   if (invalidNumbers.length)
     return invalidNumbers.map((node) => `${node.name}: enter a valid number.`);
+  const invalidBooleans = workflow.nodes.filter(
+    (node) =>
+      node.condition?.operator !== 'exists' &&
+      node.condition?.valueType === 'boolean' &&
+      node.condition.value !== 'true' &&
+      node.condition.value !== 'false',
+  );
+  if (invalidBooleans.length)
+    return invalidBooleans.map((node) => `${node.name}: choose true or false.`);
   const errors: string[] = [];
   const ids = new Set(workflow.nodes.map((node) => node.id));
   if (!workflow.name.trim()) errors.push('Name is required.');

@@ -11,6 +11,7 @@ import type {
 } from '../../shared/api/runtime';
 import { command } from '../../shared/api/runtime';
 import { WorkflowHumanTaskPanel } from './WorkflowHumanTaskPanel';
+import { WorkflowRunComposition, WorkflowRunResultPanel } from './WorkflowRunComposition';
 import { artifactMarkdownBlocks } from './artifact-markdown';
 import {
   workflowActivityHistory,
@@ -41,7 +42,7 @@ export type WorkflowInteractionActions = {
   refreshDiff?: () => void;
   startRun?: () => void;
   rework?: () => void;
-  loadHumanTask?: () => Promise<WorkflowRun | null>;
+  loadWorkflowRun?: (compositionOffset?: number) => Promise<WorkflowRun | null>;
   submitHumanResponse?: (values: Record<string, unknown>) => Promise<WorkflowHumanResponse>;
   captureHumanDocument?: (file: File) => Promise<WorkflowEvidenceRef>;
   prepareHumanReview?: (input: {
@@ -63,7 +64,13 @@ export function workflowHumanTaskActions(session: Session): Partial<WorkflowInte
   const instance = session.flow?.instance;
   if (!workflowRunId || !instance) return {};
   return {
-    loadHumanTask: async () => (await command('getWorkflowRun', { workflowRunId })).result,
+    loadWorkflowRun: async (compositionOffset) =>
+      (
+        await command('getWorkflowRun', {
+          workflowRunId,
+          ...(compositionOffset !== undefined ? { compositionOffset } : {}),
+        })
+      ).result,
     submitHumanResponse: async (values) =>
       (await command('submitWorkflowHumanResponse', { workflowRunId, instance, values })).result,
     captureHumanDocument: async (file) => {
@@ -483,17 +490,19 @@ export function WorkflowRunInteraction({
   actions = {},
   activityReservation,
   onRecovery,
+  onOpenWorkflowRun,
 }: {
   session: Session;
   working?: boolean;
   actions?: WorkflowInteractionActions;
   activityReservation?: WorkflowActivityReservation;
   onRecovery?: () => void;
+  onOpenWorkflowRun?: (runId: string) => void;
 }) {
   const flow = session.flow;
   const nodes = session.workflow?.nodes ?? session.workflow?.steps ?? [];
   const node = flow ? nodes.find((item) => item.id === flow.nodeId) : undefined;
-  const { submission, sourceNodeId, bindings } = workflowRunOutput(session);
+  const { submission, bindings } = workflowRunOutput(session);
   const [feedback, setFeedback] = useState('');
   const [answer, setAnswer] = useState('');
   const [showFeedback, setShowFeedback] = useState(false);
@@ -515,14 +524,28 @@ export function WorkflowRunInteraction({
   const [humanTaskBusy, setHumanTaskBusy] = useState(false);
   const [humanTaskError, setHumanTaskError] = useState('');
   const [humanLeaseClock, setHumanLeaseClock] = useState(Date.now());
+  const [compositionOffset, setCompositionOffset] = useState<number>();
+  const [workflowRunReadError, setWorkflowRunReadError] = useState('');
+  const [workflowResult, setWorkflowResult] = useState<{
+    contextKey: string;
+    result: Record<string, unknown>;
+    resultDigest: string;
+  } | null>(null);
+  const [workflowResultBusy, setWorkflowResultBusy] = useState(false);
+  const [workflowResultError, setWorkflowResultError] = useState('');
   const reservationRequest = useRef(0);
   const humanMaterialGeneration = useRef(0);
+  const workflowRunGeneration = useRef(0);
+  const workflowResultGeneration = useRef(0);
   const humanTaskContext = useRef('');
+  const workflowRunContext = useRef('');
+  const committedWorkflowRunContext = useRef('');
+  const workflowRunRef = useRef<WorkflowRun | null>(null);
   const committedHumanDraftContext = useRef('');
   const humanTaskCanOperateRef = useRef(false);
   const humanTaskWasOperable = useRef(false);
-  const humanLoader = useRef(actions.loadHumanTask);
-  humanLoader.current = actions.loadHumanTask;
+  const workflowRunLoader = useRef(actions.loadWorkflowRun);
+  workflowRunLoader.current = actions.loadWorkflowRun;
   const details = submission?.details ?? {};
   const detailBindings = bindings.filter(
     (binding) =>
@@ -532,32 +555,9 @@ export function WorkflowRunInteraction({
   const outgoingEdges = flow
     ? (session.workflow?.edges ?? []).filter((edge) => edge.from === flow.nodeId)
     : [];
-  const replyEdge =
-    flow?.status === 'waiting_gate'
-      ? (outgoingEdges.find((edge) => edge.outcome === 'approved') ??
-        outgoingEdges.find((edge) => edge.outcome === '*') ??
-        outgoingEdges.find((edge) => edge.outcome === 'default'))
-      : undefined;
-  const replyAction = session.workflow?.nodes.find(
-    (candidate) => candidate.id === replyEdge?.to && candidate.operation === 'send_external_reply',
-  );
-  const replyField =
-    typeof replyAction?.input?.field === 'string' ? replyAction.input.field : undefined;
-  const replyText =
-    flow?.status === 'waiting_gate' &&
-    replyField &&
-    sourceNodeId === replyAction?.input?.sourceNodeId
-      ? submission?.details?.[replyField]
-      : undefined;
-  const visibleDetailBindings = [
-    ...detailBindings,
-    ...(replyField &&
-    typeof details[replyField] === 'string' &&
-    details[replyField].trim() &&
-    !detailBindings.some((binding) => binding.field === replyField)
-      ? [{ source: 'detail' as const, field: replyField }]
-      : []),
-  ];
+  // Presentation is governed by the persisted review material and the gate's
+  // declared presentation bindings. Downstream node operations do not shape it.
+  const visibleDetailBindings = detailBindings;
   const primaryDetail = visibleDetailBindings.find((binding) => binding.primary);
   const decisions = flow
     ? workflowDecisionCapabilities(flow.nodeId ?? '', session.workflow?.edges ?? [], {
@@ -590,14 +590,39 @@ export function WorkflowRunInteraction({
     flow?.status === 'waiting_gate' && node?.kind === 'human' && !node.legacyHumanTask
       ? `${flow.id}:${node.id}:${flow.instance}`
       : '';
-  const humanTaskCanLoad = Boolean(humanTaskKey && actions.loadHumanTask);
+  const workflowRunContextKey = JSON.stringify([
+    session.id,
+    flow?.id,
+    flow?.instance,
+    actions.approvalContextKey,
+    actions.approvalControlKey,
+  ]);
+  workflowRunContext.current = workflowRunContextKey;
+  const humanTaskCanLoad = Boolean(humanTaskKey && actions.loadWorkflowRun);
+  const hasCompositionNodes = nodes.some((item) =>
+    ['child', 'parallel', 'map'].includes(String(item.kind)),
+  );
+  const workflowRunCanLoad = Boolean(
+    flow?.id &&
+    flow?.instance &&
+    actions.loadWorkflowRun &&
+    (humanTaskCanLoad || hasCompositionNodes || flow.status === 'completed'),
+  );
+  const currentHumanRun =
+    humanRun && humanRun.id === flow?.id && humanRun.instance === flow?.instance ? humanRun : null;
+  workflowRunRef.current = currentHumanRun;
+  const canReadWorkflowResult = Boolean(
+    currentHumanRun?.workflowRunResultEligible === true &&
+    actions.approvalControlKey &&
+    (session.lease?.expiresAt ?? 0) > humanLeaseClock,
+  );
   const humanTaskCanOperate = Boolean(
     humanTaskCanLoad &&
     actions.submitHumanResponse &&
     actions.prepareHumanReview &&
     actions.decideHumanOutcome &&
     (actions.canShowPreparedActivityApproval ?? true) &&
-    humanRun?.humanTaskReviewerEligible === true &&
+    currentHumanRun?.humanTaskReviewerEligible === true &&
     (session.lease?.expiresAt ?? 0) > humanLeaseClock,
   );
   humanTaskCanOperateRef.current = humanTaskCanOperate;
@@ -605,20 +630,144 @@ export function WorkflowRunInteraction({
   const humanTaskContextKey = `${humanTaskKey}:${actions.approvalContextKey ?? ''}:${actions.approvalControlKey ?? ''}`;
   humanTaskContext.current = humanTaskContextKey;
   useEffect(() => {
-    if (!humanTaskKey) return;
+    if (!workflowRunCanLoad) return;
     const timer = window.setInterval(() => setHumanLeaseClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [humanTaskKey]);
+  }, [workflowRunCanLoad]);
   useEffect(() => {
     let active = true;
+    let inFlight = false;
+    const generation = ++workflowRunGeneration.current;
+    const contextKey = workflowRunContextKey;
+    if (committedWorkflowRunContext.current !== contextKey) {
+      committedWorkflowRunContext.current = contextKey;
+      setHumanRun(null);
+      setCompositionOffset(undefined);
+      setWorkflowRunReadError('');
+      workflowResultGeneration.current += 1;
+      setWorkflowResult(null);
+      setWorkflowResultError('');
+      if (compositionOffset !== undefined) {
+        return () => {
+          active = false;
+        };
+      }
+    }
+    if (!workflowRunCanLoad || !workflowRunLoader.current || !flow?.id || !flow.instance) {
+      setHumanRun(null);
+      return () => {
+        active = false;
+      };
+    }
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const run = await workflowRunLoader.current?.(compositionOffset);
+        if (
+          active &&
+          generation === workflowRunGeneration.current &&
+          workflowRunContext.current === contextKey &&
+          run?.id === flow.id &&
+          run.instance === flow.instance
+        ) {
+          setHumanRun(run);
+          setWorkflowRunReadError('');
+          if (
+            Number.isInteger(run.compositionAttemptsOffset) &&
+            run.compositionAttemptsOffset !== compositionOffset
+          )
+            setCompositionOffset(run.compositionAttemptsOffset);
+        }
+      } catch (caught) {
+        if (
+          active &&
+          generation === workflowRunGeneration.current &&
+          workflowRunContext.current === contextKey
+        ) {
+          setHumanRun(null);
+          workflowResultGeneration.current += 1;
+          setWorkflowResult(null);
+          setWorkflowResultError('');
+          setWorkflowRunReadError(caught instanceof Error ? caught.message : String(caught));
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 1500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [workflowRunContextKey, workflowRunCanLoad, compositionOffset]);
+  useEffect(() => {
+    if (
+      !currentHumanRun ||
+      currentHumanRun.status !== 'completed' ||
+      !currentHumanRun.resultDigest ||
+      !canReadWorkflowResult
+    ) {
+      workflowResultGeneration.current += 1;
+      setWorkflowResult(null);
+      setWorkflowResultError('');
+      setWorkflowResultBusy(false);
+      return;
+    }
+    if (workflowResult?.contextKey !== workflowRunContextKey) {
+      workflowResultGeneration.current += 1;
+      setWorkflowResult(null);
+    }
+  }, [
+    currentHumanRun?.id,
+    currentHumanRun?.status,
+    currentHumanRun?.resultDigest,
+    canReadWorkflowResult,
+    workflowRunContextKey,
+    workflowResult?.contextKey,
+  ]);
+  async function readWorkflowResult() {
+    if (!currentHumanRun || !canReadWorkflowResult || !currentHumanRun.resultDigest) return;
+    const runId = currentHumanRun.id;
+    const digest = currentHumanRun.resultDigest;
+    const contextKey = workflowRunContextKey;
+    const generation = ++workflowResultGeneration.current;
+    setWorkflowResultBusy(true);
+    setWorkflowResultError('');
+    try {
+      const response = await command('getWorkflowRunResult', { workflowRunId: runId });
+      const latest = workflowRunRef.current;
+      if (
+        generation === workflowResultGeneration.current &&
+        workflowRunContext.current === contextKey &&
+        latest?.id === runId &&
+        latest.status === 'completed' &&
+        latest.resultDigest === digest &&
+        latest.workflowRunResultEligible === true &&
+        (session.lease?.expiresAt ?? 0) > Date.now() &&
+        response.result.resultDigest === digest
+      ) {
+        setWorkflowResult({ contextKey, result: response.result.result, resultDigest: digest });
+      }
+    } catch (caught) {
+      if (
+        generation === workflowResultGeneration.current &&
+        workflowRunContext.current === contextKey &&
+        workflowRunRef.current?.id === runId
+      )
+        setWorkflowResultError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      if (generation === workflowResultGeneration.current) setWorkflowResultBusy(false);
+    }
+  }
+  useEffect(() => {
     humanMaterialGeneration.current += 1;
-    const generation = humanMaterialGeneration.current;
     if (committedHumanDraftContext.current !== humanTaskDraftContextKey) {
       committedHumanDraftContext.current = humanTaskDraftContextKey;
       setHumanValues({});
       setHumanValuesContext(humanTaskDraftContextKey);
     }
-    setHumanRun(null);
     setHumanResponse(undefined);
     setHumanResponseId('');
     setHumanResponseContext('');
@@ -626,26 +775,7 @@ export function WorkflowRunInteraction({
     setHumanReviewContext('');
     setHumanOutcomeId('');
     setHumanOutcomeContext('');
-    if (humanTaskCanLoad && humanLoader.current)
-      void humanLoader
-        .current()
-        .then((run) => {
-          if (
-            !active ||
-            humanMaterialGeneration.current !== generation ||
-            humanTaskContext.current !== humanTaskContextKey ||
-            !run ||
-            run.id !== flow?.id ||
-            run.instance !== flow?.instance
-          )
-            return;
-          setHumanRun(run);
-        })
-        .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, [humanTaskContextKey, humanTaskDraftContextKey, humanTaskCanLoad]);
+  }, [humanTaskContextKey, humanTaskDraftContextKey]);
   useEffect(() => {
     if (humanTaskCanOperate) {
       humanTaskWasOperable.current = true;
@@ -678,13 +808,9 @@ export function WorkflowRunInteraction({
     humanResponseContext === humanTaskContextKey && humanResponseId
       ? humanResponse?.id === humanResponseId
         ? humanResponse
-        : humanRun?.humanResponses?.find((response) => response.id === humanResponseId)
+        : currentHumanRun?.humanResponses?.find((response) => response.id === humanResponseId)
       : undefined;
-  const currentHumanEvidence = (
-    humanRun && flow && humanRun.id === flow.id && humanRun.instance === flow.instance
-      ? (humanRun.evidence ?? [])
-      : []
-  ).filter(
+  const currentHumanEvidence = (currentHumanRun ? (currentHumanRun.evidence ?? []) : []).filter(
     (item) => item.source.nodeId === node?.id && item.source.attemptInstance === flow?.instance,
   );
   async function refreshHumanRun(
@@ -698,7 +824,7 @@ export function WorkflowRunInteraction({
       humanTaskContext.current === contextKey &&
       humanMaterialGeneration.current === generation;
     if (!isCurrentRequest()) return undefined;
-    const run = await humanLoader.current?.();
+    const run = await workflowRunLoader.current?.(compositionOffset);
     if (run && isCurrentRequest() && run.id === workflowRunId && run.instance === instance)
       setHumanRun(run);
     return run;
@@ -936,15 +1062,13 @@ export function WorkflowRunInteraction({
           {summaryLabel && summaryLabel !== 'Summary' && (
             <strong className="workflow-output-label">{summaryLabel}</strong>
           )}
-          {!(replyText?.trim() && submission.summary === replyText) && (
-            <p
-              id={`workflow-submission-summary-${session.id}`}
-              className={`workflow-submission-summary${summaryIsLong && !summaryExpanded ? ' is-collapsed' : ''}`}
-            >
-              {submission.summary}
-            </p>
-          )}
-          {summaryIsLong && !(replyText?.trim() && submission.summary === replyText) && (
+          <p
+            id={`workflow-submission-summary-${session.id}`}
+            className={`workflow-submission-summary${summaryIsLong && !summaryExpanded ? ' is-collapsed' : ''}`}
+          >
+            {submission.summary}
+          </p>
+          {summaryIsLong && (
             <button
               type="button"
               className="workflow-summary-toggle"
@@ -1018,13 +1142,42 @@ export function WorkflowRunInteraction({
           )}
         </p>
       )}
+      {workflowRunReadError && <p role="alert">{workflowRunReadError}</p>}
+      {currentHumanRun && (
+        <>
+          <WorkflowRunComposition
+            run={
+              compositionOffset === undefined ||
+              compositionOffset === currentHumanRun.compositionAttemptsOffset
+                ? currentHumanRun
+                : { ...currentHumanRun, compositions: [] }
+            }
+            selectedRunId={currentHumanRun.id}
+            onOpenRun={onOpenWorkflowRun}
+            onPage={setCompositionOffset}
+            nodeLabel={(nodeId) =>
+              session.workflow?.nodes?.find((item) => item.id === nodeId)?.name ?? nodeId
+            }
+          />
+          <WorkflowRunResultPanel
+            run={currentHumanRun}
+            canRead={canReadWorkflowResult}
+            contextKey={workflowRunContextKey}
+            loaded={workflowResult}
+            busy={workflowResultBusy}
+            error={workflowResultError}
+            onRead={() => void readWorkflowResult()}
+          />
+        </>
+      )}
       {flow.status === 'waiting_gate' && node?.kind === 'human' && !node.legacyHumanTask && (
         <>
-          {humanRun?.humanTaskDueAt && Date.parse(humanRun.humanTaskDueAt) <= Date.now() && (
-            <span role="status">
-              Overdue · {new Date(humanRun.humanTaskDueAt).toLocaleString()}
-            </span>
-          )}
+          {currentHumanRun?.humanTaskDueAt &&
+            Date.parse(currentHumanRun.humanTaskDueAt) <= Date.now() && (
+              <span role="status">
+                Overdue · {new Date(currentHumanRun.humanTaskDueAt).toLocaleString()}
+              </span>
+            )}
           <WorkflowHumanTaskPanel
             node={node}
             values={

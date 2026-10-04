@@ -356,9 +356,7 @@ export function ActiveContext({
             </p>
           )}
           <p>
-            Signed in as <strong>{model.userLabel}</strong>. Organization and team authority are
-            controlled by the deployment; changing this selection resolves a fresh authorized
-            context.
+            Signed in as <strong>{model.userLabel}</strong>.
           </p>
           <form
             className="invitation-form"
