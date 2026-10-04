@@ -35,6 +35,7 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   const [refreshError, setRefreshError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [humanValues, setHumanValues] = useState<Record<string, unknown>>({});
+  const [humanValuesContext, setHumanValuesContext] = useState('');
   const [humanResponseId, setHumanResponseId] = useState('');
   const [humanResponseContext, setHumanResponseContext] = useState('');
   const [humanOutcomeId, setHumanOutcomeId] = useState('');
@@ -42,6 +43,14 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   const [humanReview, setHumanReview] = useState<WorkflowHumanReview | null>(null);
   const [humanReviewContext, setHumanReviewContext] = useState('');
   const detailRef = useRef<WorkflowRun | null>(null);
+  const lastHumanTaskIdentity = useRef<
+    | {
+        runId: string;
+        nodeId?: string;
+        instance?: string;
+      }
+    | undefined
+  >(undefined);
   const humanMaterialGeneration = useRef(0);
   const humanContextRef = useRef('');
   const committedHumanContext = useRef('');
@@ -57,6 +66,7 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     setActionError('');
     setRefreshError('');
     setHumanValues({});
+    setHumanValuesContext('');
     setHumanResponseId('');
     setHumanResponseContext('');
     setHumanOutcomeId('');
@@ -198,6 +208,7 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     setDetail(null);
     setSelectedRunId(runId);
     setHumanValues({});
+    setHumanValuesContext('');
     humanMaterialGeneration.current += 1;
     setHumanResponseId('');
     setHumanResponseContext('');
@@ -243,6 +254,18 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     detail,
     state.projects.map((value) => value.id),
   );
+  if (currentDetail) {
+    lastHumanTaskIdentity.current = {
+      runId: currentDetail.id,
+      nodeId: currentDetail.nodeId ?? undefined,
+      instance: currentDetail.instance ?? undefined,
+    };
+  }
+  const humanTaskIdentity =
+    currentDetail ??
+    (lastHumanTaskIdentity.current?.runId === selectedRunId
+      ? lastHumanTaskIdentity.current
+      : undefined);
   const workflow = currentDetail ? workflowForRun(currentDetail, state.workflows) : undefined;
   const currentNode = workflow?.nodes.find((node) => node.id === currentDetail?.nodeId);
   const control = currentDetail ? runControlEligibility(currentDetail) : null;
@@ -256,6 +279,9 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     !busy,
   );
   const canReviewTask = Boolean(canAct && currentDetail?.humanTaskReviewerEligible === true);
+  const canViewHumanDraft = Boolean(
+    ownsRunControl && currentDetail?.humanTaskReviewerEligible === true,
+  );
   canReviewTaskRef.current = Boolean(
     currentDetail &&
     control?.ownsControl &&
@@ -264,8 +290,8 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   );
   const humanContextKey = JSON.stringify([
     selectedRunId,
-    currentDetail?.nodeId,
-    currentDetail?.instance,
+    humanTaskIdentity?.nodeId,
+    humanTaskIdentity?.instance,
     state.currentUser?.id,
     state.activeContext?.id,
     state.activeContext?.projectId,
@@ -281,16 +307,22 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   useEffect(() => {
     const contextChanged = committedHumanContext.current !== humanContextKey;
     committedHumanContext.current = humanContextKey;
-    if (!contextChanged && ownsRunControl) return;
+    const reviewerCanOperate = Boolean(
+      ownsRunControl && currentDetail?.humanTaskReviewerEligible === true,
+    );
+    if (!contextChanged && reviewerCanOperate) return;
     humanMaterialGeneration.current += 1;
-    if (!ownsRunControl) setHumanValues({});
+    if (contextChanged) {
+      setHumanValues({});
+      setHumanValuesContext(humanContextKey);
+    }
     setHumanResponseId('');
     setHumanResponseContext('');
     setHumanOutcomeId('');
     setHumanOutcomeContext('');
     setHumanReview(null);
     setHumanReviewContext('');
-  }, [humanContextKey, ownsRunControl]);
+  }, [humanContextKey, canViewHumanDraft]);
 
   function invalidateHumanMaterial() {
     humanMaterialGeneration.current += 1;
@@ -728,8 +760,13 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
                 {!currentNode.legacyHumanTask ? (
                   <WorkflowHumanTaskPanel
                     node={currentNode}
-                    values={humanValues}
-                    onValuesChange={setHumanValues}
+                    values={
+                      canViewHumanDraft && humanValuesContext === humanContextKey ? humanValues : {}
+                    }
+                    onValuesChange={(values) => {
+                      setHumanValues(values);
+                      setHumanValuesContext(humanContextKey);
+                    }}
                     onMaterialChange={invalidateHumanMaterial}
                     response={
                       canReviewTask &&
@@ -747,7 +784,7 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
                         : undefined
                     }
                     selectedOutcomeId={
-                      humanOutcomeContext === humanContextKey ? humanOutcomeId : ''
+                      canReviewTask && humanOutcomeContext === humanContextKey ? humanOutcomeId : ''
                     }
                     disabled={!canReviewTask || busy}
                     onOutcomeChange={(id) => {

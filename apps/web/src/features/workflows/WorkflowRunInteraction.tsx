@@ -503,6 +503,7 @@ export function WorkflowRunInteraction({
   const [preparedReservationContext, setPreparedReservationContext] = useState('');
   const [reservationError, setReservationError] = useState('');
   const [humanValues, setHumanValues] = useState<Record<string, unknown>>({});
+  const [humanValuesContext, setHumanValuesContext] = useState('');
   const [humanRun, setHumanRun] = useState<WorkflowRun | null>(null);
   const [humanResponse, setHumanResponse] = useState<WorkflowHumanResponse>();
   const [humanResponseId, setHumanResponseId] = useState('');
@@ -517,6 +518,7 @@ export function WorkflowRunInteraction({
   const reservationRequest = useRef(0);
   const humanMaterialGeneration = useRef(0);
   const humanTaskContext = useRef('');
+  const committedHumanDraftContext = useRef('');
   const humanTaskCanOperateRef = useRef(false);
   const humanTaskWasOperable = useRef(false);
   const humanLoader = useRef(actions.loadHumanTask);
@@ -599,6 +601,7 @@ export function WorkflowRunInteraction({
     (session.lease?.expiresAt ?? 0) > humanLeaseClock,
   );
   humanTaskCanOperateRef.current = humanTaskCanOperate;
+  const humanTaskDraftContextKey = `${humanTaskKey}:${actions.approvalContextKey ?? ''}`;
   const humanTaskContextKey = `${humanTaskKey}:${actions.approvalContextKey ?? ''}:${actions.approvalControlKey ?? ''}`;
   humanTaskContext.current = humanTaskContextKey;
   useEffect(() => {
@@ -610,7 +613,11 @@ export function WorkflowRunInteraction({
     let active = true;
     humanMaterialGeneration.current += 1;
     const generation = humanMaterialGeneration.current;
-    setHumanValues({});
+    if (committedHumanDraftContext.current !== humanTaskDraftContextKey) {
+      committedHumanDraftContext.current = humanTaskDraftContextKey;
+      setHumanValues({});
+      setHumanValuesContext(humanTaskDraftContextKey);
+    }
     setHumanRun(null);
     setHumanResponse(undefined);
     setHumanResponseId('');
@@ -633,20 +640,12 @@ export function WorkflowRunInteraction({
           )
             return;
           setHumanRun(run);
-          const latest = run.humanResponses
-            ?.filter(
-              (response) => response.nodeId === node?.id && response.instance === flow?.instance,
-            )
-            .at(-1);
-          setHumanResponse(latest);
-          setHumanResponseId(latest?.id ?? '');
-          setHumanResponseContext(latest ? humanTaskContextKey : '');
         })
         .catch(() => {});
     return () => {
       active = false;
     };
-  }, [humanTaskContextKey, humanTaskCanLoad]);
+  }, [humanTaskContextKey, humanTaskDraftContextKey, humanTaskCanLoad]);
   useEffect(() => {
     if (humanTaskCanOperate) {
       humanTaskWasOperable.current = true;
@@ -663,7 +662,6 @@ export function WorkflowRunInteraction({
     setHumanResponseContext('');
     setHumanOutcomeId('');
     setHumanOutcomeContext('');
-    setHumanValues({});
   }, [humanTaskCanOperate]);
   function invalidateHumanMaterial() {
     humanMaterialGeneration.current += 1;
@@ -1029,8 +1027,15 @@ export function WorkflowRunInteraction({
           )}
           <WorkflowHumanTaskPanel
             node={node}
-            values={humanValues}
-            onValuesChange={setHumanValues}
+            values={
+              humanTaskCanOperate && humanValuesContext === humanTaskDraftContextKey
+                ? humanValues
+                : {}
+            }
+            onValuesChange={(values) => {
+              setHumanValues(values);
+              setHumanValuesContext(humanTaskDraftContextKey);
+            }}
             onMaterialChange={invalidateHumanMaterial}
             response={humanTaskCanOperate ? currentHumanResponse : undefined}
             evidence={currentHumanEvidence}
