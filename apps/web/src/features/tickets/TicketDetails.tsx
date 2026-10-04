@@ -12,7 +12,7 @@ import {
 import { Select } from '../../shared/ui/Select';
 import { ExecutionProfileEditor, PlacementEditor } from '../projects';
 import { WorkflowArtifactContent as MarkdownDocument } from '../workflows';
-import { WorkflowActivityHistory, WorkflowRunInteraction } from '../workflows';
+import { WorkflowActivityHistory, WorkflowRunInteraction, requiredGateActivityTarget } from '../workflows';
 import { ticketWorkflowActions } from './workflow-actions';
 import {
   clearSubmittedTicketReplyDraft,
@@ -361,6 +361,9 @@ export function TicketDetails({
   const session = state.sessions.find(
     (value) => value.id === ticket.executionSessionId && value.activeTicketId === ticket.id,
   );
+  const approvalTargetNodeId = session ? requiredGateActivityTarget(session, state.workflowActivities) : undefined;
+  const preparedActivityReservation = session?.flow && state.workflowRuns?.find(run => run.id === session.flow?.id)?.activityReservations?.find(value =>
+    value.gateNodeId === session.flow?.nodeId && value.gateInstance === session.flow?.instance && value.targetNodeId === approvalTargetNodeId && !value.consumedAt);
   const project = state.projects.find((value) => value.id === ticket.projectId);
   const syncNeedsReview = Boolean(
     ticket.externalPublish || ticket.externalLinks?.some((link) => link.syncState === 'error'),
@@ -506,12 +509,25 @@ export function TicketDetails({
                 <WorkflowRunInteraction
                   key={session.id}
                   session={session}
+                  activityReservation={preparedActivityReservation}
                   working={workflowWorking || !runtimeAvailable}
                   onRecovery={onRun}
-                  actions={ticketWorkflowActions(
-                    session,
-                    (action, input) => void actWorkflow(action, input),
-                  )}
+                  actions={{
+                    ...ticketWorkflowActions(session, (action, input) => void actWorkflow(action, input)),
+                    requiresActivityReservation: !!approvalTargetNodeId,
+                    canPrepareActivityApproval: !!session && runtimeAvailable,
+                    canShowPreparedActivityApproval: !!session && owns(session) && runtimeAvailable,
+                    approvalControlKey: session && owns(session) ? session.lease?.id : undefined,
+                    approvalContextKey: JSON.stringify([state.currentUser?.id, state.activeContext?.id, state.activeContext?.projectId, state.activeContext?.principal]),
+                    prepareActivityApproval: approvalTargetNodeId ? async () => {
+                      if (!session) throw new Error('Workflow session is unavailable.');
+                      if (!owns(session)) await command('claim', { sessionId: session.id, label: 'Ticket workflow' });
+                      return (await command('prepareWorkflowActivity', { workflowRunId: session.flow!.id,
+                        gateInstance: session.flow!.instance, targetNodeId: approvalTargetNodeId })).result;
+                    } : undefined,
+                    approveGate: (reservation) => void actWorkflow('approveGate', { instance: session.flow!.instance,
+                      ...(reservation ? { activityReservationId: reservation.id, activityReservationDigest: reservation.digest } : {}) }),
+                  }}
                 />
               </section>
             )}

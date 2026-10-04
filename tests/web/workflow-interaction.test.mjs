@@ -15,12 +15,23 @@ const js = ts.transpileModule(
 ).outputText;
 const {
   workflowActivityHistory,
+  approvalControlInvalidated,
   workflowDecisionCapabilities,
   workflowDecisionLabel,
   workflowNeedsRecovery,
   workflowRunOutput,
   workflowStatusLabel,
 } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
+
+test('approval preparation survives its first explicit claim but invalidates on loss, gate change, or lease replacement', () => {
+  const unowned = { gateKey: 'run:gate:1', canPrepare: true, canShow: false };
+  const claimed = { ...unowned, canShow: true, controlKey: 'lease-a' };
+  assert.equal(approvalControlInvalidated(unowned, claimed), false);
+  assert.equal(approvalControlInvalidated(unowned, { ...unowned, contextKey: 'another-principal-context' }), true);
+  assert.equal(approvalControlInvalidated(claimed, { ...claimed, canShow: false }), true);
+  assert.equal(approvalControlInvalidated(claimed, { ...claimed, controlKey: 'lease-b' }), true);
+  assert.equal(approvalControlInvalidated(claimed, { ...claimed, gateKey: 'run:gate:2' }), true);
+});
 
 test('two unrelated workflow configurations render their own decision labels with generic defaults', () => {
   const inventory = {

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Session,
+  WorkflowActivityReservation,
   WorkflowSubmission,
   WorkflowSubmissionArtifact,
 } from '../../shared/api/runtime';
 import { artifactMarkdownBlocks } from './artifact-markdown';
 import {
   workflowActivityHistory,
+  approvalControlInvalidated,
   workflowDecisionLabel,
   workflowDecisionCapabilities,
   workflowNeedsRecovery,
@@ -16,7 +18,13 @@ import {
 import './workflow-run-interaction.css';
 
 export type WorkflowInteractionActions = {
-  approveGate?: () => void;
+  approveGate?: (reservation?: WorkflowActivityReservation) => void;
+  prepareActivityApproval?: () => Promise<WorkflowActivityReservation>;
+  requiresActivityReservation?: boolean;
+  canPrepareActivityApproval?: boolean;
+  canShowPreparedActivityApproval?: boolean;
+  approvalControlKey?: string;
+  approvalContextKey?: string;
   requestChanges?: (feedback: string) => void;
   continueRun?: () => void;
   pause?: () => void | Promise<void>;
@@ -386,11 +394,13 @@ export function WorkflowRunInteraction({
   session,
   working = false,
   actions = {},
+  activityReservation,
   onRecovery,
 }: {
   session: Session;
   working?: boolean;
   actions?: WorkflowInteractionActions;
+  activityReservation?: WorkflowActivityReservation;
   onRecovery?: () => void;
 }) {
   const flow = session.flow;
@@ -401,6 +411,11 @@ export function WorkflowRunInteraction({
   const [answer, setAnswer] = useState('');
   const [showFeedback, setShowFeedback] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [preparedReservation, setPreparedReservation] = useState<WorkflowActivityReservation>();
+  const [preparedReservationGate, setPreparedReservationGate] = useState('');
+  const [preparedReservationContext, setPreparedReservationContext] = useState('');
+  const [reservationError, setReservationError] = useState('');
+  const reservationRequest = useRef(0);
   const details = submission?.details ?? {};
   const detailBindings = bindings.filter(
     (binding) =>
@@ -465,6 +480,66 @@ export function WorkflowRunInteraction({
     .filter((event) => /failed|rejected|interrupted/.test(event.type))
     .slice(-1)[0];
   useEffect(() => setSummaryExpanded(false), [submission && submissionIdentity(submission)]);
+  const approvalGateKey = `${session.id}:${flow?.id ?? ''}:${flow?.nodeId ?? ''}:${flow?.instance ?? ''}`;
+  const canPrepareApproval = Boolean(actions.requiresActivityReservation && actions.prepareActivityApproval && actions.approveGate &&
+    (actions.canPrepareActivityApproval ?? true));
+  const canShowPreparedApproval = actions.canShowPreparedActivityApproval ?? canPrepareApproval;
+  const currentApprovalGate = useRef(approvalGateKey);
+  const currentCanPrepareApproval = useRef(canPrepareApproval);
+  const currentApprovalContext = useRef(actions.approvalContextKey ?? '');
+  const approvalControlState = useRef({
+    gateKey: approvalGateKey,
+    canPrepare: canPrepareApproval,
+    canShow: canShowPreparedApproval,
+    controlKey: actions.approvalControlKey,
+    contextKey: actions.approvalContextKey,
+  });
+  const nextApprovalControlState = {
+    gateKey: approvalGateKey,
+    canPrepare: canPrepareApproval,
+    canShow: canShowPreparedApproval,
+    controlKey: actions.approvalControlKey,
+    contextKey: actions.approvalContextKey,
+  };
+  const approvalControlWasInvalidated = approvalControlInvalidated(
+    approvalControlState.current,
+    nextApprovalControlState,
+  );
+  if (approvalControlWasInvalidated) reservationRequest.current += 1;
+  currentApprovalGate.current = approvalGateKey;
+  currentCanPrepareApproval.current = canPrepareApproval;
+  currentApprovalContext.current = actions.approvalContextKey ?? '';
+  useEffect(() => {
+    if (approvalControlWasInvalidated) {
+      setPreparedReservation(undefined);
+      setPreparedReservationGate('');
+      setPreparedReservationContext('');
+      setReservationError('');
+    }
+    approvalControlState.current = nextApprovalControlState;
+  }, [approvalGateKey, canPrepareApproval, canShowPreparedApproval, actions.approvalControlKey, actions.approvalContextKey]);
+  const activeReservation = canShowPreparedApproval && !approvalControlWasInvalidated
+    ? (preparedReservationGate === approvalGateKey && preparedReservationContext === (actions.approvalContextKey ?? '') ? preparedReservation : undefined) ??
+      (canShowPreparedApproval && activityReservation?.preview ? activityReservation : undefined)
+    : undefined;
+  async function prepareActivityApproval() {
+    if (!actions.prepareActivityApproval) return;
+    const request = ++reservationRequest.current;
+    const gateKey = approvalGateKey;
+    const contextKey = actions.approvalContextKey ?? '';
+    setReservationError('');
+    try {
+      const reservation = await actions.prepareActivityApproval();
+      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && contextKey === currentApprovalContext.current && currentCanPrepareApproval.current) {
+        setPreparedReservationGate(gateKey);
+        setPreparedReservationContext(contextKey);
+        setPreparedReservation(reservation);
+      }
+    } catch (error) {
+      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && contextKey === currentApprovalContext.current && currentCanPrepareApproval.current)
+        setReservationError((error as Error).message);
+    }
+  }
   if (!flow)
     return null;
   return (
@@ -639,10 +714,32 @@ export function WorkflowRunInteraction({
         <footer className="workflow-interaction-footer">
           {flow.status === 'waiting_gate' && (
             <>
-              {approvalReady && actions.approveGate ? (
-                <button className="primary" disabled={working} onClick={actions.approveGate}>
+              {actions.requiresActivityReservation && !activeReservation && canPrepareApproval && (
+                <button className="secondary" disabled={working} onClick={() => void prepareActivityApproval()}>
+                  Prepare approval
+                </button>
+              )}
+              {activeReservation?.preview && (
+                <div className="workflow-approval-preview" aria-label="Prepared activity approval">
+                  <strong>{activeReservation.preview.activity}</strong>
+                  {activeReservation.preview.resources?.model && <small>Model: {activeReservation.preview.resources.model}</small>}
+                  {activeReservation.preview.action && <small>{activeReservation.preview.action}</small>}
+                  {activeReservation.preview.summary && <p>{activeReservation.preview.summary}</p>}
+                  {activeReservation.preview.body && <blockquote>{activeReservation.preview.body}</blockquote>}
+                  <details>
+                    <summary>Prepared values</summary>
+                    <pre>{JSON.stringify({ input: activeReservation.preview.input, intent: activeReservation.preview.intent,
+                      ...(activeReservation.preview.resources ? { resources: activeReservation.preview.resources } : {}) }, null, 2)}</pre>
+                  </details>
+                </div>
+              )}
+              {reservationError && <p role="alert">{reservationError}</p>}
+              {approvalReady && actions.approveGate && (!actions.requiresActivityReservation || !!activeReservation) ? (
+                <button className="primary" disabled={working} onClick={() => actions.approveGate?.(activeReservation)}>
                   {workflowDecisionLabel(node, 'approved')}
                 </button>
+              ) : actions.requiresActivityReservation && !activeReservation ? (
+                null
               ) : approvalMaterialRequired && !submission ? (
                 <p role="alert">Reviewed material is unavailable. Refresh before deciding.</p>
               ) : (

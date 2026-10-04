@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.mjs';
@@ -22,7 +22,7 @@ async function until(check) {
   throw new Error('Timed out');
 }
 
-test('static capacity exhaustion records demand and never provisions a runner', async () => {
+test('static capacity exhaustion records demand and never provisions a runner', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'convoy-capacity-'));
   const runnerCalls = [];
   const releases = [];
@@ -59,6 +59,11 @@ test('static capacity exhaustion records demand and never provisions a runner', 
         return { text: '', code: 0 };
       },
     },
+  });
+  t.after(async () => {
+    for (const release of releases) release();
+    await runtime.close();
+    await rm(directory, { recursive: true, force: true });
   });
   const act = (action, extra = {}) =>
     runtime.command({ action, client: 'capacity-acceptance', ...extra });
@@ -108,11 +113,26 @@ test('static capacity exhaustion records demand and never provisions a runner', 
   await start('occupy-static-runner');
   await until(() => releases.length === 1);
   const waiting = await start('wait-for-static-runner');
-  await until(
-    async () =>
-      (await runtime.snapshot()).sessions.find((session) => session.id === String(waiting.id))
-        ?.status === 'queued',
-  );
+  try {
+    await until(
+      async () =>
+        (await runtime.snapshot()).sessions.find((session) => session.id === String(waiting.id))
+          ?.status === 'queued',
+    );
+  } catch (error) {
+    const current = await runtime.snapshot();
+    const sessions = current.sessions.map((session) => ({
+      id: session.id,
+      status: session.status,
+      flowStatus: session.flow?.status,
+      nodeId: session.flow?.nodeId,
+      error: session.error,
+      lastEvents: session.events?.slice(-5),
+    }));
+    error.message += `; runnerCalls=${JSON.stringify(runnerCalls.map((call) => call.action))}` +
+      `; sessions=${JSON.stringify(sessions)}; requests=${JSON.stringify(current.capacityRequests)}`;
+    throw error;
+  }
   snapshot = await runtime.snapshot();
 
   assert.equal(runnerCalls.filter((call) => call.action === 'provision').length, 1);
@@ -124,6 +144,4 @@ test('static capacity exhaustion records demand and never provisions a runner', 
   assert.equal(snapshot.capacityRequests[0].organizationId, 'personal');
   assert.equal(snapshot.capacityRequests[0].poolId, pool.id);
   assert.equal(snapshot.capacityStatuses[0].openRequests, 1);
-
-  await runtime.close();
 });

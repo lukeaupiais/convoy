@@ -126,7 +126,7 @@ export type RuntimeCommandInputMap = {
   advance: SessionTarget;
   refreshWorkspaceGuidance: SessionTarget & { captureId: string | null };
   answerQuestion: SessionTarget & { questionId: string; answer: string };
-  approveGate: SessionTarget & { instance: string };
+  approveGate: SessionTarget & { instance: string; activityReservationId?: string; activityReservationDigest?: string };
   attachContext: SessionTarget & ({ path: string } | { name: string; mime: string; data: string });
   attachTicketFile: {
     taskId: number;
@@ -569,12 +569,13 @@ export type RuntimeCommandInputMap = {
   };
   start: SessionTarget & RequestIdentity & { text: string; model: string };
   startWorkflow: SessionTarget;
-  startWorkflowRun: { projectId: string; workflowId: string; workflowVersion: number; activeTicketId?: number };
+  startWorkflowRun: { projectId: string; workflowId: string; workflowVersion: number; activeTicketId?: number; runInput?: Record<string, unknown> };
+  prepareWorkflowActivity: { workflowRunId: string; gateInstance: string; targetNodeId: string };
   getWorkflowRun: { workflowRunId: string };
   reconcileWorkflowRun: { workflowRunId: string; instance: string; effectKey: string; resolution: 'applied' | 'not_applied'; result?: Record<string, unknown> };
   claimWorkflowRun: { workflowRunId: string; label?: string };
   releaseWorkflowRun: { workflowRunId: string };
-  decideWorkflowRun: { workflowRunId: string; instance: string; decision: 'approve' | 'requestChanges'; feedback?: string };
+  decideWorkflowRun: { workflowRunId: string; instance: string; decision: 'approve' | 'requestChanges'; feedback?: string; activityReservationId?: string; activityReservationDigest?: string };
   continueWorkflowRun: { workflowRunId: string; instance: string };
   cancelWorkflowRun: { workflowRunId: string };
   stop: SessionTarget;
@@ -610,6 +611,7 @@ export type RuntimeCommand<Action extends RuntimeAction = RuntimeAction> =
     : never;
 
 type RuntimeCommandKnownResults = {
+  prepareWorkflowActivity: import('./model/workflows').WorkflowActivityReservation;
   updateKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   createKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   setKnowledgeCollectionState: import('./model/knowledge').KnowledgeCollection;

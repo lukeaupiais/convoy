@@ -10,12 +10,13 @@ export function createWorkflowRegistry({ state, save, normalize, validateBinding
       };
       validateBindings(value);
       const previous = state.workflows.filter((workflow) => workflow.id === value.id).at(-1);
-      if (previous && previous.organizationId !== value.organizationId) {
+      if (previous && (previous.organizationId ?? 'personal') !== value.organizationId) {
         throw new Error('Workflow is not available.');
       }
-      if (command.baseVersion !== undefined && command.baseVersion !== (previous?.version ?? 0))
+      const previousVersion = previous ? previous.version ?? 1 : 0;
+      if (command.baseVersion !== undefined && command.baseVersion !== previousVersion)
         throw new Error('Workflow changed in another client. Reload before publishing.');
-      value.version = (previous?.version ?? 0) + 1;
+      value.version = previousVersion + 1;
       state.workflows.push(value);
       delete state.workflowDrafts[value.id];
       if (command.makeDefault) {

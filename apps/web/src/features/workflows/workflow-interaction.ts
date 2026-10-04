@@ -1,4 +1,37 @@
-import type { Session, WorkflowEdge, WorkflowStep } from '../../shared/api/runtime';
+import type { Session, WorkflowActivityDescriptor, WorkflowEdge, WorkflowStep } from '../../shared/api/runtime';
+
+export type WorkflowApprovalControlState = {
+  gateKey: string;
+  canPrepare: boolean;
+  canShow: boolean;
+  controlKey?: string;
+  contextKey?: string;
+};
+
+/** A first explicit claim may make control visible while preparation is in flight. */
+export function approvalControlInvalidated(
+  previous: WorkflowApprovalControlState,
+  current: WorkflowApprovalControlState,
+) {
+  return (
+    previous.gateKey !== current.gateKey ||
+    previous.contextKey !== current.contextKey ||
+    (previous.canPrepare && !current.canPrepare) ||
+    (previous.canShow && !current.canShow) ||
+    (previous.canShow && current.canShow && previous.controlKey !== current.controlKey)
+  );
+}
+
+export function requiredGateActivityTarget(session: Session, activities: WorkflowActivityDescriptor[] = []) {
+  const flow = session.flow;
+  if (!flow || flow.status !== 'waiting_gate') return undefined;
+  const edges = session.workflow?.edges ?? [];
+  const edge = edges.find(value => value.from === flow.nodeId && value.outcome === 'approved');
+  const node = edge && (session.workflow?.nodes ?? session.workflow?.steps ?? []).find(value => value.id === edge.to);
+  if (!node?.activity) return undefined;
+  const descriptor = activities.find(value => value.ref.id === node.activity?.id && value.ref.revision === node.activity?.revision);
+  return descriptor?.approval.required && descriptor.approval.policy === 'workflow-gate' ? node.id : undefined;
+}
 
 export function workflowDecisionLabel(
   node: Pick<WorkflowStep, 'decisionLabels'> | undefined,

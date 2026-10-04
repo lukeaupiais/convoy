@@ -47,6 +47,7 @@ export function createSnapshotQuery({
   provider,
   accessScope = async () => undefined,
   allowLegacyProvider = () => true,
+  workflowEffectSummaries = () => [],
 }) {
   return async function snapshot(id, client, principal) {
     const scope = await accessScope({ id, client, principal });
@@ -62,7 +63,16 @@ export function createSnapshotQuery({
     );
     const publicSessions = sessions.map(
       ({ messages, requests, steeringRequests, agentSessions, executionPrincipal, flow, workflowRunId, pastRuns, ...session }) => {
-        if (flow) session.flow = flow;
+        const publicFlow = flow ? structuredClone(flow) : null;
+        // Exact approval input/effect material is returned only by the
+        // execute-authorized, leased prepare command, never by project reads.
+        for (const history of publicFlow?.history ?? []) delete history.activityReservation;
+        if (publicFlow) session.flow = publicFlow;
+        const publicPastRuns = (pastRuns ?? []).slice(-50).map(run => {
+          const value = structuredClone(run);
+          for (const history of value.history ?? []) delete history.activityReservation;
+          return value;
+        });
         if (workflowRunId) session.workflowRunId = workflowRunId;
         const runHistory = pastRuns ?? [];
         const activeAgentStep =
@@ -74,10 +84,10 @@ export function createSnapshotQuery({
         return {
           ...session,
           workflowRunId: workflowRunId ?? flow?.id,
-          pastRuns: runHistory.slice(-50),
+          pastRuns: publicPastRuns,
           pastRunsTotal: runHistory.length,
           pastRunsTruncated: runHistory.length > 50,
-          flow,
+          flow: publicFlow,
           workspaceGuidance: guidanceView(session),
           ...(jobs.has(session.id) && session.status === 'awaiting_review'
             ? { status: 'running' }
@@ -127,17 +137,7 @@ export function createSnapshotQuery({
       approvalRules: state.approvalRules.filter(
         (rule) => !scope || scope.projectIds.includes(rule.projectId),
       ),
-      workflowEffects: Object.entries(state.workflowEffectLedger)
-        .filter(([, effect]) => !scope || scope.projectIds.includes(effect.projectId))
-        .map(([effectKey, effect]) => ({
-          effectKey,
-          status: effect.status,
-          operation: effect.operation,
-          at: effect.at,
-          reconciledAt: effect.reconciledAt,
-          message: effect.message,
-          ...(effect.blockingReplyRequestId ? { blockingReplyRequestId: effect.blockingReplyRequestId } : {}),
-        })),
+      workflowEffects: workflowEffectSummaries(scope?.projectIds),
       automationFailures: state.automationFailures
         .filter((failure) => {
           const ticket = state.tickets.find((candidate) => candidate.id === failure.ticketId);

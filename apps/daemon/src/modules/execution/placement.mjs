@@ -31,6 +31,7 @@ export function createPlacement({
   capacity,
   audit = async () => {},
   authorizeFullSystem = async () => ({ effect: 'allow' }),
+  workflowRunAssignments = () => [],
 }) {
   state.environments ??= [];
   state.runnerPools ??= [];
@@ -194,12 +195,15 @@ export function createPlacement({
     if (!p) throw new Error('Runner pool not found.');
     return p;
   };
-  const load = (id, environment = false) =>
-    Object.values(state.sessions).filter(
-      (s) =>
-        ['reserved', 'running', 'uncertain'].includes(s.assignment?.state) &&
-        s.assignment[environment ? 'environmentId' : 'runnerId'] === id,
-    ).length;
+  const load = (id, environment = false) => {
+    const sessions = Object.values(state.sessions).filter(s =>
+      ['reserved', 'running', 'uncertain'].includes(s.assignment?.state) &&
+      s.assignment[environment ? 'environmentId' : 'runnerId'] === id);
+    const runs = workflowRunAssignments().filter(run =>
+      ['reserved', 'running', 'uncertain'].includes(run.assignment?.state) &&
+      run.assignment[environment ? 'environmentId' : 'runnerId'] === id);
+    return sessions.length + runs.length;
+  };
   const backgroundLoad = (id, environment = false) =>
     Object.values(state.sessions).reduce(
       (count, s) =>
@@ -251,7 +255,7 @@ export function createPlacement({
   }
   function effective(s) {
     const t = catalog.ticket(s.activeTicketId === undefined ? s.id : s.activeTicketId);
-    const value = s.placement ?? t?.placement ?? { mode: 'none' };
+    const value = s.placement ?? t?.placement ?? (s.independentRun ? catalog.project(s.projectId).placement : null) ?? { mode: 'none' };
     return value.mode === 'inherit'
       ? catalog.project(t?.projectId ?? s.projectId ?? state.projects[0].id).placement
       : value;

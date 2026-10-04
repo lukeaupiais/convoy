@@ -12,11 +12,13 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { command, type RuntimeState } from '../../shared/api/runtime';
+import { command, type RuntimeState, type WorkflowActivityBinding, type WorkflowActivityDescriptor, type WorkflowJsonSchema } from '../../shared/api/runtime';
+import { activityBindingSelectionValue, activityBindingSourceIsAvailable, activityBindingSourceKey, activityEnumOptionIndex, activityEnumValueAt, activityJsonEditKey, activityPermissionEditor, activityPinIsStale, activitySchemaPathLabel, activitySourceOptionKey, changedActivityPin, declaredObjectPaths, parseActivityJsonEdit, parseRunInputSchemaEdit } from './workflow-authoring';
 import { ProfilePicker, profileRef } from '../library';
 import { newId } from '../../shared/lib/browser';
 import {
   actionInputDefaults,
+  blankWorkflow,
   canAddPresentationBinding,
   displayValue,
   fresh,
@@ -26,7 +28,6 @@ import {
   insertWorkflowStage,
   outcomesFor,
   reorderWorkflowStages,
-  starter,
   toWorkflow,
   validateWorkflow,
   type ActionOperation,
@@ -60,19 +61,7 @@ const kindIcon: Record<NodeKind, typeof Zap> = {
 type WorkflowTemplate = 'team-delivery' | 'small-change' | 'bug-fix' | 'blank';
 
 function templateWorkflow(template: WorkflowTemplate): GraphWorkflow {
-  if (template === 'blank') {
-    const first = fresh('agent', 0);
-    first.name = 'First stage';
-    return fromWorkflow({
-      id: newId(),
-      name: 'Untitled workflow',
-      version: 0,
-      nodes: [first],
-      edges: [],
-      entryNode: first.id,
-      maxRevisions: 3,
-    });
-  }
+  if (template === 'blank') return blankWorkflow();
   const types: NodeKind[] =
     template === 'team-delivery'
       ? ['agent', 'approval', 'agent', 'check', 'approval']
@@ -131,22 +120,38 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
     (d) => d.projectId === state.activeContext?.projectId,
   );
   const draftRecords = state.workflowDrafts ?? {};
-  const initialPublished = published.at(-1) as GraphWorkflow | undefined;
-  const initialRecord = initialPublished ? draftRecords[initialPublished.id] : undefined;
+  const configuredPublished = published.find((workflow) => workflow.id === state.defaultWorkflowId) as GraphWorkflow | undefined;
+  const initialSource = configuredPublished ?? undefined;
+  const initialRecord = initialSource ? draftRecords[initialSource.id] : undefined;
   const [draft, setDraft] = useState<GraphWorkflow>(() =>
     fromWorkflow(
       (initialRecord?.workflow as unknown as GraphWorkflow | undefined) ??
-        initialPublished ??
-        starter(),
+        initialSource ??
+        templateWorkflow('blank'),
     ),
   );
+  const [runInputSchemaText, setRunInputSchemaText] = useState(() => JSON.stringify(draft.runInputSchema ?? { type: 'object', properties: {}, required: [], additionalProperties: false }, null, 2));
+  const [runInputSchemaError, setRunInputSchemaError] = useState<string | null>(null);
+  const [activityJsonDrafts, setActivityJsonDrafts] = useState<Record<string, string>>({});
+  const [activityJsonErrors, setActivityJsonErrors] = useState<Record<string, string>>({});
+  const activeActivityJsonErrors = Object.entries(activityJsonErrors).filter(([key]) => {
+    try {
+      const [nodeId, activityId, revision] = JSON.parse(key) as [string, string, number, string];
+      return draft.nodes.some(node => node.id === nodeId && node.activity?.id === activityId && node.activity.revision === revision);
+    } catch { return false; }
+  });
+  const invalidAuthoring = Boolean(runInputSchemaError || activeActivityJsonErrors.length);
+  useEffect(() => {
+    setRunInputSchemaText(JSON.stringify(draft.runInputSchema ?? { type: 'object', properties: {}, required: [], additionalProperties: false }, null, 2));
+    setRunInputSchemaError(null);
+  }, [draft.id]);
   const [revision, setRevision] = useState(initialRecord?.revision ?? 0);
   const [message, setMessage] = useState('');
   const [working, setWorking] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<{ from: string; outcome: string } | null>(null);
-  const [view, setView] = useState<'stages' | 'graph'>('stages');
+  const [view, setView] = useState<'stages' | 'graph'>(() => draft.nodes.length ? 'stages' : 'graph');
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [reordering, setReordering] = useState(false);
@@ -158,7 +163,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
   const [autoSaving, setAutoSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'pending' | 'error'>('saved');
   const [publishPending, setPublishPending] = useState(
-    () => Boolean(initialRecord) || !initialPublished,
+    () => Boolean(initialRecord) || !initialSource,
   );
   const selected = draft.nodes.find((node) => node.id === selectedId) ?? null;
   const selectedEdge = draft.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
@@ -177,6 +182,14 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
     })),
   ];
   function patchNode(id: string, patch: Partial<GraphNode>) {
+    const currentNode = draft.nodes.find(node => node.id === id);
+    if (Object.hasOwn(patch, 'activity') && (currentNode?.activity?.id !== patch.activity?.id || currentNode?.activity?.revision !== patch.activity?.revision)) {
+      const belongsToNode = (key: string) => {
+        try { return (JSON.parse(key) as unknown[])[0] === id; } catch { return false; }
+      };
+      setActivityJsonDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => !belongsToNode(key))));
+      setActivityJsonErrors(current => Object.fromEntries(Object.entries(current).filter(([key]) => !belongsToNode(key))));
+    }
     setDraft((current) => ({
       ...current,
       nodes: current.nodes.map((node) => (node.id === id ? { ...node, ...patch } : node)),
@@ -185,6 +198,18 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
   function patchInput(id: string, key: string, value: string) {
     const node = draft.nodes.find((item) => item.id === id);
     if (node) patchNode(id, { input: { ...(node.input ?? {}), [key]: value } });
+  }
+  function recordActivityJsonEdit(key: string, text: string, error?: string) {
+    setActivityJsonDrafts(current => ({ ...current, [key]: text }));
+    setActivityJsonErrors(current => {
+      const next = { ...current };
+      if (error) next[key] = error; else delete next[key];
+      return next;
+    });
+  }
+  function clearActivityJsonEdit(key: string) {
+    setActivityJsonDrafts(current => { const next = { ...current }; delete next[key]; return next; });
+    setActivityJsonErrors(current => { const next = { ...current }; delete next[key]; return next; });
   }
   function addNode(type: NodeKind) {
     const node = fresh(type, draft.nodes.length);
@@ -324,18 +349,27 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
     if (source) {
       const next = fromWorkflow(source as unknown as GraphWorkflow);
       setDraft(next);
+      setRunInputSchemaText(JSON.stringify(next.runInputSchema ?? { type: 'object', properties: {}, required: [], additionalProperties: false }, null, 2));
+      setRunInputSchemaError(null);
+      setActivityJsonDrafts({});
+      setActivityJsonErrors({});
       setSavedSnapshot(JSON.stringify(toWorkflow(next)));
       setSaveStatus('saved');
       setRevision(stored?.revision ?? 0);
       setPublishPending(Boolean(stored));
       setSelectedId(null);
       setSelectedEdgeId(null);
+      if (!next.nodes.length) setView('graph');
       setMessage(stored ? 'Draft loaded.' : 'Published version loaded.');
     }
   }
   function newWorkflow(template: WorkflowTemplate) {
     setMessageError(false);
     setDraft(templateWorkflow(template));
+    setRunInputSchemaText(JSON.stringify({ type: 'object', properties: {}, required: [], additionalProperties: false }, null, 2));
+    setRunInputSchemaError(null);
+    setActivityJsonDrafts({});
+    setActivityJsonErrors({});
     setSavedSnapshot('');
     setSaveStatus('pending');
     setRevision(0);
@@ -343,10 +377,15 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
     setSelectedId(null);
     setSelectedEdgeId(null);
     setNewMenuOpen(false);
-    setView('stages');
+    setView(template === 'blank' ? 'graph' : 'stages');
     setMessage('New workflow draft.');
   }
   async function publish() {
+    if (invalidAuthoring) {
+      setMessageError(true);
+      setMessage(runInputSchemaError ?? activeActivityJsonErrors[0]?.[1] ?? 'Finish editing the invalid JSON value before saving.');
+      return;
+    }
     const value = toWorkflow(draft);
     const errors = validateWorkflow(draft);
     if (errors.length) {
@@ -379,7 +418,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
   }
 
   useEffect(() => {
-    if (snapshot === savedSnapshot || autoSaving || working) return;
+    if (snapshot === savedSnapshot || autoSaving || working || invalidAuthoring) return;
     setPublishPending(true);
     setSaveStatus('pending');
     const timer = window.setTimeout(() => {
@@ -402,7 +441,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
         .finally(() => setAutoSaving(false));
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [autoSaving, draft, makeDefault, revision, savedSnapshot, snapshot, working]);
+  }, [autoSaving, draft, invalidAuthoring, makeDefault, revision, savedSnapshot, snapshot, working]);
 
   return (
     <section className="workflow-studio" aria-label="Workflow studio">
@@ -456,7 +495,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
           </button>
           <button
             className="primary"
-            disabled={!publishPending || working || autoSaving || snapshot !== savedSnapshot}
+            disabled={!publishPending || working || autoSaving || invalidAuthoring || snapshot !== savedSnapshot}
             onClick={() => void publish()}
           >
             {working ? 'Publishing…' : 'Publish'}
@@ -603,6 +642,22 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
             />
           </label>
           <label>
+            Run input schema
+            <textarea
+              aria-label="Run input schema"
+              value={runInputSchemaText}
+              rows={5}
+              onChange={(event) => {
+                setRunInputSchemaText(event.target.value);
+                const result = parseRunInputSchemaEdit(event.target.value);
+                if ('error' in result) { setRunInputSchemaError(result.error); return; }
+                setRunInputSchemaError(null);
+                setDraft((current) => ({ ...current, runInputSchema: result.value as WorkflowJsonSchema }));
+              }}
+            />
+            {runInputSchemaError && <span className="workflow-validation-error" role="alert">{runInputSchemaError}</span>}
+          </label>
+          <label>
             Entry
             <select
               value={draft.entryNode ?? ''}
@@ -661,10 +716,15 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
               <NodeInspector
                 key={selected.id}
                 node={selected}
+                workflow={draft}
                 state={state}
                 boards={state.boards}
                 onPatch={patchNode}
                 onPatchInput={patchInput}
+                activityJsonDrafts={activityJsonDrafts}
+                activityJsonErrors={activityJsonErrors}
+                onActivityJsonEdit={recordActivityJsonEdit}
+                onClearActivityJsonEdit={clearActivityJsonEdit}
                 onConnect={beginConnection}
                 onDelete={removeNode}
                 onClose={() => setSelectedId(null)}
@@ -763,10 +823,15 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
               <NodeInspector
                 key={selected.id}
                 node={selected}
+                workflow={draft}
                 state={state}
                 boards={state.boards}
                 onPatch={patchNode}
                 onPatchInput={patchInput}
+                activityJsonDrafts={activityJsonDrafts}
+                activityJsonErrors={activityJsonErrors}
+                onActivityJsonEdit={recordActivityJsonEdit}
+                onClearActivityJsonEdit={clearActivityJsonEdit}
                 onConnect={beginConnection}
                 onDelete={removeNode}
                 onClose={() => setSelectedId(null)}
@@ -859,19 +924,29 @@ function InspectorPanel({
 
 function NodeInspector({
   node,
+  workflow,
   state,
   boards,
   onPatch,
   onPatchInput,
+  activityJsonDrafts,
+  activityJsonErrors,
+  onActivityJsonEdit,
+  onClearActivityJsonEdit,
   onConnect,
   onDelete,
   onClose,
 }: {
   node: GraphNode;
+  workflow: GraphWorkflow;
   state: RuntimeState;
   boards: BoardSummary[];
   onPatch: (id: string, patch: Partial<GraphNode>) => void;
   onPatchInput: (id: string, key: string, value: string) => void;
+  activityJsonDrafts: Record<string, string>;
+  activityJsonErrors: Record<string, string>;
+  onActivityJsonEdit: (key: string, text: string, error?: string) => void;
+  onClearActivityJsonEdit: (key: string) => void;
   onConnect: (id: string, outcome?: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
@@ -925,9 +1000,9 @@ function NodeInspector({
           onChange={(event) => onPatch(node.id, { name: event.target.value })}
         />
       </label>
-      {node.type !== 'branch' && (
+      {['agent', 'approval', 'check'].includes(node.type) && (
         <label>
-          Agent instructions
+          {node.type === 'agent' ? 'Agent instructions' : 'Instructions'}
           <textarea
             rows={5}
             value={node.prompt}
@@ -1520,6 +1595,13 @@ function NodeInspector({
       {node.type === 'action' && (
         <ActionFields
           node={node}
+          workflow={workflow}
+          activities={state.workflowActivities ?? []}
+          models={state.models}
+          activityJsonDrafts={activityJsonDrafts}
+          activityJsonErrors={activityJsonErrors}
+          onActivityJsonEdit={onActivityJsonEdit}
+          onClearActivityJsonEdit={onClearActivityJsonEdit}
           boards={boards}
           projects={state.projects}
           onPatch={onPatch}
@@ -1553,18 +1635,83 @@ function NodeInspector({
 
 function ActionFields({
   node,
+  workflow,
+  activities,
+  models,
+  activityJsonDrafts,
+  activityJsonErrors,
+  onActivityJsonEdit,
+  onClearActivityJsonEdit,
   boards,
   projects,
   onPatch,
   onPatchInput,
 }: {
   node: GraphNode;
+  workflow: GraphWorkflow;
+  activities: NonNullable<RuntimeState['workflowActivities']>;
+  models: RuntimeState['models'];
+  activityJsonDrafts: Record<string, string>;
+  activityJsonErrors: Record<string, string>;
+  onActivityJsonEdit: (key: string, text: string, error?: string) => void;
+  onClearActivityJsonEdit: (key: string) => void;
   boards: BoardSummary[];
   projects: RuntimeState['projects'];
   onPatch: (id: string, patch: Partial<GraphNode>) => void;
   onPatchInput: (id: string, key: string, value: string) => void;
 }) {
-  const operation = node.operation ?? 'inspect_changes';
+  const operation = node.operation;
+  const activity = activities.find((descriptor) => descriptor.ref.id === node.activity?.id && descriptor.ref.revision === node.activity?.revision);
+  const activityPinStale = activityPinIsStale(node.activityDescriptorDigest, activity?.digest);
+  const permissionEditor = !activityPinStale ? activityPermissionEditor(activity, node.permissions) : null;
+  const setActivity = (key: string) => {
+    const selected = activities.find((descriptor) => `${descriptor.ref.id}@${descriptor.ref.revision}` === key);
+    if (!selected) { onPatch(node.id, { activity: undefined, activityDescriptorDigest: undefined, bindings: undefined, operation: undefined, input: undefined }); return; }
+    if (!changedActivityPin(node.activity, selected.ref)) return;
+    const bindings: Record<string, WorkflowActivityBinding> = {};
+    for (const key of selected.inputSchema.required ?? []) {
+      const schema = selected.inputSchema.properties?.[key];
+      bindings[key] = { literal: schema?.type === 'string' ? '' : schema?.type === 'boolean' ? false : schema?.type === 'array' ? [] : schema?.type === 'object' ? {} : schema?.type === 'null' ? null : 0 };
+    }
+    onPatch(node.id, { activity: selected.ref, activityDescriptorDigest: undefined, bindings, operation: undefined, input: undefined });
+  };
+  if (!operation || node.activity) return (
+    <details open>
+      <summary>Activity</summary>
+      <label>
+        Registered activity
+        <select value={node.activity ? `${node.activity.id}@${node.activity.revision}` : ''} onChange={(event) => setActivity(event.target.value)}>
+          <option value="">Choose activity</option>
+          {node.activity && !activity && <option value={`${node.activity.id}@${node.activity.revision}`} disabled>{node.activity.id}@{node.activity.revision} · unavailable</option>}
+          {activities.map((descriptor) => {
+            const selectedPinStale = descriptor.ref.id === node.activity?.id && descriptor.ref.revision === node.activity?.revision && activityPinIsStale(node.activityDescriptorDigest, descriptor.digest);
+            return <option key={`${descriptor.ref.id}@${descriptor.ref.revision}`} value={`${descriptor.ref.id}@${descriptor.ref.revision}`} disabled={!descriptor.available || selectedPinStale}>
+              {descriptor.presentation.label} · {descriptor.ref.id}@{descriptor.ref.revision}{selectedPinStale ? ' · pinned metadata changed' : descriptor.available ? '' : ' · unavailable'}
+            </option>;
+          })}
+        </select>
+      </label>
+      {activityPinStale && <p role="status">Pinned activity metadata changed. Select another revision before publishing.</p>}
+      {activity && !activityPinStale && activity.resources.location === 'agent' && <label>
+        Model
+        <select value={node.model ?? ''} onChange={event => onPatch(node.id, { model: event.target.value || undefined })}>
+          <option value="">Session default</option>
+          {node.model && !models.some(model => model.id === node.model) && <option value={node.model} disabled>{node.model} · unavailable</option>}
+          {models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}
+        </select>
+      </label>}
+      {permissionEditor && <label>
+        Tool permissions
+        <select value={permissionEditor.value} onChange={event => onPatch(node.id, { permissions: event.target.value })}>
+          {permissionEditor.options.map(option => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
+        </select>
+      </label>}
+      {activity && !activityPinStale && <RegisteredActivityFields node={node} workflow={workflow} descriptor={activity} activities={activities}
+        activityJsonDrafts={activityJsonDrafts} activityJsonErrors={activityJsonErrors}
+        onActivityJsonEdit={onActivityJsonEdit} onClearActivityJsonEdit={onClearActivityJsonEdit} onPatch={onPatch} />}
+      {node.activity && !activity && <p role="status">Pinned activity {node.activity.id}@{node.activity.revision} is unavailable.</p>}
+    </details>
+  );
   const input = node.input ?? {};
   const patch =
     input.patch && typeof input.patch === 'object' ? (input.patch as Record<string, unknown>) : {};
@@ -1751,6 +1898,112 @@ function ActionFields({
       )}
     </details>
   );
+}
+
+function RegisteredActivityFields({
+  node,
+  workflow,
+  descriptor,
+  activities,
+  activityJsonDrafts,
+  activityJsonErrors,
+  onActivityJsonEdit,
+  onClearActivityJsonEdit,
+  onPatch,
+}: {
+  node: GraphNode;
+  workflow: GraphWorkflow;
+  descriptor: WorkflowActivityDescriptor;
+  activities: NonNullable<RuntimeState['workflowActivities']>;
+  activityJsonDrafts: Record<string, string>;
+  activityJsonErrors: Record<string, string>;
+  onActivityJsonEdit: (key: string, text: string, error?: string) => void;
+  onClearActivityJsonEdit: (key: string) => void;
+  onPatch: (id: string, patch: Partial<GraphNode>) => void;
+}) {
+  const bindings = node.bindings ?? {};
+  const priorNodes = workflow.nodes.filter(candidate => {
+    if (candidate.id === node.id) return false;
+    const reachable = new Set([candidate.id]);
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const edge of workflow.edges) if (reachable.has(edge.from) && !reachable.has(edge.to)) { reachable.add(edge.to); changed = true; }
+    }
+    return reachable.has(node.id);
+  });
+  const sources: { key: string; label: string; binding: WorkflowActivityBinding }[] = [];
+  for (const { path } of declaredObjectPaths(workflow.runInputSchema, 256)) {
+    const binding: WorkflowActivityBinding = { from: { kind: 'run_input', path } };
+    sources.push({ key: activitySourceOptionKey(binding), label: `Run input · ${activitySchemaPathLabel(path)}`, binding });
+  }
+  for (const sourceNode of priorNodes) {
+    const ref = sourceNode.activity;
+    const source = ref && activities.find(value => value.ref.id === ref.id && value.ref.revision === ref.revision);
+    for (const { path } of declaredObjectPaths(source?.outputSchema, Math.max(0, 256 - sources.length))) {
+      const binding: WorkflowActivityBinding = { from: { kind: 'activity_output', nodeId: sourceNode.id, path } };
+      sources.push({ key: activitySourceOptionKey(binding), label: `${sourceNode.name} · ${activitySchemaPathLabel(path)}`, binding });
+    }
+  }
+  const update = (key: string, value: WorkflowActivityBinding | undefined) => {
+    const next = { ...bindings };
+    if (value) next[key] = value; else delete next[key];
+    onPatch(node.id, { bindings: next });
+  };
+  const literal = (key: string, schema: WorkflowJsonSchema, value: unknown) => {
+    const set = (next: unknown) => update(key, { literal: next });
+    if (schema.enum) return <select aria-label={`${key} value`} value={activityEnumOptionIndex(schema.enum, value)} onChange={event => set(activityEnumValueAt(schema.enum ?? [], event.target.value))}>
+      <option value="">Choose</option>{schema.enum.map((item, index) => <option key={index} value={String(index)}>{item === null ? 'Null' : typeof item === 'object' ? JSON.stringify(item) : String(item)}</option>)}
+    </select>;
+    if (schema.type === 'boolean') return <select value={String(Boolean(value))} onChange={event => set(event.target.value === 'true')}><option value="true">True</option><option value="false">False</option></select>;
+    if (schema.type === 'null') return <select aria-label={`${key} value`} value="null" onChange={() => set(null)}><option value="null">Null</option></select>;
+    if (schema.type === 'number' || schema.type === 'integer') return <input type="number" value={typeof value === 'number' ? value : ''} min={schema.minimum} max={schema.maximum} step={schema.type === 'integer' ? 1 : 'any'} onChange={event => set(event.target.value === '' ? '' : Number(event.target.value))} />;
+    if (schema.type === 'object' || schema.type === 'array') {
+      const editKey = activityJsonEditKey(node.id, descriptor.ref, key);
+      const text = activityJsonDrafts[editKey] ?? JSON.stringify(value ?? (schema.type === 'object' ? {} : []), null, 2);
+      const error = activityJsonErrors[editKey];
+      return <>
+        <textarea aria-label={`${key} JSON value`} aria-invalid={Boolean(error)} aria-describedby={error ? `${editKey}-error` : undefined}
+          value={text} rows={3} onChange={event => {
+            const result = parseActivityJsonEdit(event.target.value, schema);
+            if ('error' in result) { onActivityJsonEdit(editKey, event.target.value, result.error); return; }
+            onActivityJsonEdit(editKey, event.target.value);
+            set(result.value);
+          }} />
+        {error && <span className="workflow-validation-error" id={`${editKey}-error`} role="alert">{error}</span>}
+      </>;
+    }
+    return <input value={typeof value === 'string' ? value : ''} maxLength={schema.maxLength} onChange={event => set(event.target.value)} />;
+  };
+  return <div className="workflow-activity-fields">
+    {!descriptor.available && <p>This pinned activity revision is unavailable.</p>}
+    {(descriptor.presentation.description || descriptor.effect || descriptor.resources.location) && <details>
+      <summary>Activity details</summary>
+      {descriptor.presentation.description && <p>{descriptor.presentation.description}</p>}
+      <small>{descriptor.effect} · {descriptor.resources.location}</small>
+    </details>}
+    {Object.entries(descriptor.inputSchema.properties ?? {}).map(([key, schema]) => {
+      const binding = bindings[key];
+      const reference = binding && 'from' in binding ? binding.from : undefined;
+      const sourceKey = activityBindingSourceKey(binding);
+      const editKey = activityJsonEditKey(node.id, descriptor.ref, key);
+      const sourceUnavailable = Boolean(reference && !activityBindingSourceIsAvailable(binding, sources.map(source => source.binding)));
+      return <label key={key}>
+        {key}{descriptor.inputSchema.required?.includes(key) ? ' · required' : ''}
+        <select aria-label={`${key} binding source`} value={activityBindingSelectionValue(binding)} onChange={event => {
+          onClearActivityJsonEdit(editKey);
+          if (event.target.value === 'omit') update(key, undefined);
+          else if (event.target.value === 'literal') update(key, { literal: schema.type === 'string' ? '' : schema.type === 'boolean' ? false : schema.type === 'array' ? [] : schema.type === 'object' ? {} : schema.type === 'null' ? null : 0 });
+          else update(key, sources.find(source => source.key === event.target.value)?.binding);
+        }}>
+          {!descriptor.inputSchema.required?.includes(key)
+            ? <option value="omit">Omit</option>
+            : !binding && <option value="omit" disabled>Required value missing</option>}
+          <option value="literal">Value</option>{sourceUnavailable && <option value={sourceKey} disabled>Configured source unavailable</option>}{sources.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}
+        </select>
+        {binding && 'literal' in binding && literal(key, schema, binding.literal)}
+      </label>;
+    })}
+  </div>;
 }
 
 function EdgeInspector({

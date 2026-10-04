@@ -14,6 +14,8 @@ const noExecution = () => ({
 
 function fixture() {
   const saved = [];
+  const externalThreads = {};
+  const threadReads = [];
   const state = {
     projects: [
       { id: 'alpha', name: 'Alpha', description: '', revision: 1, placement: { mode: 'none' } },
@@ -26,8 +28,14 @@ function fixture() {
     sessions: {},
   };
   const execution = noExecution();
-  const catalog = createCatalog({ state, save: async () => { saved.push(structuredClone(state)); }, execution });
-  return { state, catalog, saved };
+  const externalTickets = { listComments: async (_source, remoteId) => { threadReads.push(remoteId); return structuredClone(externalThreads[remoteId] ?? []); } };
+  const catalog = createCatalog({ state, save: async () => { saved.push(structuredClone(state)); }, execution, externalTickets });
+  return { state, catalog, saved, externalThreads, threadReads };
+}
+
+function addReplySource(fixture) {
+  fixture.state.ticketConnections.push({ id: 'source-a', organizationId: 'personal', enabled: true, capabilities: { threadRead: true } });
+  fixture.state.tickets[0].externalLinks = [{ connectionId: 'source-a', remoteId: 'remote-ticket' }];
 }
 
 test('migration creates one editable multi-project board without changing tickets', () => {
@@ -41,6 +49,124 @@ test('migration creates one editable multi-project board without changing ticket
   const again = createCatalog({ state, save: async () => {}, execution: noExecution() });
   assert.equal(state.boards.length, 1);
   assert.deepEqual(again.snapshot().boards[0].tickets.map(t => t.ticketId), [1, 2]);
+});
+
+test('workflow mutation receipts bind update and placement identity and deduplicate exact Work commands', async () => {
+  const { catalog, state } = fixture();
+  const update = { action: 'updateTicket', ticketId: 1, taskId: 1, revision: 1,
+    patch: { status: 'Approved' }, workflowRunId: 'run-1', workflowInstance: 'step-1',
+    idempotencyKey: 'run-1:step-1', requestId: 'step-1' };
+  const updated = await catalog.command(update);
+  const retried = await catalog.command(update);
+  assert.deepEqual(retried, updated);
+  assert.equal(state.workflowMutationReceipts['run-1:step-1:updateTicket'].result.status, 'Approved');
+  assert.ok(catalog.workflowMutationReceipt(update));
+  await assert.rejects(catalog.command({ ...update, patch: { status: 'Rejected' } }), /identity was reused/);
+
+  const placement = { action: 'setBoardPlacement', boardId: 'default-board', ticketId: 1,
+    revision: updated.revision, placement: { columnId: 'column-done' }, workflowRunId: 'run-1',
+    workflowInstance: 'step-2', idempotencyKey: 'run-1:step-2' };
+  const moved = await catalog.command(placement);
+  assert.deepEqual(await catalog.command(placement), moved);
+  assert.ok(catalog.workflowMutationReceipt(placement));
+});
+
+test('Work workflow evidence is project scoped, exact to its command, and retains the original mutation receipt', async () => {
+  const { catalog, state } = fixture();
+  const command = { action: 'createTicket', requestId: 'workflow-create-1', projectId: 'alpha',
+    title: 'Prepared title', description: 'Prepared description', workflowRunId: 'run-a',
+    workflowInstance: 'instance-a', idempotencyKey: 'run-a:instance-a' };
+  const created = await catalog.command(command);
+  const evidence = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(evidence.result.id, created.id);
+  assert.equal(evidence.result.title, 'Prepared title');
+  assert.equal(evidence.ticket.projectId, 'alpha');
+  assert.equal(catalog.workflowActivityEvidence(command, 'beta').ticket, null);
+  assert.equal(catalog.workflowActivityEvidence({ ...command, title: 'Different request' }, 'alpha').result, null);
+
+  const ticket = state.tickets.find(value => value.id === created.id);
+  ticket.title = 'Later mutable title';
+  ticket.revision += 1;
+  const afterLaterEdit = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(afterLaterEdit.result.title, 'Prepared title', 'the exact original Work receipt remains immutable');
+  assert.equal(afterLaterEdit.ticket, null, 'a later ticket state is not substituted for the prepared result');
+});
+
+test('related-ticket evidence distinguishes an immutable receipt from a mutable request projection', async () => {
+  const { catalog, state } = fixture();
+  const command = { action: 'createRelatedTicket', sourceTicketId: 1, sourceRevision: 1,
+    requestId: 'workflow-related-1', kind: 'related', title: 'Original related title',
+    workflowRunId: 'run-a', workflowInstance: 'instance-a', idempotencyKey: 'run-a:instance-a' };
+  const created = await catalog.command(command);
+  const key = 'run-a:instance-a:createRelatedTicket';
+  const beforeEdit = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(beforeEdit.hasReceipt, true);
+  assert.equal(beforeEdit.result.title, created.title);
+  const target = state.tickets.find(value => value.id === created.id);
+  target.title = 'Later title';
+  target.revision += 1;
+  assert.equal(catalog.workflowActivityEvidence(command, 'alpha').result.title, 'Original related title');
+  delete state.workflowMutationReceipts[key];
+  const noReceipt = catalog.workflowActivityEvidence(command, 'alpha');
+  assert.equal(noReceipt.hasReceipt, false);
+  assert.equal(noReceipt.result.title, 'Later title', 'legacy projection may be available but is not an exact typed receipt');
+});
+
+test('Work reply evidence checks exact identity and scopes latest delivered selection to its project and run', async () => {
+  const f = fixture(); const { catalog, state } = f; addReplySource(f);
+  state.ticketReplies = [
+    { id: 'reply-alpha', ticketId: 1, connectionId: 'source-a', body: 'Exact body', status: 'queued', deliveryStatus: 'delivered',
+      workflowRunId: 'run-a', workflowInstance: 'instance-a', remoteId: 'remote-a', createdAt: '2026-09-01T00:00:00Z' },
+    { id: 'reply-beta', ticketId: 2, connectionId: 'source-a', body: 'Foreign body', status: 'queued', deliveryStatus: 'delivered',
+      workflowRunId: 'run-a', workflowInstance: 'instance-a', remoteId: 'remote-b', createdAt: '2026-09-02T00:00:00Z' },
+  ];
+  f.externalThreads['remote-ticket'] = [
+    { remoteId: 'remote-a', body: 'Exact body', direction: 'outbound', deliveryStatus: 'delivered', authorRole: 'agent', createdAt: '2026-10-01T00:00:00Z' },
+  ];
+  state.ticketThreads = [{ id: 'source-a:1', ticketId: 1, connectionId: 'source-a', messages: structuredClone(f.externalThreads['remote-ticket']) }];
+  const command = { action: 'postExternalTicketReply', requestId: 'reply-alpha', ticketId: 1,
+    connectionId: 'source-a', body: 'Exact body', workflowRunId: 'run-a', workflowInstance: 'instance-a' };
+  assert.equal(catalog.workflowActivityEvidence(command, 'alpha').reply.status, 'queued');
+  assert.equal(catalog.workflowActivityEvidence({ ...command, body: 'Spoofed body' }, 'alpha').reply, null);
+  assert.equal(catalog.workflowReplyConfirmation(command, 'alpha').state, 'completed');
+  assert.equal(catalog.workflowReplyConfirmation(command, 'beta'), null);
+  assert.equal((await catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' })).requestId, 'reply-alpha');
+  assert.equal(await catalog.latestDeliveredWorkflowReply({ ticketId: 2, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' }), null);
+});
+
+test('latest Work reply selection ignores a newer pending reply even if its local delivery flag is stale', async () => {
+  const f = fixture(); const { catalog, state } = f; addReplySource(f);
+  state.ticketReplies = [
+    { id: 'reply-delivered', ticketId: 1, connectionId: 'source-a', body: 'Delivered body', status: 'queued',
+      deliveryStatus: 'pending', workflowRunId: 'run-a', remoteId: 'remote-delivered', createdAt: '2026-10-01T00:00:00Z' },
+    { id: 'reply-newer', ticketId: 1, connectionId: 'source-a', body: 'Pending body', status: 'queued',
+      deliveryStatus: 'delivered', workflowRunId: 'run-a', remoteId: 'remote-pending', createdAt: '2026-10-02T00:00:00Z' },
+  ];
+  f.externalThreads['remote-ticket'] = [
+    { remoteId: 'remote-delivered', body: 'Delivered body', direction: 'outbound', deliveryStatus: 'delivered', authorRole: 'agent', createdAt: '2026-10-01T00:00:00Z' },
+    { remoteId: 'remote-pending', body: 'Pending body', direction: 'outbound', deliveryStatus: 'queued', authorRole: 'agent', createdAt: '2026-10-02T00:00:00Z' },
+  ];
+  const selected = await catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' });
+  assert.equal(selected.requestId, 'reply-delivered');
+});
+
+test('Work reply selection accepts exact delivered thread evidence when its cached reply flag is pending', async () => {
+  const f = fixture(); const { catalog, state } = f; addReplySource(f);
+  state.ticketReplies = [{ id: 'reply-source-proof', ticketId: 1, connectionId: 'source-a', body: 'Exact delivered body',
+    status: 'queued', deliveryStatus: 'pending', workflowRunId: 'run-a', remoteId: 'remote-exact', createdAt: '2026-10-01T00:00:00Z' }];
+  f.externalThreads['remote-ticket'] = [
+    { remoteId: 'remote-exact', body: 'Exact delivered body', direction: 'outbound', deliveryStatus: 'delivered', authorRole: 'agent', createdAt: '2026-10-01T00:00:00Z' },
+  ];
+  const selected = await catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a', workflowRunId: 'run-a', projectId: 'alpha' });
+  assert.equal(selected.requestId, 'reply-source-proof');
+});
+
+test('Work reply selection rejects a foreign-organization connection before reading its thread', async () => {
+  const f = fixture(); addReplySource(f);
+  f.state.ticketConnections[0].organizationId = 'foreign-org';
+  await assert.rejects(f.catalog.latestDeliveredWorkflowReply({ ticketId: 1, connectionId: 'source-a',
+    workflowRunId: 'run-a', projectId: 'alpha' }), /not available to this project/);
+  assert.deepEqual(f.threadReads, []);
 });
 
 test('boards can be created from editable templates and show multiple projects', async () => {
