@@ -485,3 +485,44 @@ test('a tightened current root budget blocks compensation dispatch after the for
   assert.equal(recovered.workflowRuns[workflowRunId].compositionBudget.reservedDescendantRuns, 2,
     'restart does not shrink the canonical descendant reservation count');
 });
+
+test('a compensation cannot pin a child workflow owned by another project', async t => {
+  const f = await fixture(t, []);
+  const summarySchema = object({ summary: string(120) }, ['summary']);
+  const reviewNode = (id = 'review') => ({ id, name: 'Review', kind: 'human', prompt: 'Review this project work.',
+    humanTask: { outcomes: [
+      { id: 'complete', label: 'Complete review' }, { id: 'decline', label: 'Decline review' },
+    ], form: { fields: [{ id: 'summary', label: 'Review summary', type: 'text', required: true, minLength: 3, maxLength: 120 }] } } });
+  const otherProject = await f.act('saveProject', { organizationId: f.organization.id, name: 'Publication review' });
+  await f.act('selectActiveContext', { context: { organizationId: f.organization.id, projectId: otherProject.id } });
+  const foreignChild = await f.act('saveWorkflow', {
+    projectId: otherProject.id,
+    workflow: { id: 'foreign-project-compensation', name: 'Foreign project compensation', projectId: otherProject.id,
+      resultSchema: summarySchema,
+      resultBindingsByTerminal: { review: { summary: { from: { kind: 'human_response', nodeId: 'review', path: ['summary'] } } } },
+      nodes: [reviewNode()], edges: [] },
+  });
+  await f.act('selectActiveContext', { context: { organizationId: f.organization.id, projectId: f.project.id } });
+  const forwardChild = await f.save({
+    id: 'local-forward-before-foreign-compensation', name: 'Local forward child', projectId: f.project.id,
+    resultSchema: summarySchema,
+    resultBindingsByTerminal: { review: { summary: { from: { kind: 'human_response', nodeId: 'review', path: ['summary'] } } } },
+    nodes: [reviewNode()], edges: [],
+  });
+  const parent = {
+    id: 'foreign-compensation-parent', name: 'Reject foreign compensation pin', projectId: f.project.id,
+    nodes: [{ id: 'forward', name: 'Forward', kind: 'child',
+      workflow: { id: forwardChild.id, version: forwardChild.version }, inputBindings: {},
+      outputSchema: summarySchema, outputBindings: { summary: { from: ['summary'] } },
+      compensations: [{ id: 'foreign-release', trigger: 'failure',
+        workflow: { id: foreignChild.id, version: foreignChild.version }, inputBindings: {} }],
+    }], edges: [],
+  };
+  await assert.rejects(
+    f.save(parent),
+    /project|scope|available|authorized|same/i,
+    'publication rejects a compensation pin that crosses the owning project boundary',
+  );
+  assert.equal(Object.keys((await f.readState()).workflowRuns ?? {}).length, 0,
+    'a rejected cross-project child pin allocates no run or compensation reservation');
+});
