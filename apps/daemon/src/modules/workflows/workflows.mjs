@@ -18,7 +18,7 @@ function legacyRepairOutcome(node, outcome) {
   return !(node?.kind === 'human' && !node.legacyHumanTask) && ['failed', 'changes_requested'].includes(outcome);
 }
 const safeBindingPath = path => Array.isArray(path) && path.length > 0 && path.length <= 12 &&
-  path.every(part => typeof part === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(part) && !['__proto__', 'prototype', 'constructor'].includes(part));
+  path.every(part => typeof part === 'string' && part.length > 0 && part.length <= 128 && !['__proto__', 'prototype', 'constructor'].includes(part));
 
 function normalizeWorkflowRef(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -63,8 +63,30 @@ function normalizeOutputBindings(value, label) {
   return result;
 }
 
+function normalizeCompensations(value, label) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 8) throw new Error(`${label}: configure at most eight pinned compensations.`);
+  const ids = new Set();
+  return value.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        Object.keys(item).some(key => !['id', 'trigger', 'workflow', 'inputBindings', 'workflowDigest', 'inputSchemaDigest', 'resultSchemaDigest'].includes(key)) ||
+        !safeId(item.id) || ids.has(item.id) || !['failure', 'cancelled'].includes(item.trigger))
+      throw new Error(`${label}: compensation IDs and triggers must be explicit and unique.`);
+    ids.add(item.id);
+    return { id: item.id, trigger: item.trigger, workflow: normalizeWorkflowRef(item.workflow, `${label}/${item.id}`),
+      inputBindings: normalizeCompositeBindings(item.inputBindings ?? {}, `${label}/${item.id}`),
+      ...(typeof item.workflowDigest === 'string' ? { workflowDigest: item.workflowDigest } : {}),
+      ...(typeof item.inputSchemaDigest === 'string' ? { inputSchemaDigest: item.inputSchemaDigest } : {}),
+      ...(typeof item.resultSchemaDigest === 'string' ? { resultSchemaDigest: item.resultSchemaDigest } : {}) };
+  });
+}
+
 function normalizeCompositeNode(node) {
   const label = node.name;
+  if (node.compensations !== undefined) {
+    if (!['child', 'parallel', 'map'].includes(node.kind)) throw new Error(`${label}: compensations require a composition node.`);
+    node.compensations = normalizeCompensations(node.compensations, label);
+  }
   if (node.kind === 'child') {
     node.workflow = normalizeWorkflowRef(node.workflow, label);
     node.inputBindings = normalizeCompositeBindings(node.inputBindings ?? {}, label);
@@ -101,7 +123,7 @@ function normalizeCompositeNode(node) {
     node.itemsBinding = normalizeCompositeBindings({ items: node.itemsBinding }, label).items;
     node.workflow = normalizeWorkflowRef(node.workflow, label);
     node.inputBindings = normalizeCompositeBindings(node.inputBindings ?? {}, label);
-    if (!safeId(node.itemField) || node.indexField !== undefined && !safeId(node.indexField) || node.itemField === node.indexField)
+    if (!safeBindingPath([node.itemField]) || node.indexField !== undefined && !safeBindingPath([node.indexField]) || node.itemField === node.indexField)
       throw new Error(`${label}: map item and index input field names are invalid.`);
     if (Object.hasOwn(node.inputBindings, node.itemField) || node.indexField && Object.hasOwn(node.inputBindings, node.indexField))
       throw new Error(`${label}: map item fields cannot be overridden by ordinary bindings.`);
@@ -506,11 +528,11 @@ export function ensureAgentSessions(s) {
   return s.agentSessions[s.currentAgentSessionId];
 }
 
-export function createWorkflowEngine({ state, save, event, inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, sealEvidence = async () => null, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {}, bindRun = () => {}, attachAgent = async () => { throw new Error('Agent activity requires an attached conversation.'); }, getWorkflowOwner = () => null }) {
+export function createWorkflowEngine({ state, save, event, now = () => new Date().toISOString(), inspectArtifact = async () => ({ text: '', sha256: '' }), readReference = async () => { throw new Error('Source reference reader unavailable.'); }, captureArtifacts = async (_s, paths) => paths, sealEvidence = async () => null, inspectChanges = async () => null, busy = () => false, launch, abort = () => {}, canProvision = () => false, actionExecutor = null, prepareStart = () => {}, bindRun = () => {}, attachAgent = async () => { throw new Error('Agent activity requires an attached conversation.'); }, getWorkflowOwner = () => null }) {
   let pumping = false; let pumpAgain = false;
   const decodedRuns = new WeakMap();
   const runOwner = s => s.independentRun ? s : state.workflowRuns?.[s.workflowRunId];
-  const attemptStatus = (s, status) => { const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow?.instance) { owner.attempt.status = status; owner.attempt.updatedAt = new Date().toISOString(); } };
+  const attemptStatus = (s, status) => { const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow?.instance) { owner.attempt.status = status; owner.attempt.updatedAt = now(); } };
   const definition = s => {
     const owner = runOwner(s);
     if (!owner) return s.workflow;
@@ -543,11 +565,11 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     if (list[index].operation !== 'send_external_reply') delete s.flow.approvedSubmission;
     const node = list[index]; s.flow.status = node.kind === 'human' ? 'waiting_gate' : node.kind === 'wait' ? 'waiting_event' : 'ready'; s.status = s.flow.status;
     if (node.kind === 'human' && node.humanTask?.dueAfterSeconds)
-      s.flow.humanTaskDueAt = new Date(Date.now() + node.humanTask.dueAfterSeconds * 1000).toISOString();
+      s.flow.humanTaskDueAt = new Date(Date.parse(now()) + node.humanTask.dueAfterSeconds * 1000).toISOString();
     else delete s.flow.humanTaskDueAt;
     if (owner) {
       owner.activityAttempts ??= []; if (owner.attempt) owner.activityAttempts.push(structuredClone(owner.attempt));
-      owner.attempt = { instance: s.flow.instance, nodeId: node.id, status: s.flow.status === 'waiting_gate' || s.flow.status === 'waiting_event' ? 'waiting' : 'ready', startedAt: new Date().toISOString(),
+      owner.attempt = { instance: s.flow.instance, nodeId: node.id, status: s.flow.status === 'waiting_gate' || s.flow.status === 'waiting_event' ? 'waiting' : 'ready', startedAt: now(),
         ...(reservation ? { reservationId: reservation.id, activityRef: structuredClone(reservation.activityRef), intent: structuredClone(reservation.intent), intentDigest: reservation.intentDigest, inputDigest: reservation.inputDigest, idempotencyKey: reservation.idempotencyKey } : {}) };
     }
     if (node.kind === 'wait') getWorkflowOwner()?.registerWait(s, node, s.flow.instance);
@@ -586,7 +608,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     delete s.flow.reviewedHumanResponseId; delete s.flow.reviewedHumanMaterialDigest;
     const reservationDecision = s.flow.activityReservationDecision;
     delete s.flow.activityReservationDecision;
-    s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: completedInstance, outcome, at: new Date().toISOString(), to: edge?.to ?? null, ...(submission ? { submission } : {}), ...(sourceEvidence ? { sourceEvidence } : {}), ...(reviewedSubmissionRef ? { decisionSubmissionRef: reviewedSubmissionRef } : {}),
+    s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: completedInstance, outcome, at: now(), to: edge?.to ?? null, ...(submission ? { submission } : {}), ...(sourceEvidence ? { sourceEvidence } : {}), ...(reviewedSubmissionRef ? { decisionSubmissionRef: reviewedSubmissionRef } : {}),
       ...(reviewedHumanResponseId ? { humanResponseId: reviewedHumanResponseId } : {}), ...(reviewedHumanMaterialDigest ? { humanMaterialDigest: reviewedHumanMaterialDigest } : {}),
       ...(reservationDecision ? {
         activityReservationId: reservationDecision.id, activityReservationDigest: reservationDecision.digest,
@@ -595,7 +617,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
           activityRef: structuredClone(reservationDecision.activityRef), inputDigest: reservationDecision.inputDigest,
           intentDigest: reservationDecision.intentDigest, preview: structuredClone(reservationDecision.preview) },
       } : {}) });
-    const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === completedInstance) { owner.attempt.status = 'completed'; owner.attempt.outcome = outcome; owner.attempt.completedAt = new Date().toISOString(); }
+    const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === completedInstance) { owner.attempt.status = 'completed'; owner.attempt.outcome = outcome; owner.attempt.completedAt = now(); }
     if (!edge) {
       s.flow.status = 'completed'; s.status = 'accepted'; attemptStatus(s, 'completed');
       event(s, 'workflow_completed', { runId: s.flow.id, ...(terminalResult?.resultDigest ? { resultDigest: terminalResult.resultDigest } : {}) });
@@ -740,6 +762,15 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
         const descriptor = activityRef ? workflowOwner?.activityDescriptor(activityRef) : null;
         if (activityRef && (!descriptor || node.activityDescriptorDigest && node.activityDescriptorDigest !== activityDigest(descriptor)))
           throw new Error('Pinned activity metadata is unavailable or changed; resource acquisition is blocked.');
+        const compositionBlock = owner && workflowOwner?.compositionDispatchBlock(owner);
+        if (compositionBlock) {
+          s.queueReason = compositionBlock;
+          s.status = 'paused';
+          if (s.flow) { s.flow.resumeStatus = 'ready'; s.flow.status = 'paused'; }
+          if (owner.attempt?.instance === s.flow?.instance && owner.attempt.status !== 'completed') owner.attempt.status = 'ready';
+          await save();
+          continue;
+        }
         const needsProviderSession = node.kind === 'agent' || Boolean(s.independentRun && descriptor?.resources.location === 'agent');
         if (needsProviderSession) {
           if (s.independentRun) s = await attachAgent(s);
@@ -747,7 +778,19 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
           node = current(s);
         }
         s.flow.status = 'running'; s.status = 'running'; const activeOwner = runOwner(s); if (activeOwner?.attempt && activeOwner.attempt.instance === s.flow.instance) { if (['ready', 'running'].includes(activeOwner.attempt.status)) { activeOwner.attempt.status = 'running'; activeOwner.attempt.startedAt = new Date().toISOString(); } } await save(); if (s.flow.status !== 'running') continue; if (!launch(s, node, s.flow.instance)) { s.flow.status = 'ready'; s.status = 'queued'; if (activeOwner?.attempt && activeOwner.attempt.instance === s.flow.instance && activeOwner.attempt.status === 'running') activeOwner.attempt.status = 'ready'; await save(); }
-      } catch (e) { s.flow.status = 'failed'; s.status = 'failed'; const owner = runOwner(s); if (owner?.attempt && owner.attempt.instance === s.flow.instance && !['uncertain', 'completed', 'cancelled'].includes(owner.attempt.status)) owner.attempt.status = 'failed'; event(s, 'workflow_failed', { message: e.message }); await save(); } } } while (pumpAgain); } finally { pumping = false; }
+      } catch (e) {
+        const owner = runOwner(s);
+        if (e?.code === 'ACTIVITY_RESOURCES_UNAVAILABLE') {
+          s.queueReason = String(e.message ?? 'Current composition policy is holding this activity.');
+          s.flow.resumeStatus = 'ready'; s.flow.status = 'paused'; s.status = 'paused';
+          if (owner?.attempt && owner.attempt.instance === s.flow.instance) owner.attempt.status = 'ready';
+        } else {
+          s.flow.status = 'failed'; s.status = 'failed';
+          if (owner?.attempt && owner.attempt.instance === s.flow.instance && !['uncertain', 'completed', 'cancelled'].includes(owner.attempt.status)) owner.attempt.status = 'failed';
+          event(s, 'workflow_failed', { message: e.message });
+        }
+        await save();
+      } } } while (pumpAgain); } finally { pumping = false; }
     },
     async submit(s, instance, args) {
       requireInstance(s, instance); const node = current(s); if (s.flow.status !== 'running' || node.kind !== 'agent') throw new Error('This agent cannot submit the current step.'); const summary = required(args.summary, 'Completion summary', 4000);

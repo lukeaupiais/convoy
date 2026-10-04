@@ -30,23 +30,40 @@ function schemaFromJson(value, depth = 0) {
 }
 function runBindingSources(run, workflow, { responseId, submission } = {}) {
   const humanResponses = {};
-  const acceptedIds = new Map((run.flow?.history ?? []).filter(item => item.humanResponseId)
+  const workflowVersion = run.flow?.workflowVersion ?? workflow.version ?? 1;
+  const acceptedIds = new Map((run.flow?.history ?? []).filter(item => item.humanResponseId && item.nodeId && item.instance)
     .map(item => [item.humanResponseId, item]));
   const currentNode = workflow.nodes.find(item => item.id === run.flow?.nodeId);
-  if (responseId && currentNode?.kind === 'human')
+  if (responseId && currentNode?.kind === 'human' && run.flow?.instance)
     acceptedIds.set(responseId, { humanResponseId: responseId, nodeId: run.flow.nodeId, instance: run.flow.instance });
   for (const [id, entry] of acceptedIds) {
-    const response = run.humanResponses?.find(item => item.id === id && item.nodeId === entry.nodeId && item.instance === entry.instance);
+    const response = run.humanResponses?.find(item => item.id === id && item.runId === run.id &&
+      item.workflowId === workflow.id && item.workflowVersion === workflowVersion &&
+      item.nodeId === entry.nodeId && item.instance === entry.instance);
     const node = workflow.nodes.find(item => item.id === entry.nodeId);
-    if (response && node?.kind === 'human') humanResponses[node.id] = { value: response.values, schema: humanFormSchema(node), responseId: id };
+    if (response && node?.kind === 'human') {
+      const schema = humanFormSchema(node);
+      humanResponses[node.id] = { value: validateActivityValue(response.values, schema, `human response ${node.id}`), schema, responseId: id };
+    }
   }
   const agentSubmissions = {};
   const addSubmission = (nodeId, instance, value) => {
     const node = workflow.nodes.find(item => item.id === nodeId);
-    if (node?.kind === 'agent' && value?.instance === instance && value?.nodeId === nodeId)
-      agentSubmissions[nodeId] = { value: { summary: value.summary, ...(value.details ? { details: value.details } : {}) }, schema: agentSubmissionSchema(node) };
+    if (node?.kind === 'agent' && value?.instance === instance && value?.nodeId === nodeId) {
+      const schema = agentSubmissionSchema(node);
+      const detailFields = Object.keys(schema.properties.details.properties);
+      const details = Object.fromEntries(detailFields.filter(field => Object.hasOwn(value.details ?? {}, field))
+        .map(field => [field, value.details[field]]));
+      const projected = validateActivityValue({ summary: value.summary, ...(Object.keys(details).length ? { details } : {}) }, schema,
+        `agent submission ${nodeId}`);
+      agentSubmissions[nodeId] = { value: projected, schema };
+    }
   };
-  for (const entry of run.flow?.history ?? []) if (entry.submission && entry.outcome === 'success')
+  const completedAttempt = (nodeId, instance) => [...(run.activityAttempts ?? []), run.attempt]
+    .some(attempt => attempt?.nodeId === nodeId && attempt.instance === instance &&
+      attempt.status === 'completed');
+  for (const entry of run.flow?.history ?? []) if (entry.submission && entry.nodeId && entry.instance &&
+      completedAttempt(entry.nodeId, entry.instance))
     addSubmission(entry.nodeId, entry.instance, entry.submission);
   if (submission && submission.nodeId === run.flow?.nodeId && submission.instance === run.flow?.instance)
     addSubmission(submission.nodeId, submission.instance, submission);
@@ -165,10 +182,11 @@ export function createWorkflows({
   activityAvailable = () => true,
   prepareActivityIntent = async () => { throw new Error('Activity intent preparation is unavailable.'); },
   resolveCompositionLimits = () => ({ effective: { maxDescendantRuns: 128, maxMapItems: 100, maxConcurrentChildren: 8, maxDeadlineMs: 604_800_000, maxActiveDescendantRuns: 32, maxActiveDescendantsPerRoot: 8 }, organization: { revision: 0 }, project: { revision: 0 } }),
-  authorizeCompositionTransition = async () => {},
+  authorizeCompositionTransition = async () => { throw new Error('Current workflow authority check is unavailable.'); },
   eventDescriptors = [],
   validateEventWait = () => {},
   matchEventWaitSource = () => undefined,
+  linkedExecutionState = () => ({ busy: false, uncertain: false }),
   now = () => new Date().toISOString(),
 }) {
   migrateWorkflowState(state, { defaultWorkflow, normalize });
@@ -274,7 +292,7 @@ export function createWorkflows({
         return activitySchemaAtPath(humanFormSchema(source), from.path);
       }
       if (from.kind === 'agent_submission') {
-        if (source.kind !== 'agent' || !source.submissionRequirements) throw new Error('Workflow binding source is not a configured agent submission.');
+        if (source.kind !== 'agent') throw new Error('Workflow binding source is not an agent submission.');
         return activitySchemaAtPath(agentSubmissionSchema(source), from.path);
       }
       throw new Error('Workflow binding source is unsupported.');
@@ -294,8 +312,13 @@ export function createWorkflows({
           if (!schemaAssignable(source, properties[key])) throw new Error(`${label}.${key}: source schema is incompatible with the child input.`);
         }
       }
-      for (const [key, sourceSchema] of Object.entries(additionalSources))
-        if (!schemaAssignable(sourceSchema, properties[key])) throw new Error(`${label}.${key}: configured map value is incompatible with the child input.`);
+      for (const [key, sourceSchema] of Object.entries(additionalSources)) {
+        if (sourceSchema === null) continue;
+        if (Array.isArray(sourceSchema)) {
+          for (const value of sourceSchema) validateActivityValue(value, properties[key], `${label}.${key}`);
+        } else if (!schemaAssignable(sourceSchema, properties[key]))
+          throw new Error(`${label}.${key}: configured map value is incompatible with the child input.`);
+      }
     };
     const validateOutputMap = (bindings, sourceSchema, targetSchema, label) => {
       for (const mapping of Object.values(bindings)) {
@@ -319,8 +342,10 @@ export function createWorkflows({
       if (node.kind === 'map') {
         let itemSource;
         if (Object.hasOwn(node.itemsBinding, 'literal')) {
-          itemSource = schemaFromJson(node.itemsBinding.literal);
-          validateActivityValue(node.itemsBinding.literal, itemSource, `${node.name}.items`);
+          if (!Array.isArray(node.itemsBinding.literal) || node.itemsBinding.literal.length > node.maxItems)
+            throw new Error(`${node.name}: literal map items exceed the declared bound.`);
+          node.itemsBinding.literal.forEach(item => schemaFromJson(item));
+          itemSource = { type: 'array' };
         }
         else {
           workflow.currentValidationNodeId = node.id;
@@ -337,7 +362,12 @@ export function createWorkflows({
         entry.resultSchemaDigest = activityDigest(normalized.resultSchema);
         const additionalSources = node.kind === 'map'
           ? (() => {
-              const itemsSchema = Object.hasOwn(node.itemsBinding, 'literal') ? schemaFromJson(node.itemsBinding.literal) : bindingSchema(workflow, node.itemsBinding);
+              if (Object.hasOwn(node.itemsBinding, 'literal')) {
+                const items = node.itemsBinding.literal;
+                return { [node.itemField]: items.length ? items : null,
+                  ...(node.indexField ? { [node.indexField]: items.length ? { type: 'integer', minimum: 0, maximum: items.length - 1 } : null } : {}) };
+              }
+              const itemsSchema = bindingSchema(workflow, node.itemsBinding);
               if (itemsSchema.type !== 'array') throw new Error(`${node.name}: map items must be an array.`);
               return { [node.itemField]: itemsSchema.items, ...(node.indexField ? { [node.indexField]: { type: 'integer', minimum: 0, maximum: node.maxItems - 1 } } : {}) };
             })()
@@ -345,6 +375,14 @@ export function createWorkflows({
         validateBindingMap(entry.inputBindings, normalized.runInputSchema, node.id, `${node.name}/${entry.id}`, additionalSources);
         const targetSchema = node.kind === 'map' ? node.outputSchema.items : node.outputSchema;
         validateOutputMap(entry.outputBindings, normalized.resultSchema, targetSchema, `${node.name}/${entry.id}`);
+      }
+      for (const compensation of node.compensations ?? []) {
+        const { raw, normalized } = readChild(compensation.workflow, `${node.name}/${compensation.id} compensation`);
+        compensation.workflowDigest = activityDigest(raw);
+        compensation.inputSchemaDigest = activityDigest(normalized.runInputSchema);
+        compensation.resultSchemaDigest = activityDigest(normalized.resultSchema);
+        validateBindingMap(compensation.inputBindings, normalized.runInputSchema, node.id,
+          `${node.name}/compensation:${compensation.id}`);
       }
     }
     validateBindings(workflow);
@@ -797,6 +835,14 @@ export function createWorkflows({
     return outputSchema ? validateActivityValue(output, outputSchema, 'composition.output') : output;
   }
   function compositionRoot(run) { return state.workflowRuns?.[run.compositionRootRunId ?? run.id] ?? run; }
+  function tightenCompositionDeadline(run, attempt, node, current = resolveCompositionLimits(run.organizationId ?? 'personal', run.projectId)) {
+    if (!attempt.startedAt || !attempt.deadlineAt) return Date.parse(attempt.deadlineAt);
+    const maxDuration = Math.min(attempt.limits?.maxDeadlineMs ?? current.effective.maxDeadlineMs,
+      current.effective.maxDeadlineMs, node.deadlineMs ?? Number.POSITIVE_INFINITY);
+    const deadline = Date.parse(attempt.startedAt) + maxDuration;
+    if (Number.isFinite(deadline) && deadline < Date.parse(attempt.deadlineAt)) attempt.deadlineAt = new Date(deadline).toISOString();
+    return Date.parse(attempt.deadlineAt);
+  }
   function initializeComposition(run, node, limits) {
     const { workflow } = workflowNode(run, node.id);
     const instance = run.flow.instance;
@@ -815,7 +861,7 @@ export function createWorkflows({
     const makeSlot = (slotId, ref, digest, childWorkflow, input, index) => ({ slotId, runId: randomUUID(), index, workflow: structuredClone(ref),
       workflowDigest: digest, inputSchemaDigest: activityDigest(childWorkflow.runInputSchema),
       resultSchemaDigest: activityDigest(childWorkflow.resultSchema), input: structuredClone(input),
-      inputDigest: activityDigest(input), status: 'queued', reservedAt: now() });
+      inputDigest: activityDigest(input), status: 'queued', childRunCreated: false, reservedAt: now() });
     if (node.kind === 'child') {
       const child = childDefinition(run, node.workflow, node.workflowDigest);
       slots.push(makeSlot('call', node.workflow, node.workflowDigest, child.normalized,
@@ -827,11 +873,13 @@ export function createWorkflows({
           resolveChildInput(run, workflow, child.normalized, branch.inputBindings), index));
       }
     } else {
-      const itemSchema = Object.hasOwn(node.itemsBinding, 'literal') ? schemaFromJson(node.itemsBinding.literal) : bindingSchema(workflow, node.itemsBinding);
+      const isLiteral = Object.hasOwn(node.itemsBinding, 'literal');
+      const itemSchema = isLiteral ? null : bindingSchema(workflow, node.itemsBinding);
       const items = Object.hasOwn(node.itemsBinding, 'literal') ? structuredClone(node.itemsBinding.literal) : resolveBinding(run, workflow, node.itemsBinding);
       if (!Array.isArray(items) || items.length > node.maxItems || items.length > pinnedLimits.maxMapItems)
         throw new Error(`${node.name}: input item count exceeds its declared or current policy limit.`);
-      validateActivityValue(items, itemSchema, `${node.name}.items`);
+      if (isLiteral) items.forEach(item => schemaFromJson(item));
+      else validateActivityValue(items, itemSchema, `${node.name}.items`);
       const child = childDefinition(run, node.workflow, node.workflowDigest);
       for (const [index, item] of items.entries()) {
         const bindings = { ...node.inputBindings, [node.itemField]: { literal: item }, ...(node.indexField ? { [node.indexField]: { literal: index } } : {}) };
@@ -839,28 +887,52 @@ export function createWorkflows({
           resolveChildInput(run, workflow, child.normalized, bindings), index));
       }
     }
+    const compensations = (node.compensations ?? []).map(compensation => {
+      const child = childDefinition(run, compensation.workflow, compensation.workflowDigest);
+      const input = resolveChildInput(run, workflow, child.normalized, compensation.inputBindings);
+      if (activityDigest(child.normalized.runInputSchema) !== compensation.inputSchemaDigest ||
+          activityDigest(child.normalized.resultSchema) !== compensation.resultSchemaDigest)
+        throw new Error(`${node.name}/${compensation.id}: pinned compensation contract changed.`);
+      return { id: compensation.id, trigger: compensation.trigger, slotId: `compensation:${compensation.id}`,
+        runId: randomUUID(), workflow: structuredClone(compensation.workflow), workflowDigest: compensation.workflowDigest,
+        inputSchemaDigest: compensation.inputSchemaDigest, resultSchemaDigest: compensation.resultSchemaDigest,
+        input: structuredClone(input), inputDigest: activityDigest(input), status: 'queued', childRunCreated: false, reservedAt: now() };
+    });
     const budget = root.compositionBudget ??= { reservedDescendantRuns: 0, mapItems: 0 };
-    if (budget.reservedDescendantRuns + slots.length > pinnedLimits.maxDescendantRuns)
+    if (budget.reservedDescendantRuns + slots.length + compensations.length > pinnedLimits.maxDescendantRuns)
       throw new Error(`${node.name}: descendant run budget is exhausted.`);
-    budget.reservedDescendantRuns += slots.length;
+    if (node.kind === 'map' && budget.mapItems + slots.length > pinnedLimits.maxMapItems)
+      throw new Error(`${node.name}: root map-item budget is exhausted.`);
+    budget.reservedDescendantRuns += slots.length + compensations.length;
     if (node.kind === 'map') budget.mapItems += slots.length;
     attempt = { id: `${run.id}:${instance}`, nodeId: node.id, instance, kind: node.kind,
       ...(node.join ? { join: node.join } : {}), status: 'queued', startedAt: now(), deadlineAt: new Date(Date.parse(now()) + deadlineMs).toISOString(),
       rootRunId: root.id, limits: pinnedLimits, policy: { organizationRevision: limits.organization.revision, projectRevision: limits.project.revision },
-      outputSchema: structuredClone(node.outputSchema), slots };
+      outputSchema: structuredClone(node.outputSchema), slots, compensations };
     run.compositionAttempts.push(attempt);
-    if (run.compositionAttempts.length > 100) run.compositionAttempts = run.compositionAttempts.slice(-100);
     return attempt;
   }
+  function childHasUncertainExecution(child) {
+    return child?.attempt?.status === 'uncertain' ||
+      child?.attempt?.effect === 'durable-effect' && child.attempt.dispatchStarted === true &&
+        !['completed', 'failed'].includes(child.attempt.status) ||
+      Boolean(linkedExecutionState(child)?.uncertain);
+  }
+  function childHasUnresolvedExecution(child) {
+    const execution = linkedExecutionState(child);
+    return childHasUncertainExecution(child) || Boolean(execution?.busy || execution?.uncertain);
+  }
   function childActive(child) {
-    return !['completed', 'failed', 'cancelled'].includes(child?.flow?.status) || child?.attempt?.status === 'uncertain';
+    return !['completed', 'failed', 'cancelled'].includes(child?.flow?.status) || childHasUnresolvedExecution(child);
   }
   function isCoordinatorOnlyRun(run) {
     if (!run?.independentRun || !run.attempt?.instance || !run.attempt?.nodeId) return false;
     const ownsComposition = (run.compositionAttempts ?? []).some(attempt =>
       attempt.nodeId === run.attempt.nodeId && attempt.instance === run.attempt.instance &&
       !['completed', 'failed', 'cancelled'].includes(attempt.status));
-    return ownsComposition && !run.attempt.dispatchStarted && !run.assignment;
+    const linkedExecution = linkedExecutionState(run);
+    return ownsComposition && !run.attempt.dispatchStarted && !run.assignment &&
+      !linkedExecution?.busy && !linkedExecution?.uncertain;
   }
   function activeCompositionReservations() {
     return Object.values(state.workflowRuns ?? {}).filter(run => Boolean(run.parentComposition) && childActive(run) &&
@@ -868,6 +940,65 @@ export function createWorkflows({
         runId: run.id, organizationId: run.organizationId, projectId: run.projectId,
         rootRunId: run.compositionRootRunId,
       }));
+  }
+  function compositionDispatchBlock(run) {
+    if (!run?.parentComposition) return null;
+    const root = compositionRoot(run);
+    const current = resolveCompositionLimits(run.organizationId ?? 'personal', run.projectId);
+    const rootPin = root.compositionPolicyPin;
+    const admitted = run.parentComposition.policyLimits ?? {};
+    const rootLimits = rootPin?.limits ?? admitted;
+    const limits = Object.fromEntries(Object.keys(current.effective).map(key => [key,
+      Math.min(current.effective[key], admitted[key] ?? current.effective[key], rootLimits[key] ?? current.effective[key])]));
+    const usage = activeCompositionReservations();
+    const orgActive = usage.filter(value => value.organizationId === run.organizationId).length;
+    const projectActive = usage.filter(value => value.projectId === run.projectId).length;
+    const rootActive = usage.filter(value => value.rootRunId === root.id).length;
+    const orgLimit = Math.min(current.organization.limits.maxActiveDescendantRuns,
+      rootPin?.organization?.limits?.maxActiveDescendantRuns ?? current.organization.limits.maxActiveDescendantRuns);
+    const projectLimit = Math.min(current.project.limits?.maxActiveDescendantRuns ?? orgLimit,
+      current.organization.limits.maxActiveDescendantRuns,
+      rootPin?.organization?.limits?.maxActiveDescendantRuns ?? current.organization.limits.maxActiveDescendantRuns,
+      rootPin?.project?.limits?.maxActiveDescendantRuns ?? orgLimit,
+      orgLimit);
+    if ((root.compositionBudget?.reservedDescendantRuns ?? 0) > limits.maxDescendantRuns ||
+        (root.compositionBudget?.mapItems ?? 0) > limits.maxMapItems ||
+        orgActive > orgLimit || projectActive > projectLimit || rootActive > limits.maxActiveDescendantsPerRoot)
+      return 'Current workflow composition policy does not permit another descendant dispatch.';
+    const parent = state.workflowRuns?.[run.parentComposition.parentRunId];
+    const attempt = parent?.compositionAttempts?.find(value => value.nodeId === run.parentComposition.parentNodeId &&
+      value.instance === run.parentComposition.parentInstance);
+    const node = attempt && compositeNodeFor(attempt, parent);
+    if (attempt && node) {
+      if (run.parentComposition.role === 'compensation') {
+        if (!attempt.forwardOutcome || attempt.forwardOutcome.trigger !== run.parentComposition.trigger)
+          return 'The declared compensation is not eligible for dispatch.';
+        const compensation = attempt.compensations?.find(value => value.id === run.parentComposition.compensationId);
+        if (compensation?.startedAt) {
+          const duration = Math.min(attempt.limits.maxDeadlineMs, current.effective.maxDeadlineMs, node.deadlineMs ?? Number.POSITIVE_INFINITY);
+          const tightened = Date.parse(compensation.startedAt) + duration;
+          if (Number.isFinite(tightened) && (!Number.isFinite(Date.parse(compensation.deadlineAt)) || tightened < Date.parse(compensation.deadlineAt)))
+            compensation.deadlineAt = new Date(tightened).toISOString();
+        }
+        if (!compensation || Number.isFinite(Date.parse(compensation.deadlineAt)) && Date.parse(now()) >= Date.parse(compensation.deadlineAt))
+          return 'The declared compensation deadline has expired.';
+      } else if (parent.flow?.status === 'cancelled' || attempt.deadlineExpired || attempt.failurePolicyTriggered ||
+          attempt.winnerSlotId && attempt.winnerSlotId !== run.parentComposition.slotId) {
+        return 'The parent composition no longer permits this child dispatch.';
+      }
+      const latestDeadline = tightenCompositionDeadline(parent, attempt, node, current);
+      if (run.parentComposition.role !== 'compensation' && Number.isFinite(latestDeadline) && Date.parse(now()) >= latestDeadline)
+        return 'Current workflow composition deadline has expired.';
+      const activeCount = [...attempt.slots, ...(attempt.compensations ?? [])].filter(slot => {
+        if (!['started', 'uncertain', 'starting', 'waiting'].includes(slot.status)) return false;
+        const child = state.workflowRuns?.[slot.runId];
+        return childActive(child) && !isCoordinatorOnlyRun(child);
+      }).length;
+      const localLimit = Math.min(node.maxConcurrent ?? 1, attempt.limits.maxConcurrentChildren,
+        current.effective.maxConcurrentChildren);
+      if (activeCount > localLimit) return 'Current workflow composition concurrency does not permit another descendant dispatch.';
+    }
+    return null;
   }
   function compositionContext(run) { return run.sessionId ? state.sessions?.[run.sessionId] : run; }
   function compositeNodeFor(attempt, run) { return normalize(run.workflow).nodes.find(value => value.id === attempt.nodeId); }
@@ -884,6 +1015,7 @@ export function createWorkflows({
     if (!run || run.flow?.nodeId !== nodeId || run.flow?.instance !== instance || !['ready', 'running'].includes(run.flow.status)) return [];
     const { node } = workflowNode(run, nodeId);
     const attempt = initializeComposition(run, node, limits);
+    tightenCompositionDeadline(run, attempt, node, limits);
     if (run.flow.status === 'ready') {
       const context = compositionContext(run);
       await engine.beginComposition(context, instance);
@@ -922,16 +1054,40 @@ export function createWorkflows({
         activityDigest(childInfo.normalized.runInputSchema) !== slot.inputSchemaDigest ||
         activityDigest(childInfo.normalized.resultSchema) !== slot.resultSchemaDigest)
       throw new Error('Reserved child input or pinned workflow changed.');
+    const reservations = activeCompositionReservations();
+    const organizationActive = reservations.filter(value => value.organizationId === run.organizationId).length;
+    const projectActive = reservations.filter(value => value.projectId === run.projectId).length;
+    const rootActive = reservations.filter(value => value.rootRunId === root.id).length;
+    const organizationLimit = Math.min(limits.organization.limits.maxActiveDescendantRuns,
+      root.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? limits.organization.limits.maxActiveDescendantRuns);
+    const projectLimit = Math.min(limits.project.limits?.maxActiveDescendantRuns ?? organizationLimit,
+      limits.organization.limits.maxActiveDescendantRuns,
+      root.compositionPolicyPin?.project?.limits?.maxActiveDescendantRuns ?? organizationLimit,
+      root.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? organizationLimit);
+    const rootLimit = Math.min(effective.maxActiveDescendantsPerRoot,
+      root.compositionPolicyPin?.limits?.maxActiveDescendantsPerRoot ?? effective.maxActiveDescendantsPerRoot);
+    const localActive = [...attempt.slots, ...(attempt.compensations ?? [])].filter(value => ['started', 'uncertain', 'starting', 'waiting'].includes(value.status) &&
+      value.slotId !== slotId && childActive(state.workflowRuns?.[value.runId]) && !isCoordinatorOnlyRun(state.workflowRuns?.[value.runId])).length;
+    const composite = compositeNodeFor(attempt, run);
+    const localLimit = Math.min(composite?.maxConcurrent ?? effective.maxConcurrentChildren, effective.maxConcurrentChildren);
+    if (organizationActive >= organizationLimit || projectActive >= projectLimit || rootActive >= rootLimit || localActive >= localLimit)
+      return { admitted: false, reason: 'Current workflow composition capacity is occupied.' };
     slot.status = 'starting'; slot.admittedAt = now();
     await save();
+    if (run.flow?.status === 'cancelled' || run.flow?.nodeId !== nodeId || run.flow?.instance !== instance ||
+        attempt.failurePolicyTriggered || attempt.deadlineExpired || attempt.winnerSlotId && attempt.winnerSlotId !== slotId) {
+      slot.status = 'cancelled'; slot.completedAt = now(); await save();
+      return { admitted: false, reason: 'The parent composition changed before the reserved child started.' };
+    }
     const existing = state.workflowRuns?.[slot.runId];
     if (existing) {
       if (existing.parentComposition?.parentRunId !== run.id || existing.parentComposition?.slotId !== slot.slotId ||
           existing.runInputDigest !== slot.inputDigest || activityDigest(existing.workflow) !== slot.workflowDigest)
         throw new Error('Reserved child run identity conflicts with an existing run.');
       slot.status = ['completed', 'failed', 'cancelled'].includes(existing.flow?.status) ? existing.flow.status : 'started';
+      slot.childRunCreated = true;
       await save();
-      return structuredClone(existing);
+      return { admitted: true, run: structuredClone(existing) };
     }
     try {
       const child = await startRunInternal({ projectId: run.projectId, organizationId: run.organizationId,
@@ -939,8 +1095,13 @@ export function createWorkflows({
         reservedRunId: slot.runId, parentComposition: { parentRunId: run.id, parentNodeId: nodeId,
           parentInstance: instance, slotId: slot.slotId, rootRunId: attempt.rootRunId, policyLimits: effective } });
       slot.status = 'started'; slot.startedAt = now();
+      slot.childRunCreated = true;
+      if (run.flow?.status === 'cancelled') {
+        slot.cancelRequestedAt = now();
+        try { await engine.pause(compositionContext(child), true); } catch { /* child may already be terminal */ }
+      }
       await save();
-      return child;
+      return { admitted: true, run: child };
     } catch (error) {
       slot.status = 'failed'; slot.message = String(error?.message ?? error).slice(0, 500); slot.failedAt = now();
       await save();
@@ -950,13 +1111,57 @@ export function createWorkflows({
   async function settleCompositions() {
     for (const parent of Object.values(state.workflowRuns ?? {})) for (const attempt of parent.compositionAttempts ?? []) {
       const node = compositeNodeFor(attempt, parent);
-      if (!node || attempt.status === 'completed' || attempt.status === 'failed') continue;
+      if (!node) continue;
+      const transitionBlock = parent.compositionTransitionBlocked;
+      if (transitionBlock?.nodeId === attempt.nodeId && transitionBlock?.instance === attempt.instance &&
+          !['running', 'cancelled'].includes(parent.flow?.status)) continue;
+      // The mapped output receipt is saved before the workflow transition. If
+      // restart lands in that gap, continue the same pinned node from its
+      // cached receipt; never recompute children or dispatch their effects.
+      if (['completed', 'waiting_authority'].includes(attempt.status) && parent.flow?.status === 'running' &&
+          parent.flow.nodeId === attempt.nodeId && parent.flow.instance === attempt.instance) {
+        const receipt = parent.activityOutputs?.[attempt.nodeId];
+        if (receipt?.status === 'completed' && receipt.instance === attempt.instance && receipt.digest === attempt.outputDigest) {
+          try {
+            await authorizeCompositionTransition(parent);
+          } catch (error) {
+            attempt.status = 'waiting_authority';
+            attempt.message = String(error?.message ?? 'The stored workflow principal is no longer authorized.').slice(0, 500);
+            parent.compositionTransitionBlocked = { nodeId: attempt.nodeId, instance: attempt.instance };
+            parent.flow.resumeStatus = 'ready'; parent.flow.status = 'paused'; parent.status = 'paused';
+            await save();
+            continue;
+          }
+          if (parent.flow?.status !== 'running' || parent.flow.nodeId !== attempt.nodeId || parent.flow.instance !== attempt.instance)
+            continue;
+          if (transitionBlock?.nodeId === attempt.nodeId && transitionBlock?.instance === attempt.instance) {
+            delete parent.compositionTransitionBlocked;
+            delete attempt.message;
+            attempt.status = 'completed';
+          }
+          try {
+            await engine.finishAutomated(compositionContext(parent), attempt.instance, 'success', structuredClone(receipt.value));
+          } catch (error) {
+            if (parent.flow?.status === 'running' && parent.flow.nodeId === attempt.nodeId && parent.flow.instance === attempt.instance) {
+              attempt.status = 'failed';
+              attempt.message = String(error?.message ?? 'The saved composition result could not advance its run.').slice(0, 1000);
+              await save();
+              await engine.fail(compositionContext(parent), attempt.instance, error);
+            }
+          }
+        }
+        continue;
+      }
+      if (['completed', 'failed', 'cancelled'].includes(attempt.status)) continue;
       const canceledParent = parent.flow?.status === 'cancelled';
-      const expired = Date.parse(attempt.deadlineAt) <= Date.parse(now());
+      const expired = tightenCompositionDeadline(parent, attempt, node) <= Date.parse(now());
       if (expired) attempt.deadlineExpired = true;
       if (canceledParent || attempt.deadlineExpired || attempt.failurePolicyTriggered || attempt.winnerSlotId) {
         for (const slot of attempt.slots) {
-          if (slot.status === 'queued') { slot.status = 'cancelled'; slot.completedAt = now(); continue; }
+          if (slot.status === 'queued' || slot.status === 'starting' && !state.workflowRuns?.[slot.runId]) {
+            slot.status = 'cancelled'; slot.completedAt = now(); continue;
+          }
+          if (!canceledParent && attempt.winnerSlotId && slot.slotId === attempt.winnerSlotId) continue;
           const child = state.workflowRuns?.[slot.runId];
           if (child && childActive(child) && !slot.cancelRequestedAt) {
             slot.cancelRequestedAt = now();
@@ -972,7 +1177,13 @@ export function createWorkflows({
         if (!child) continue;
         if (child.attempt?.instance) slot.instance = child.attempt.instance;
         if (child.attempt?.effectKey) slot.effectKey = child.attempt.effectKey;
-        if (child.flow?.status === 'completed' && child.result && child.resultDigest) {
+        if (childHasUnresolvedExecution(child)) {
+          if (childHasUncertainExecution(child)) {
+            slot.status = 'uncertain'; slot.message = child.attempt?.message ?? 'Child effect requires reconciliation.';
+          } else {
+            slot.status = 'started'; slot.message = 'Child execution is still stopping before its reservation can be released.';
+          }
+        } else if (child.flow?.status === 'completed' && child.result && child.resultDigest) {
           const childWorkflow = normalize(child.workflow);
           try {
             const outputSchema = node.kind === 'map' ? node.outputSchema.items
@@ -981,14 +1192,18 @@ export function createWorkflows({
             slot.status = 'completed'; slot.output = mapped; slot.outputDigest = activityDigest(mapped);
             slot.completedAt ??= child.flow.history?.at(-1)?.at ?? now();
           } catch (error) { slot.status = 'failed'; slot.message = String(error?.message ?? error).slice(0, 500); }
-        } else if (child.attempt?.status === 'uncertain' || child.flow?.status === 'interrupted') {
-          slot.status = 'uncertain'; slot.message = child.attempt?.message ?? 'Child effect requires reconciliation.';
+        } else if (child.flow?.status === 'interrupted' || child.flow?.status === 'paused' || child.flow?.status === 'ready') {
+          // A resource/policy hold is not an uncertain effect. Keep the same
+          // reserved child and wait for its owner to resume the pinned attempt.
+          slot.status = 'started'; slot.message = child.queueReason ?? 'Child is waiting for its declared resources or current policy.';
         } else if (['failed', 'cancelled'].includes(child.flow?.status)) {
           slot.status = child.flow.status; slot.message = child.attempt?.message;
         }
       }
       if (attempt.join === 'first_success' && !attempt.winnerSlotId) {
-        const successes = attempt.slots.filter(slot => slot.status === 'completed')
+        const deadline = Date.parse(attempt.deadlineAt);
+        const successes = attempt.slots.filter(slot => slot.status === 'completed' &&
+          Number.isFinite(Date.parse(slot.completedAt)) && Date.parse(slot.completedAt) <= deadline)
           .sort((a, b) => String(a.completedAt).localeCompare(String(b.completedAt)) || a.index - b.index);
         if (successes.length) attempt.winnerSlotId = successes[0].slotId;
       }
@@ -1000,10 +1215,155 @@ export function createWorkflows({
       await save();
       const allSettled = attempt.slots.every(slot => ['completed', 'failed', 'cancelled'].includes(slot.status));
       const winner = attempt.winnerSlotId && attempt.slots.find(slot => slot.slotId === attempt.winnerSlotId);
-      const shouldSucceed = node.kind === 'child' ? attempt.slots[0]?.status === 'completed'
+      const maySucceed = node.kind === 'child' ? attempt.slots[0]?.status === 'completed'
         : node.kind === 'parallel' && node.join === 'first_success' ? Boolean(winner?.status === 'completed') && allSettled
           : node.kind === 'map' && node.failurePolicy === 'collect_errors' ? allSettled : allSettled && attempt.slots.every(slot => slot.status === 'completed');
+      const deadlineWinner = node.kind === 'parallel' && node.join === 'first_success' && winner?.status === 'completed' &&
+        Number.isFinite(Date.parse(winner.completedAt)) && Date.parse(winner.completedAt) <= Date.parse(attempt.deadlineAt);
+      const shouldSucceed = maySucceed && !attempt.failurePolicyTriggered && (!attempt.deadlineExpired || deadlineWinner);
       if (!shouldSucceed && !allSettled) continue;
+      // Once a forward outcome has selected compensation, that trigger is
+      // immutable. An operator may cancel the parent while its failure
+      // compensation is active, but that must not switch the owner to a
+      // different compensation branch or abandon the existing receipt.
+      const compensationTrigger = attempt.forwardOutcome?.trigger ?? (canceledParent ? 'cancelled' : !shouldSucceed ? 'failure' : null);
+      const matchingCompensations = compensationTrigger
+        ? (attempt.compensations ?? []).filter(value => value.trigger === compensationTrigger)
+        : [];
+      if (canceledParent && attempt.forwardOutcome) {
+        // Do not start a new cancellation-trigger branch after a different
+        // forward outcome already committed compensation. All still-uncreated
+        // slots are safe to close; any existing child remains individually
+        // tracked below until its owner reports a terminal receipt.
+        for (const compensation of attempt.compensations ?? []) {
+          if (!state.workflowRuns?.[compensation.runId] && ['queued', 'starting'].includes(compensation.status)) {
+            compensation.status = 'cancelled'; compensation.completedAt = now();
+          }
+        }
+      }
+      if (matchingCompensations.length) {
+        attempt.forwardOutcome ??= { trigger: canceledParent ? 'cancelled' : 'failure', status: canceledParent ? 'cancelled' : 'failed', at: now(),
+          ...(attempt.message ? { message: String(attempt.message).slice(0, 500) } : {}) };
+        if (!canceledParent && !['failed', 'cancelled'].includes(parent.flow?.status) && parent.flow?.nodeId === attempt.nodeId && parent.flow?.instance === attempt.instance) {
+          attempt.status = 'compensating';
+          await save();
+          await engine.fail(compositionContext(parent), attempt.instance, new Error('A composed child did not complete successfully.'));
+        }
+        let blocked = false;
+        for (const compensation of matchingCompensations) {
+          const child = state.workflowRuns?.[compensation.runId];
+          if (canceledParent && attempt.forwardOutcome?.trigger === 'failure') {
+            if (!child && ['queued', 'starting'].includes(compensation.status)) {
+              compensation.status = 'cancelled'; compensation.completedAt = now();
+            } else if (child && childActive(child) && !compensation.cancelRequestedAt) {
+              compensation.cancelRequestedAt = now();
+              // A durable attempt which may have reached its adapter stays in
+              // its exact reconciliation state. Pausing the workflow engine
+              // would overwrite that receipt state with `cancelled` and make
+              // an applied/not-applied callback look like a forbidden late
+              // mutation. Pre-dispatch children can be safely stopped.
+              if (!childHasUncertainExecution(child)) {
+                try { await engine.pause(compositionContext(child), true); }
+                catch { /* a concurrently settled child keeps its canonical receipt */ }
+              }
+            }
+          }
+          if (compensation.startedAt) {
+            const current = resolveCompositionLimits(parent.organizationId ?? 'personal', parent.projectId);
+            const duration = Math.min(attempt.limits.maxDeadlineMs, current.effective.maxDeadlineMs, node.deadlineMs ?? Number.POSITIVE_INFINITY);
+            const tightened = Date.parse(compensation.startedAt) + duration;
+            if (Number.isFinite(tightened) && (!Number.isFinite(Date.parse(compensation.deadlineAt)) || tightened < Date.parse(compensation.deadlineAt)))
+              compensation.deadlineAt = new Date(tightened).toISOString();
+            if (Number.isFinite(Date.parse(compensation.deadlineAt)) && Date.parse(now()) >= Date.parse(compensation.deadlineAt)) {
+              compensation.deadlineExpired = true;
+              compensation.message = 'The declared compensation deadline has expired.';
+              if (!child) compensation.status = 'failed';
+              else if (!childHasUnresolvedExecution(child) && !child.attempt?.dispatchStarted &&
+                  !['completed', 'failed', 'cancelled'].includes(child.flow?.status) && child.flow?.instance) {
+                try { await engine.fail(compositionContext(child), child.flow.instance, new Error(compensation.message)); }
+                catch { /* a concurrently changed child keeps its canonical state */ }
+              }
+            }
+          }
+          if (child) {
+            if (child.attempt?.instance) compensation.instance = child.attempt.instance;
+            if (child.attempt?.effectKey) compensation.effectKey = child.attempt.effectKey;
+            if (childHasUnresolvedExecution(child)) {
+              if (childHasUncertainExecution(child)) {
+                compensation.status = 'uncertain'; compensation.message = child.attempt?.message ?? 'Compensation effect requires reconciliation.';
+              } else {
+                compensation.status = 'started'; compensation.message = 'Compensation execution is still stopping.';
+              }
+              blocked = true;
+            } else if (child.flow?.status === 'completed' && child.resultDigest) {
+              compensation.status = 'completed'; compensation.outputDigest = child.resultDigest;
+              compensation.completedAt ??= child.flow.history?.at(-1)?.at ?? now();
+            } else if (['failed', 'cancelled'].includes(child.flow?.status)) {
+              compensation.status = child.flow.status; compensation.message = child.attempt?.message;
+            } else {
+              compensation.status = child.flow?.status === 'waiting_gate' || child.flow?.status === 'waiting_event' ? 'waiting' : 'started';
+              blocked = true;
+            }
+          }
+          if (!child && compensation.status === 'starting') compensation.status = 'queued';
+          if (compensation.status === 'queued' && !blocked) {
+            try {
+              await authorizeCompositionTransition(parent);
+              const limits = resolveCompositionLimits(parent.organizationId ?? 'personal', parent.projectId);
+              const currentEffective = limits.effective;
+              const pinned = attempt.limits;
+              const effective = Object.fromEntries(Object.keys(currentEffective).map(key => [key, Math.min(currentEffective[key], pinned[key])]));
+              const root = compositionRoot(parent);
+              const active = activeCompositionReservations();
+              const orgLimit = Math.min(limits.organization.limits.maxActiveDescendantRuns,
+                root.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? limits.organization.limits.maxActiveDescendantRuns);
+              const projectLimit = Math.min(limits.project.limits?.maxActiveDescendantRuns ?? orgLimit,
+                limits.organization.limits.maxActiveDescendantRuns,
+                root.compositionPolicyPin?.project?.limits?.maxActiveDescendantRuns ?? orgLimit,
+                root.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? orgLimit);
+              if (active.filter(value => value.organizationId === parent.organizationId).length >= orgLimit ||
+                  active.filter(value => value.projectId === parent.projectId).length >= projectLimit ||
+                  active.filter(value => value.rootRunId === root.id).length >= effective.maxActiveDescendantsPerRoot) {
+                compensation.message = 'Compensation is queued by current composition capacity.';
+                blocked = true;
+                continue;
+              }
+              const childInfo = childDefinition(parent, compensation.workflow, compensation.workflowDigest);
+              if (activityDigest(compensation.input) !== compensation.inputDigest ||
+                  activityDigest(childInfo.normalized.runInputSchema) !== compensation.inputSchemaDigest ||
+                  activityDigest(childInfo.normalized.resultSchema) !== compensation.resultSchemaDigest)
+                throw new Error('Reserved compensation input or pinned workflow changed.');
+              if ((root.compositionBudget?.reservedDescendantRuns ?? 0) > effective.maxDescendantRuns) {
+                compensation.message = 'Compensation is held by the current descendant budget.';
+                blocked = true;
+                continue;
+              }
+              compensation.status = 'starting'; compensation.admittedAt = now(); await save();
+              if (parent.flow?.status === 'cancelled' && compensation.trigger !== 'cancelled') {
+                compensation.status = 'cancelled'; compensation.completedAt = now(); await save(); continue;
+              }
+              const started = await startRunInternal({ projectId: parent.projectId, organizationId: parent.organizationId,
+                principal: parent.executionPrincipal ?? parent.principal, workflow: childInfo.definition, runInput: compensation.input,
+                reservedRunId: compensation.runId, parentComposition: { parentRunId: parent.id, parentNodeId: attempt.nodeId,
+                  parentInstance: attempt.instance, slotId: compensation.slotId, rootRunId: attempt.rootRunId,
+                  policyLimits: effective, role: 'compensation', compensationId: compensation.id, trigger: compensation.trigger } });
+              compensation.status = 'started'; compensation.startedAt = now();
+              compensation.childRunCreated = true;
+              compensation.deadlineAt = new Date(Date.parse(now()) + Math.min(effective.maxDeadlineMs, node.deadlineMs ?? effective.maxDeadlineMs)).toISOString();
+              blocked = true;
+              await save();
+              if (!started) blocked = true;
+            } catch (error) {
+              compensation.status = 'failed'; compensation.message = String(error?.message ?? error).slice(0, 500);
+            }
+          }
+        }
+        const allCompensationsSettled = matchingCompensations.every(value => ['completed', 'failed', 'cancelled'].includes(value.status));
+        attempt.compensationStatus = allCompensationsSettled ? 'completed' : blocked ? 'waiting' : 'running';
+        attempt.status = allCompensationsSettled ? attempt.forwardOutcome.status : 'compensating';
+        await save();
+        continue;
+      }
       if (!shouldSucceed) {
         attempt.status = canceledParent ? 'cancelled' : 'failed';
         await save();
@@ -1043,7 +1403,8 @@ export function createWorkflows({
       parent.activityOutputs[node.id] = { status: 'completed', activityRef: { id: `workflow.${node.kind}`, revision: 1 },
         schema: structuredClone(node.outputSchema), value: checked, digest: attempt.outputDigest, instance: attempt.instance };
       await save();
-      await engine.finishAutomated(compositionContext(parent), attempt.instance, 'success', checked);
+      if (parent.flow?.status === 'running' && parent.flow.nodeId === attempt.nodeId && parent.flow.instance === attempt.instance)
+        await engine.finishAutomated(compositionContext(parent), attempt.instance, 'success', checked);
     }
   }
   function slotOutputBindings(node, slot) {
@@ -1114,11 +1475,16 @@ export function createWorkflows({
       const visibleRuns = Object.values(state.workflowRuns ?? {}).filter((run) =>
         (!organizationId || run.organizationId === organizationId) &&
         (!scope?.projectIds || scope.projectIds.includes(run.projectId)));
+      const unresolved = (run) => childHasUnresolvedExecution(run) ||
+        (run.attempt?.effect === 'durable-effect' && run.attempt.dispatchStarted && !['completed', 'failed'].includes(run.attempt.status)) ||
+        (run.compositionAttempts ?? []).some(attempt => [...(attempt.slots ?? []), ...(attempt.compensations ?? [])].some(slot =>
+          slot.status === 'uncertain' || childHasUnresolvedExecution(state.workflowRuns?.[slot.runId])));
       const scopedDecisions = Object.entries(state.automationDecisionLedger).filter(([, decision]) =>
         (!organizationId || decision.organizationId === organizationId) &&
         (!scope?.projectIds || scope.projectIds.includes(decision.projectId)));
       const terminal = (run) => ['completed', 'cancelled'].includes(run.flow?.status ?? run.status);
-      visibleRuns.sort((a, b) => Number(terminal(a)) - Number(terminal(b)) || String(b.updatedAt ?? b.startedAt ?? '').localeCompare(String(a.updatedAt ?? a.startedAt ?? '')));
+      visibleRuns.sort((a, b) => Number(!unresolved(a)) - Number(!unresolved(b)) ||
+        Number(terminal(a)) - Number(terminal(b)) || String(b.updatedAt ?? b.startedAt ?? '').localeCompare(String(a.updatedAt ?? a.startedAt ?? '')));
       return {
         workflowRunsTotal: visibleRuns.length,
         workflowRunsTruncated: visibleRuns.length > 200,
@@ -1246,6 +1612,7 @@ export function createWorkflows({
     startRun: startRunInternal,
     compositionCandidates: compositionCandidateRuns,
     activeCompositionReservations,
+    compositionDispatchBlock,
     async prepareComposition(runId, nodeId, instance, limits) {
       return queuedCompositionSlots(runId, nodeId, instance, limits);
     },
@@ -1773,7 +2140,7 @@ export function createWorkflows({
       const terminal = terminalNodeId ?? run.flow?.previousNodeId ?? run.flow?.nodeId;
       const bindings = workflow.resultBindingsByTerminal?.[terminal] ?? workflow.resultBindings;
       if (!bindings) throw new Error(`Workflow terminal ${terminal} has no declared result mapping.`);
-      const sources = runBindingSources(run, workflow, { responseId, submission: outcome === 'success' ? submission : undefined });
+      const sources = runBindingSources(run, workflow, { responseId, submission });
       const result = resolveActivityBindings(bindings, workflow.resultSchema, {
         ...sources,
       });
@@ -1918,20 +2285,9 @@ export function createWorkflows({
       if (!descriptor) throw new Error(`${node.name}: pinned activity revision is unavailable.`);
       if (node.activity) {
         responseId ??= (run.activityReservations ?? []).find(item => item.id === run.attempt?.reservationId)?.humanResponseId;
-        const approvedResponseIds = new Set((run.flow?.history ?? []).map(item => item.humanResponseId).filter(Boolean));
-        if (responseId) approvedResponseIds.add(responseId);
-        const humanResponses = {};
-        for (const response of run.humanResponses ?? []) {
-          if (!approvedResponseIds.has(response.id)) continue;
-          const sourceNode = normalize(run.workflow).nodes.find(item => item.id === response.nodeId);
-          humanResponses[response.nodeId] = { value: response.values, schema: humanFormSchema(sourceNode) };
-        }
-        return resolveActivityBindings(node.bindings ?? {}, descriptor.inputSchema, {
-        runInputSchema: normalize(run.workflow).runInputSchema,
-        runInput: run.runInput ?? {},
-        activityOutputs: run.activityOutputs ?? {},
-        humanResponses,
-      });
+        const workflow = normalize(run.workflow);
+        return resolveActivityBindings(node.bindings ?? {}, descriptor.inputSchema,
+          runBindingSources(run, workflow, { responseId }));
       }
       return structuredClone(node.input ?? {});
     },
@@ -2178,6 +2534,17 @@ export function createWorkflows({
       if (!run) return null;
       return structuredClone(publicRun(run, leaseIdentity, projection));
     },
+    readResult(id) {
+      const run = state.workflowRuns?.[id];
+      if (!run || run.flow?.status !== 'completed' || !run.resultDigest || !run.result)
+        throw new Error('A completed typed workflow result is not available.');
+      const workflow = normalize(run.workflow);
+      if (!workflow.resultSchema) throw new Error('This workflow has no declared result contract.');
+      const result = validateActivityValue(run.result, workflow.resultSchema, 'workflow.result');
+      const resultDigest = activityDigest(result);
+      if (resultDigest !== run.resultDigest) throw new Error('The stored workflow result does not match its immutable digest.');
+      return structuredClone({ result, resultDigest });
+    },
     async readEvidence(run, evidenceId, contextFiles) {
       if (!run || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
       const evidence = (run.workflowEvidence ?? []).find(item => item.id === evidenceId);
@@ -2343,6 +2710,12 @@ function publicRun(run, leaseIdentity, projection = {}) {
     ...(attempt.effectKey ? { effectKey: attempt.effectKey } : {}),
     ...((attempt.legacyAction || !attempt.activityRef) && attempt.effectResult ? { effectResult: structuredClone(attempt.effectResult) } : {}),
   });
+  const compositionHistory = run.compositionAttempts ?? [];
+  const compositionPageSize = 50;
+  const compositionOffset = Number.isInteger(projection.compositionOffset)
+    ? Math.min(projection.compositionOffset, Math.max(0, compositionHistory.length - 1))
+    : Math.max(0, compositionHistory.length - compositionPageSize);
+  const compositionPage = compositionHistory.slice(compositionOffset, compositionOffset + compositionPageSize);
   return {
     id: run.id, organizationId: run.organizationId, projectId: run.projectId,
     ...(run.sessionId ? { sessionId: run.sessionId } : {}), independent: Boolean(run.independentRun),
@@ -2352,6 +2725,7 @@ function publicRun(run, leaseIdentity, projection = {}) {
     startedAt: run.flow?.startedAt ?? run.startedAt, updatedAt: run.updatedAt ?? run.flow?.history?.at(-1)?.at ?? run.flow?.startedAt ?? run.startedAt,
     ...(run.runInputDigest ? { runInputDigest: run.runInputDigest } : {}),
     ...(run.resultDigest ? { resultDigest: run.resultDigest } : {}),
+    ...(typeof projection.workflowRunResultEligible === 'boolean' ? { workflowRunResultEligible: projection.workflowRunResultEligible } : {}),
     ...(run.flow?.humanTaskDueAt ? { humanTaskDueAt: run.flow.humanTaskDueAt, humanTaskDue: Date.parse(run.flow.humanTaskDueAt) <= Date.now() } : {}),
     ...(typeof projection.humanTaskReviewerEligible === 'boolean' ? { humanTaskReviewerEligible: projection.humanTaskReviewerEligible } : {}),
     ...(run.humanResponses?.length && projection.visibleHumanResponseIds?.length ? {
@@ -2368,18 +2742,28 @@ function publicRun(run, leaseIdentity, projection = {}) {
         activityRef: structuredClone(reservation.activityRef), inputDigest: reservation.inputDigest, intentDigest: reservation.intentDigest,
         digest: reservation.digest }] } : {};
     })(),
-    ...(run.compositionAttempts?.length ? { compositions: run.compositionAttempts.slice(-50).map(value => ({
+    ...(compositionHistory.length ? { compositions: compositionPage.map(value => ({
       nodeId: value.nodeId, instance: value.instance, kind: value.kind, status: value.status,
       ...(value.join ? { join: value.join } : {}), ...(value.deadlineAt ? { deadlineAt: value.deadlineAt } : {}),
       ...(value.winnerSlotId ? { winnerSlotId: value.winnerSlotId } : {}),
+      ...(value.forwardOutcome ? { forwardOutcome: structuredClone(value.forwardOutcome) } : {}),
+      ...(value.compensationStatus ? { compensationStatus: value.compensationStatus } : {}),
       policy: { ...structuredClone(value.policy), limits: structuredClone(value.limits) },
       slots: value.slots.slice(0, 100).map(slot => ({ slotId: slot.slotId, runId: slot.runId,
         ...(Number.isInteger(slot.index) ? { index: slot.index } : {}), status: slot.status,
+        childRunCreated: Boolean(slot.childRunCreated),
         workflowId: slot.workflow.id, workflowVersion: slot.workflow.version, inputDigest: slot.inputDigest,
         ...(slot.outputDigest ? { outputDigest: slot.outputDigest } : {}), ...(slot.effectKey ? { effectKey: slot.effectKey } : {}),
         ...(slot.instance ? { instance: slot.instance } : {}), ...(slot.message ? { message: String(slot.message).slice(0, 500) } : {}) })),
-      slotsTruncated: value.slots.length > 100, ...(value.outputDigest ? { outputDigest: value.outputDigest } : {}),
-    })), compositionAttemptsTotal: run.compositionAttempts.length } : {}),
+      slotsTruncated: value.slots.length > 100,
+      compensations: (value.compensations ?? []).map(slot => ({ id: slot.id, trigger: slot.trigger, slotId: slot.slotId,
+        runId: slot.runId, status: slot.status, childRunCreated: Boolean(slot.childRunCreated),
+        workflowId: slot.workflow.id, workflowVersion: slot.workflow.version, inputDigest: slot.inputDigest,
+        ...(slot.outputDigest ? { outputDigest: slot.outputDigest } : {}), ...(slot.effectKey ? { effectKey: slot.effectKey } : {}),
+        ...(slot.instance ? { instance: slot.instance } : {}), ...(slot.message ? { message: String(slot.message).slice(0, 500) } : {}) })),
+      ...(value.outputDigest ? { outputDigest: value.outputDigest } : {}),
+    })), compositionAttemptsTotal: compositionHistory.length, compositionAttemptsOffset: compositionOffset,
+      compositionAttemptsHasMore: compositionOffset + compositionPage.length < compositionHistory.length } : {}),
     attempt: safeAttempt(run.attempt), activityAttempts: [...(run.activityAttempts ?? []).slice(-50).map(safeAttempt), ...(run.attempt ? [safeAttempt(run.attempt)] : [])],
     history: (run.flow?.history ?? []).slice(-200).map(({ nodeId, instance, outcome, at, to, submission, humanResponseId, humanMaterialDigest }) => ({ nodeId, instance, outcome, at, to,
       ...(typeof submission?.summary === 'string' ? { summary: submission.summary.slice(0, 500) } : {}),

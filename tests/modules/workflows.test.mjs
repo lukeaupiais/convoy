@@ -542,6 +542,40 @@ test('workflow publication rejects unsupported human choices while preserving su
   ]);
 });
 
+test('workflow and draft IDs cannot be silently rehomed across project ownership scopes', async () => {
+  const state = { workflows: [], workflowDrafts: {} };
+  const registry = createWorkflowRegistry({ state, save: async () => {}, normalize: normalizeWorkflow, validateBindings: () => {} });
+  const base = { id: 'inventory-review', name: 'Inventory review', nodes: [{ id: 'done', name: 'Done', kind: 'agent', prompt: 'Complete the configured work.' }], edges: [] };
+  const organizationTemplate = await registry.publish({ organizationId: 'org-a', workflow: base });
+  const original = JSON.stringify(state.workflows[0]);
+  await assert.rejects(registry.publish({ organizationId: 'org-a', projectId: 'project-a', baseVersion: organizationTemplate.version,
+    workflow: { ...base, name: 'Rehomed into project' } }), /not available/);
+  assert.equal(state.workflows.length, 1);
+  assert.equal(JSON.stringify(state.workflows[0]), original);
+  const revision = await registry.publish({ organizationId: 'org-a', baseVersion: organizationTemplate.version,
+    workflow: { ...base, name: 'Organization revision' } });
+  assert.equal(revision.version, 2, 'the original owner can still publish an organization-scoped revision');
+
+  const draft = await registry.saveDraft({ organizationId: 'org-a', projectId: 'project-a', workflow: { ...base, id: 'project-draft' } });
+  const storedDraft = JSON.stringify(state.workflowDrafts['project-draft']);
+  await assert.rejects(registry.saveDraft({ organizationId: 'org-a', projectId: 'project-b', revision: draft.revision,
+    workflow: { ...base, id: 'project-draft', name: 'Rehomed draft' } }), /not available/);
+  assert.equal(JSON.stringify(state.workflowDrafts['project-draft']), storedDraft);
+});
+
+test('published and draft workflow IDs share one immutable owner scope', async () => {
+  const state = { workflows: [], workflowDrafts: {} };
+  const registry = createWorkflowRegistry({ state, save: async () => {}, normalize: normalizeWorkflow, validateBindings: () => {} });
+  const base = { name: 'Scoped workflow', nodes: [{ id: 'done', name: 'Done', kind: 'agent', prompt: 'Complete the configured work.' }], edges: [] };
+  await registry.saveDraft({ organizationId: 'org-a', projectId: 'project-a', workflow: { ...base, id: 'draft-first' } });
+  await assert.rejects(registry.publish({ organizationId: 'org-a', projectId: 'project-b', workflow: { ...base, id: 'draft-first' } }), /not available/);
+  const published = await registry.publish({ organizationId: 'org-a', projectId: 'project-a', workflow: { ...base, id: 'published-first' } });
+  await assert.rejects(registry.saveDraft({ organizationId: 'org-a', projectId: 'project-b', workflow: { ...base, id: 'published-first' } }), /not available/);
+  const sameOwnerDraft = await registry.saveDraft({ organizationId: 'org-a', projectId: 'project-a', workflow: { ...base, id: 'published-first' } });
+  assert.equal(sameOwnerDraft.revision, 1);
+  assert.equal(state.workflows.find(value => value.id === published.id).projectId, 'project-a');
+});
+
 test('legacy pending reply gates bind the exact source only when history and evidence agree', async () => {
   const makeSession = id => ({ id, messages: [], checks: [], events: [], workflow: normalizeWorkflow({ id, name: 'Legacy reply', nodes: [
     { id: 'draft', name: 'Draft', kind: 'agent', submissionRequirements: { success: { fields: ['message'], minReferences: 0 } } },

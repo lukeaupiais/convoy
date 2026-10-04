@@ -290,7 +290,7 @@ export function validateActivityBindings(node, workflow, activityCatalog) {
       const sourceIndex = nodeIndex.get(binding.from.nodeId);
       const source = workflow.nodes[sourceIndex];
       if (Object.keys(binding.from).some(field => !['kind', 'nodeId', 'path'].includes(field)) || typeof binding.from.nodeId !== 'string' ||
-          sourceIndex === undefined || !canReach(source.id, node.id) || source.kind !== 'agent' || !source.submissionRequirements ||
+          sourceIndex === undefined || !canReach(source.id, node.id) || source.kind !== 'agent' ||
           !Array.isArray(binding.from.path) || binding.from.path.some(part => !safePathPart(part)))
         throw new Error(`${node.name}: agent submission reference must name a prior configured submission field.`);
       const sourceSchema = activitySchemaAtPath(agentSubmissionSchema(source), binding.from.path);
@@ -350,14 +350,6 @@ export function validateWorkflowResultBindings(workflow, activityCatalog) {
       for (const edge of workflow.edges) if (edge.from === current) todo.push(edge.to);
     }
     return false;
-  };
-  const agentSubmissionSchema = node => {
-    const fields = [...new Set(Object.values(node.submissionRequirements ?? {}).flatMap(rule => rule.fields))];
-    if (!fields.length) throw new Error(`Workflow result source ${node.id} has no configured structured submission.`);
-    return { type: 'object', properties: {
-      summary: { type: 'string', minLength: 1, maxLength: 4000 },
-      details: { type: 'object', properties: Object.fromEntries(fields.map(field => [field, { type: 'string', minLength: 1, maxLength: 4000 }])), required: [], additionalProperties: false },
-    }, required: ['summary'], additionalProperties: false };
   };
   const terminalNodes = workflow.nodes.filter(node => !workflow.edges.some(edge => edge.from === node.id));
   const mappings = workflow.resultBindingsByTerminal ?? {};

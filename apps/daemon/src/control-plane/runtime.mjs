@@ -99,6 +99,7 @@ const orchestrationCommands = [
   'diff',
   'ensure',
   'getWorkflowRun',
+  'getWorkflowRunResult',
   'heartbeat',
   'openTicketConversation',
   'prepareWorkflowActivity',
@@ -1169,6 +1170,14 @@ export async function createRuntime({
       if (!run?.principal || !run.projectId) throw new Error('Workflow activity has no governed project identity.');
       await identity.assertPrincipalActive(run.principal);
       await requireProjectPermission(run.projectId, 'project.execute', run.principal);
+      if (phase === 'dispatch' && run.parentComposition) {
+        const blocked = workflows?.compositionDispatchBlock(run);
+        if (blocked) {
+          const error = new Error(blocked);
+          error.code = 'ACTIVITY_RESOURCES_UNAVAILABLE';
+          throw error;
+        }
+      }
       const reservationWorkflow = approvalReservation ? normalizeWorkflow(run.workflow) : null;
       const reservationGate = reservationWorkflow?.nodes.find(candidate => candidate.id === approvalReservation.gateNodeId);
       const reservedRoute = approvalReservation && run.flow?.status === 'waiting_gate' &&
@@ -1251,6 +1260,7 @@ export async function createRuntime({
     save: () => store.save(), event});
   engine = createWorkflowEngine({
     state,
+    now: eventNow,
     getWorkflowOwner: () => workflows,
     prepareStart: (session, options) => {
       const entry = (session.workflow?.nodes ?? session.workflow?.steps ?? []).find(node => node.id === session.workflow?.entryNode);
@@ -1269,6 +1279,12 @@ export async function createRuntime({
       const principal = run.principal;
       await identity.assertPrincipalActive(principal);
       await requireProjectPermission(run.projectId, 'project.execute', principal);
+      const compositionBlock = workflows?.compositionDispatchBlock(run);
+      if (compositionBlock) {
+        const error = new Error(compositionBlock);
+        error.code = 'ACTIVITY_RESOURCES_UNAVAILABLE';
+        throw error;
+      }
       const created = await conversations.create({ requestId: `workflow-agent:${run.id}`, projectId: run.projectId, title: run.workflow.name });
       const session = state.sessions[created.sessionId];
       ensureAgentSessions(session);
@@ -1402,6 +1418,14 @@ export async function createRuntime({
           await identity.assertPrincipalActive(principal);
           await requireProjectPermission(s.projectId, 'project.execute', principal);
           s.executionPrincipal = structuredClone(principal);
+          const compositionBlock = workflows?.compositionDispatchBlock(state.workflowRuns?.[s.id]);
+          if (compositionBlock) {
+            s.queueReason = compositionBlock;
+            s.flow.resumeStatus = 'ready'; s.flow.status = 'paused'; s.status = 'paused';
+            if (s.attempt?.instance === instance) await workflows.markActivityResourceWait(s, { instance, nodeId: step.id, status: 'ready' });
+            else await store.save();
+            return;
+          }
           // Do not turn an unavailable "none" policy into a durable pin on a
           // workflow run. A later authorized project/ticket placement may let
           // this same waiting run acquire the resource. Placement.prepare
@@ -1477,6 +1501,19 @@ export async function createRuntime({
         await identity.assertPrincipalActive(executionPrincipal);
         if (s.projectId)
           await requireProjectPermission(s.projectId, 'project.execute', executionPrincipal);
+        const compositionBlock = workflows?.compositionDispatchBlock(runOwner);
+        if (compositionBlock) {
+          blocked = true;
+          s.status = 'queued'; s.queueReason = compositionBlock;
+          if (instance) {
+            s.flow.status = 'ready';
+            await workflows.markActivityResourceWait(s, { instance, nodeId: step.id, status: 'ready' });
+          } else {
+            s.queuedInput = input;
+            await store.save();
+          }
+          return;
+        }
         await store.save();
         const activityDescriptor = step?.activity ? activityCatalog.get(step.activity) : null;
         const activityNeedsRunner = activityDescriptor?.resources.location === 'runner' ||
@@ -1602,23 +1639,12 @@ export async function createRuntime({
           continue;
         }
         for (const slot of slots) {
-          const root = state.workflowRuns?.[slot.rootRunId];
-          const orgCurrent = limits.organization.limits.maxActiveDescendantRuns;
-          const projectCurrent = limits.project.limits?.maxActiveDescendantRuns ?? orgCurrent;
-          const orgPinned = root?.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? orgCurrent;
-          const projectPinned = root?.compositionPolicyPin?.project?.limits?.maxActiveDescendantRuns ?? orgPinned;
-          const active = workflows.activeCompositionReservations();
-          const orgActive = active.filter(run => run.organizationId === slot.organizationId).length;
-          const projectActive = active.filter(run => run.projectId === slot.projectId).length;
-          const rootActive = active.filter(run => run.rootRunId === slot.rootRunId).length;
-          if (orgActive >= Math.min(orgCurrent, orgPinned) || projectActive >= Math.min(projectCurrent, projectPinned)) continue;
-          const rootPinned = root?.compositionPolicyPin?.limits?.maxActiveDescendantsPerRoot ?? limits.effective.maxActiveDescendantsPerRoot;
-          if (rootActive >= Math.min(limits.effective.maxActiveDescendantsPerRoot, rootPinned)) continue;
           try {
             await identity.assertPrincipalActive(slot.principal);
             await requireProjectPermission(slot.projectId, 'project.execute', slot.principal);
-            await workflows.admitCompositionSlot({ runId: slot.runId, nodeId: slot.nodeId, instance: slot.instance,
+            const admission = await workflows.admitCompositionSlot({ runId: slot.runId, nodeId: slot.nodeId, instance: slot.instance,
               slotId: slot.slotId, limits });
+            if (!admission?.admitted) continue;
             started++;
           } catch (error) {
             await workflows.failComposition(slot.runId, slot.nodeId, slot.instance, error.message);
@@ -1920,6 +1946,13 @@ export async function createRuntime({
     eventDescriptors: workflowEventDescriptors,
     validateEventWait: input => work.validateWorkflowWait(input),
     matchEventWaitSource: input => work.matchesWorkflowWait(input),
+    linkedExecutionState: run => {
+      const session = run?.sessionId ? state.sessions?.[run.sessionId] : null;
+      return {
+        busy: Boolean(run?.sessionId && jobs.has(run.sessionId)),
+        uncertain: session?.assignment?.state === 'uncertain' || session?.interruption?.needsReview === true,
+      };
+    },
     now: eventNow,
   });
   configuration = createSessionConfiguration({
@@ -2304,7 +2337,38 @@ export async function createRuntime({
       for (const response of (run.humanResponses ?? []).slice(-50)) {
         if (await workflowReviewerEligible(run, actor, response.nodeId, workflow)) visibleHumanResponseIds.push(response.id);
       }
-      return workflows.readRun(run.id, { client: command.client, actorKey: principalKey(actor) }, { humanTaskReviewerEligible, visibleHumanResponseIds });
+      let workflowRunResultEligible = false;
+      if (run.resultDigest && run.flow?.status === 'completed' && (run.independentRun || run.sessionId)) {
+        try {
+          await identity.assertPrincipalActive(actor);
+          await requireProjectPermission(run.projectId, 'project.execute', actor);
+          if (run.independentRun) {
+            workflowRunResultEligible = run.lease?.expiresAt > Date.now() && run.lease?.client === command.client &&
+              run.lease?.principalKey === principalKey(actor);
+          } else {
+            const session = state.sessions[run.sessionId];
+            workflowRunResultEligible = session?.workflowRunId === run.id && session.lease?.expiresAt > Date.now() &&
+              session.lease?.client === command.client;
+          }
+        } catch { workflowRunResultEligible = false; }
+      }
+      const compositionOffset = command.compositionOffset === undefined ? undefined : Number(command.compositionOffset);
+      if (compositionOffset !== undefined && (!Number.isInteger(compositionOffset) || compositionOffset < 0))
+        throw new Error('Composition history offset must be a non-negative integer.');
+      return workflows.readRun(run.id, { client: command.client, actorKey: principalKey(actor) },
+        { humanTaskReviewerEligible, visibleHumanResponseIds, compositionOffset, workflowRunResultEligible });
+    }
+    if (action === 'getWorkflowRunResult') {
+      const run = workflows.run(command.workflowRunId);
+      if (!run?.projectId || !run.independentRun && !run.sessionId) throw new Error('Workflow run result is not available.');
+      await requireProjectPermission(run.projectId, 'project.execute', actor);
+      if (run.independentRun) workflows.requireRunLease(run, { client: command.client, actorKey: principalKey(actor) });
+      else {
+        const session = state.sessions[run.sessionId];
+        if (!session || session.workflowRunId !== run.id) throw new Error('Session-backed workflow control is unavailable.');
+        await own(session, command.client, actor);
+      }
+      return workflows.readResult(run.id);
     }
     if (['submitWorkflowHumanResponse', 'prepareWorkflowHumanReview', 'captureWorkflowEvidence', 'captureWorkflowActivityReceipt'].includes(action)) {
       const run = workflows.run(command.workflowRunId);

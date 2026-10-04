@@ -1,5 +1,14 @@
 /** Versioned workflow publication and optimistic draft editing. */
 export function createWorkflowRegistry({ state, save, normalize, validateBindings }) {
+  const sameOwnerScope = (left, right) =>
+    (left.organizationId ?? 'personal') === (right.organizationId ?? 'personal') &&
+    (left.teamId ?? null) === (right.teamId ?? null) && (left.projectId ?? null) === (right.projectId ?? null);
+  const assertIdentityScope = (id, value) => {
+    const published = state.workflows.filter(workflow => workflow.id === id);
+    const draft = state.workflowDrafts?.[id]?.workflow;
+    if ([...published, ...(draft ? [draft] : [])].some(existing => !sameOwnerScope(existing, value)))
+      throw new Error('Workflow is not available.');
+  };
   return {
     async publish(command) {
       const value = {
@@ -9,10 +18,8 @@ export function createWorkflowRegistry({ state, save, normalize, validateBinding
         ...(command.projectId ? { projectId: command.projectId } : {}),
       };
       validateBindings(value);
-      const previous = state.workflows.filter((workflow) => workflow.id === value.id).at(-1);
-      if (previous && (previous.organizationId ?? 'personal') !== value.organizationId) {
-        throw new Error('Workflow is not available.');
-      }
+      assertIdentityScope(value.id, value);
+      const previous = state.workflows.filter(workflow => workflow.id === value.id && sameOwnerScope(workflow, value)).at(-1);
       const previousVersion = previous ? previous.version ?? 1 : 0;
       if (command.baseVersion !== undefined && command.baseVersion !== previousVersion)
         throw new Error('Workflow changed in another client. Reload before publishing.');
@@ -36,10 +43,8 @@ export function createWorkflowRegistry({ state, save, normalize, validateBinding
       };
       if (!value || !/^[\w-]{1,80}$/.test(value.id) || JSON.stringify(value).length > 100_000)
         throw new Error('Invalid draft.');
+      assertIdentityScope(value.id, value);
       const previous = state.workflowDrafts[value.id];
-      if (previous && previous.workflow.organizationId !== value.organizationId) {
-        throw new Error('Workflow is not available.');
-      }
       if ((command.revision ?? 0) !== (previous?.revision ?? 0)) {
         throw new Error('Draft changed in another client. Reload first.');
       }

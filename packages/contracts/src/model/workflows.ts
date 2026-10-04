@@ -68,6 +68,7 @@ export type WorkflowCompositionSlot = {
   runId: string;
   index?: number;
   status: string;
+  childRunCreated?: boolean;
   workflowId: string;
   workflowVersion: number;
   inputDigest: string;
@@ -84,8 +85,11 @@ export type WorkflowCompositionAttempt = {
   join?: 'all' | 'first_success';
   deadlineAt?: string;
   winnerSlotId?: string;
+  forwardOutcome?: { trigger: 'failure' | 'cancelled'; status: 'failed' | 'cancelled'; at: string; message?: string };
+  compensationStatus?: string;
   policy: { organizationRevision: number; projectRevision: number; limits: WorkflowCompositionLimits };
   slots: WorkflowCompositionSlot[];
+  compensations?: (WorkflowCompositionSlot & { id: string; trigger: 'failure' | 'cancelled' })[];
   slotsTruncated?: boolean;
   outputDigest?: string;
 };
@@ -110,6 +114,7 @@ export type WorkflowRun = {
   updatedAt?: string;
   runInputDigest?: string;
   resultDigest?: string;
+  workflowRunResultEligible?: boolean;
   humanResponses?: WorkflowHumanResponse[];
   humanResponsesTotal?: number;
   evidence?: WorkflowEvidenceRef[];
@@ -122,6 +127,8 @@ export type WorkflowRun = {
   activityAttempts?: WorkflowActivityAttempt[];
   compositions?: WorkflowCompositionAttempt[];
   compositionAttemptsTotal?: number;
+  compositionAttemptsOffset?: number;
+  compositionAttemptsHasMore?: boolean;
   history: {
     nodeId: string;
     instance?: string;
@@ -230,8 +237,20 @@ export type WorkflowCompositionOutputBinding = { from: string[]; to?: string[] }
 export type WorkflowCompositionBranch = {
   id: string;
   workflow: WorkflowCompositionWorkflowRef;
+  workflowDigest?: string;
+  inputSchemaDigest?: string;
+  resultSchemaDigest?: string;
   inputBindings: Record<string, WorkflowActivityBinding>;
   outputBindings: Record<string, WorkflowCompositionOutputBinding>;
+};
+export type WorkflowCompositionCompensation = {
+  id: string;
+  trigger: 'failure' | 'cancelled';
+  workflow: WorkflowCompositionWorkflowRef;
+  workflowDigest?: string;
+  inputSchemaDigest?: string;
+  resultSchemaDigest?: string;
+  inputBindings: Record<string, WorkflowActivityBinding>;
 };
 export type WorkflowActivityDescriptor = {
   ref: WorkflowActivityRef;
@@ -337,6 +356,7 @@ export type WorkflowStep = {
   outputBindings?: Record<string, WorkflowCompositionOutputBinding>;
   join?: 'all' | 'first_success';
   branches?: WorkflowCompositionBranch[];
+  compensations?: WorkflowCompositionCompensation[];
   maxItems?: number;
   maxConcurrent?: number;
   deadlineMs?: number;

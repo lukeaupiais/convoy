@@ -127,6 +127,18 @@ test('workflow composition limits keep organization and project ceilings separat
   assert.deepEqual(Object.keys(scoped.projects), ['inventory']);
 });
 
+test('stored workflow composition limits fail closed when durable policy data is malformed', async () => {
+  const state = { sessions: {}, runners: [], projects: [{ id: 'project-a', organizationId: 'org-a' }], tickets: [] };
+  const catalog = { project: id => state.projects.find(value => value.id === id), ticket: () => undefined, assertEditable: () => {} };
+  const execution = createExecution({ state, catalog, workExecution: { hasFixedWork: () => false, clearPlacement: () => {} }, save: async () => {} });
+  const defaults = execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'project-a').effective;
+  state.workflowCompositionPolicies.organizations['org-a'] = { revision: 0, limits: { ...defaults, maxDescendantRuns: Number.NaN } };
+  assert.throws(() => execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'project-a'), /Stored organization composition policy maxDescendantRuns/);
+  state.workflowCompositionPolicies.organizations['org-a'] = undefined;
+  state.workflowCompositionPolicies.projects['project-a'] = { organizationId: 'org-a', revision: 1, limits: { ...defaults, maxDescendantRuns: Number.POSITIVE_INFINITY } };
+  assert.throws(() => execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'project-a'), /Stored project composition policy maxDescendantRuns/);
+});
+
 test('organization policy denial stops full system placement before runner dispatch', async () => {
   let decisions = 0;
   const { execution, project, state } = fixture('trusted', async (_session, profileId) => {

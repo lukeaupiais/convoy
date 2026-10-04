@@ -48,14 +48,24 @@ export function createWorkflowCompositionPolicy({ state }) {
 
   function resolveWorkflowCompositionLimits(organizationId, projectId) {
     if (typeof organizationId !== 'string' || !organizationId.trim()) throw new Error('Composition policy organization is required.');
-    const organization = policies.organizations[organizationId] ?? { revision: 0, limits: clone(DEFAULTS) };
+    const storedOrganization = policies.organizations[organizationId];
+    const organization = storedOrganization ?? { revision: 0, limits: clone(DEFAULTS) };
+    if (!organization || typeof organization !== 'object' || Array.isArray(organization) ||
+        !Number.isInteger(organization.revision) || organization.revision < 0)
+      throw new Error('Stored organization composition policy revision is invalid.');
+    const organizationLimits = normalizeLimits(organization.limits, 'Stored organization composition policy');
     if (projectId) projectRecord(projectId, organizationId);
     const projectPolicy = projectId ? policies.projects[projectId] : null;
-    const project = projectPolicy?.organizationId === organizationId
-      ? projectPolicy : { revision: 0, limits: null };
+    let project;
+    if (projectPolicy) {
+      if (typeof projectPolicy !== 'object' || Array.isArray(projectPolicy) || projectPolicy.organizationId !== organizationId ||
+          !Number.isInteger(projectPolicy.revision) || projectPolicy.revision < 1)
+        throw new Error('Stored project composition policy identity or revision is invalid.');
+      project = { revision: projectPolicy.revision, limits: normalizeLimits(projectPolicy.limits, 'Stored project composition policy') };
+    } else project = { revision: 0, limits: null };
     const effective = Object.fromEntries(LIMIT_KEYS.map(key => [key,
-      Math.min(organization.limits[key], project.limits?.[key] ?? organization.limits[key])]));
-    return { organization: { revision: organization.revision, limits: clone(organization.limits) },
+      Math.min(organizationLimits[key], project.limits?.[key] ?? organizationLimits[key])]));
+    return { organization: { revision: organization.revision, limits: clone(organizationLimits) },
       project: { revision: project.revision, limits: project.limits ? clone(project.limits) : null },
       effective, digest: JSON.stringify([organizationId, organization, projectId ?? null, project]) };
   }

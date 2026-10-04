@@ -1,8 +1,9 @@
 # Architecture
 
-Convoy is a central control plane with portable workers. The daemon owns durable
-coordination and credentials; a worker executes repository operations in a local
-or SSH environment; web and CLI clients observe and command the same sessions.
+Convoy is a central control plane for durable automation with optional portable
+workers. The daemon owns durable coordination and credentials; workers execute
+repository operations in a local or SSH environment when a workflow step requires
+them; web and CLI clients observe and command the same runs and sessions.
 
 ```text
 Web / CLI
@@ -57,8 +58,9 @@ Deployment storage, migration, and offline backup are documented in
 ## Ownership boundaries
 
 Authoritative state has one owner. Work owns projects/tickets/boards; workflows
-owns graph definitions and transitions; conversations owns durable dialogue and
-steering; execution owns placement and runner eligibility; library owns capability
+owns graph definitions, run attempts, child reservations, and transitions;
+conversations owns durable dialogue and steering; execution owns placement,
+composition limits, and runner eligibility; library owns capability
 and instruction revisions; knowledge owns wiki collections, page publication and
 retrieval. The control plane can transact across owners but should
 not duplicate their rules.
