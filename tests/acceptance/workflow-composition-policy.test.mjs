@@ -104,15 +104,15 @@ function echoRegistration(barriers) {
   };
 }
 
-async function fixture(t, { workflowActivities = [], beforeClose = [] } = {}) {
+async function fixture(t, { workflowActivities = [], beforeClose = [], generate } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'convoy-workflow-composition-policy-'));
   const options = {
     directory,
     models: [{ id: 'fixture' }],
     auth: { token: async () => 'fixture', status: async () => ({ connected: true }) },
-    generate: async function* () {
+    generate: generate ?? (async function* () {
       assert.fail('No composition-policy setup should invoke a provider.');
-    },
+    }),
     runners: {
       execute: async () => {
         assert.fail('No composition-policy setup should acquire a runner.');
@@ -1708,4 +1708,155 @@ test('revoking the root principal after a descendant write prevents the revoked 
     'the revoked identity cannot dispatch queued work or replay its effect',
   );
   assert.equal((await f.snapshot()).sessions.length, 0);
+});
+
+test('a human-approved agent child waits above current active capacity, then runs once after exact cleanup', async (t) => {
+  const receipts = new Map();
+  const dispatches = [];
+  const registration = durableMapRegistration(receipts, dispatches);
+  let providerCalls = 0;
+  const f = await fixture(t, {
+    workflowActivities: [registration],
+    generate: async function* () {
+      providerCalls += 1;
+      yield {
+        type: 'result',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'toolCall', id: `submit-${providerCalls}`, name: 'submit_step', arguments: {
+            summary: 'Reviewed after capacity became available', outcome: 'success', artifacts: [], references: [],
+          } }],
+          stopReason: 'stop', timestamp: Date.now(),
+        },
+      };
+    },
+  });
+
+  const unknownChild = durableMapChildWorkflow(f.projectA.id, registration.descriptor.ref.id);
+  await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: unknownChild });
+  const unknownParent = mapWorkflow(f.projectA.id, unknownChild.id);
+  unknownParent.nodes[0].maxConcurrent = 1;
+  const publishedUnknownParent = await f.act('saveWorkflow', {
+    projectId: f.projectA.id, workflow: unknownParent,
+  });
+
+  const agentResultSchema = {
+    type: 'object', properties: { summary: { type: 'string', maxLength: 4000 } },
+    required: ['summary'], additionalProperties: false,
+  };
+  const gatedAgent = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: {
+    id: 'capacity-gated-agent-child', name: 'Capacity gated agent child', projectId: f.projectA.id,
+    runInputSchema: { type: 'object', properties: { recordId: { type: 'string', maxLength: 80 } },
+      required: ['recordId'], additionalProperties: false },
+    resultSchema: agentResultSchema,
+    resultBindings: { summary: { from: { kind: 'agent_submission', nodeId: 'assess', path: ['summary'] } } },
+    nodes: [
+      { id: 'review', kind: 'human', name: 'Authorize assessment', humanTask: {
+        outcomes: [
+          { id: 'approve_assessment', label: 'Approve assessment' },
+          { id: 'decline_assessment', label: 'Decline assessment' },
+        ],
+        form: { fields: [{ id: 'reason', label: 'Review note', type: 'text', required: true, minLength: 3, maxLength: 120 }] },
+      } },
+      { id: 'assess', kind: 'agent', model: 'fixture', permissions: 'none', name: 'Assess record',
+        prompt: 'Assess the record and submit a concise summary.', maxRounds: 2,
+        submissionRequirements: { success: { fields: ['summary'], minReferences: 0 } } },
+    ],
+    edges: [{ from: 'review', to: 'assess', outcome: 'approve_assessment' }],
+  } });
+  const agentParent = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: {
+    id: 'capacity-gated-agent-parent', name: 'Capacity gated agent parent', projectId: f.projectA.id,
+    runInputSchema: { type: 'object', properties: { recordId: { type: 'string', maxLength: 80 } },
+      required: ['recordId'], additionalProperties: false },
+    nodes: [{ id: 'assess-child', kind: 'child', name: 'Run reviewed assessment',
+      workflow: { id: gatedAgent.id, version: gatedAgent.version },
+      inputBindings: { recordId: { from: { kind: 'run_input', path: ['recordId'] } } },
+      outputSchema: agentResultSchema, outputBindings: { summary: { from: ['summary'] } } }],
+    edges: [],
+  } });
+
+  await f.act('setWorkflowCompositionPolicy', {
+    organizationId: f.organization.id, baseRevision: 0,
+    limits: { ...defaults, maxActiveDescendantRuns: 2 },
+  });
+  const unknownRoot = await f.act('startWorkflowRun', {
+    projectId: f.projectA.id, workflowId: publishedUnknownParent.id,
+    workflowVersion: publishedUnknownParent.version, runInput: { items: ['held-effect'] },
+  });
+  await waitFor(() => Promise.resolve(dispatches.length), count => count === 1,
+    'the unrelated durable child did not retain its unknown effect');
+  const unknownComposition = await f.readRun(unknownRoot.workflowRunId);
+  const unknownSlot = unknownComposition.compositions[0].slots[0];
+  const unknownRun = await f.readRun(unknownSlot.runId);
+  assert.equal(unknownRun.attempt.status, 'uncertain');
+
+  const agentRoot = await f.act('startWorkflowRun', {
+    projectId: f.projectA.id, workflowId: agentParent.id, workflowVersion: agentParent.version,
+    runInput: { recordId: 'record-29' },
+  });
+  const agentParentRun = await waitFor(() => f.readRun(agentRoot.workflowRunId),
+    run => run.compositions?.[0]?.slots?.[0]?.runId,
+    'the human-gated agent child was not reserved');
+  const agentSlot = agentParentRun.compositions[0].slots[0];
+  const agentRunId = agentSlot.runId;
+  let agentRun = await waitFor(() => f.readRun(agentRunId),
+    run => run.status === 'waiting_gate', 'the agent child did not reach its configured human gate');
+  assert.equal(providerCalls, 0);
+  assert.equal((await f.snapshot()).sessions.length, 0, 'the gate must not allocate an agent session');
+
+  await f.act('setWorkflowCompositionPolicy', {
+    organizationId: f.organization.id, baseRevision: 1,
+    limits: { ...defaults, maxActiveDescendantRuns: 1 },
+  });
+  await f.act('claimWorkflowRun', { workflowRunId: agentRunId });
+  const response = await f.act('submitWorkflowHumanResponse', {
+    workflowRunId: agentRunId, instance: agentRun.instance,
+    values: { reason: 'Capacity checked before dispatch.' },
+  });
+  const review = await f.act('prepareWorkflowHumanReview', {
+    workflowRunId: agentRunId, instance: agentRun.instance,
+    responseId: response.id, outcomeId: 'approve_assessment', targetNodeId: 'assess',
+  });
+  await f.act('decideWorkflowRun', {
+    workflowRunId: agentRunId, instance: agentRun.instance,
+    outcomeId: 'approve_assessment', responseId: response.id, reviewedMaterialDigest: review.materialDigest,
+  });
+  agentRun = await waitFor(() => f.readRun(agentRunId),
+    run => ['paused', 'failed', 'completed'].includes(run.status) || providerCalls > 0,
+    'the approved agent child did not reach a dispatch decision under the reduced active ceiling');
+  assert.equal(agentRun.status, 'paused', JSON.stringify(agentRun));
+  assert.match(agentRun.queueReason ?? '', /capacity|descendant|composition/i);
+  const blockedInstance = agentRun.instance;
+  assert.equal(agentRun.workflowVersion, gatedAgent.version);
+  assert.equal(providerCalls, 0, 'capacity denial occurs before provider generation');
+  assert.equal((await f.snapshot()).sessions.length, 0, 'capacity denial occurs before lazy agent-session creation');
+  assert.equal(dispatches.length, 1, 'no new registered mutation starts while current usage is above policy');
+
+  await f.restart();
+  const recoveredAgent = await f.readRun(agentRunId);
+  assert.equal(recoveredAgent.status, 'paused');
+  assert.equal(recoveredAgent.instance, blockedInstance);
+  assert.equal(recoveredAgent.workflowVersion, gatedAgent.version);
+  assert.equal(providerCalls, 0);
+
+  const recoveredUnknown = await f.readRun(unknownSlot.runId);
+  await f.act('claimWorkflowRun', { workflowRunId: unknownSlot.runId });
+  await f.act('reconcileWorkflowRun', {
+    workflowRunId: unknownSlot.runId, instance: recoveredUnknown.instance,
+    effectKey: recoveredUnknown.attempt.effectKey, resolution: 'applied',
+  });
+  await f.act('claimWorkflowRun', { workflowRunId: agentRunId });
+  await f.act('continueWorkflowRun', { workflowRunId: agentRunId, instance: blockedInstance });
+  agentRun = await waitFor(() => f.readRun(agentRunId),
+    run => run.status === 'completed' || run.status === 'failed',
+    'the exact human-approved child did not resume when active capacity became available');
+  assert.equal(agentRun.status, 'completed', JSON.stringify(agentRun));
+  assert.equal(agentRun.workflowVersion, gatedAgent.version);
+  assert.equal(providerCalls, 1, 'the accepted mock-provider submission runs exactly once');
+  assert.equal(dispatches.length, 1, 'the unrelated unknown effect is reconciled, never replayed');
+  const finalAgentState = await f.readState();
+  assert.equal(finalAgentState.workflowRuns[agentRunId].flow.instance, blockedInstance);
+  assert.equal(finalAgentState.workflowRuns[agentRunId].submissions?.length, 1,
+    'the child retains one accepted submit_step receipt');
+  assert.equal((await f.readRun(agentRoot.workflowRunId)).status, 'completed');
 });
