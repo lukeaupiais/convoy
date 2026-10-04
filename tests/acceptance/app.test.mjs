@@ -6,10 +6,11 @@ import { createApp } from '../../apps/daemon/src/http/app.mjs';
 test('HTTP is a guarded transport over durable runtime and auth ports', async (t) => {
   const commands = [];
   const runtime = {
-    snapshot: async (id) => ({
+    snapshot: async (id, _client, _principal, options) => ({
       auth: { connected: true },
       models: [{ id: 'test-model' }],
       selected: id,
+      view: options?.view,
     }),
     command: async (value) => {
       commands.push(value);
@@ -79,6 +80,8 @@ test('HTTP is a guarded transport over durable runtime and auth ports', async (t
     models: [{ id: 'test-model' }],
   });
   assert.equal((await call('/api/runtime/7')).json().selected, '7');
+  assert.equal((await call('/api/runtime?view=overview')).json().view, 'overview');
+  assert.equal((await call('/api/runtime/7?view=overview')).status, 404);
   assert.deepEqual(
     (await call('/api/runtime', { action: 'heartbeat', client: 'browser-client' })).json(),
     { ok: true, result: { accepted: 'heartbeat' } },

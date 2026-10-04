@@ -191,6 +191,8 @@ export type RuntimeSnapshot = {
   defaultWorkflowId?: string;
   modelChecks: Record<string, ModelCheck>;
   sessions: Session[];
+  /** False when an overview intentionally omits session details. */
+  sessionDetailsIncluded?: boolean;
   models: { id: string }[];
   runners: Runner[];
   workflows: WorkflowDefinition[];

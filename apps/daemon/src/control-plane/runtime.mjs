@@ -3241,14 +3241,14 @@ export async function createRuntime({
         return execution.runnerChannels.validate(input);
       },
     },
-    async snapshot(id, client, authenticatedPrincipal = localPrincipal) {
+    async snapshot(id, client, authenticatedPrincipal = localPrincipal, options = {}) {
       await identity.assertPrincipalActive(authenticatedPrincipal);
       if (id !== undefined) {
         const session = get(id);
         if (!session.projectId) throw new Error('Not authorized.');
         await requireProjectPermission(session.projectId, 'project.read', authenticatedPrincipal);
       }
-      return snapshot(id, client, authenticatedPrincipal);
+      return snapshot(id, client, authenticatedPrincipal, options);
     },
     command(input, authenticatedPrincipal = localPrincipal) {
       const command = validateRuntimeCommand(input);

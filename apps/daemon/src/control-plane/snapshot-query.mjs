@@ -49,7 +49,7 @@ export function createSnapshotQuery({
   allowLegacyProvider = () => true,
   workflowEffectSummaries = () => [],
 }) {
-  return async function snapshot(id, client, principal) {
+  return async function snapshot(id, client, principal, { view } = {}) {
     const scope = await accessScope({ id, client, principal });
     const legacyProviderVisible = await allowLegacyProvider({ principal, scope });
     const moduleState = Object.assign(
@@ -58,7 +58,8 @@ export function createSnapshotQuery({
         moduleSnapshots.map((module) => module.snapshot({ id, client, principal, scope })),
       )),
     );
-    const sessions = (id ? [getSession(id)] : Object.values(state.sessions)).filter(
+    const includeSessionDetails = id !== undefined || view !== 'overview';
+    const sessions = (includeSessionDetails ? (id ? [getSession(id)] : Object.values(state.sessions)) : []).filter(
       (session) => !scope || scope.projectIds.includes(session.projectId),
     );
     const publicSessions = sessions.map(
@@ -153,6 +154,7 @@ export function createSnapshotQuery({
       automationCapabilities,
       automationDecisions,
       sessions: publicSessions,
+      sessionDetailsIncluded: includeSessionDetails,
       auth: legacyProviderVisible
         ? await auth.status()
         : { source: 'unavailable', connected: false, device: { state: 'idle' } },
