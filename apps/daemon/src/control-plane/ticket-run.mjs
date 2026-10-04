@@ -15,15 +15,17 @@ export function createTicketRun({
   pinInstructions,
   event,
   save,
+  actorKey,
   normalizeWorkflow,
   resolveWorkflow,
   digest,
   validateClient,
   now,
 }) {
-  function assertAvailable(session, client) {
+  function assertAvailable(session, client, actor) {
     if (!session) return;
-    if (session.lease && session.lease.expiresAt > Date.now() && session.lease.client !== client) {
+    if (session.lease && session.lease.expiresAt > Date.now() &&
+        (session.lease.client !== client || session.lease.actorKey !== actorKey(actor))) {
       throw new Error(`Session controlled by ${session.lease.label}. Release control there first.`);
     }
     if (jobs.has(session.id)
@@ -46,7 +48,11 @@ export function createTicketRun({
     const prior = state.ticketRunRequests[requestKey];
     if (prior) {
       if (prior.ticketId !== command.ticketId) throw new Error('Run request belongs to another ticket.');
-      return { ...prior, existing: true };
+      const previousActorKey = prior.actorKey ?? actorKey(state.sessions[prior.sessionId]?.executionPrincipal);
+      if (!previousActorKey || previousActorKey !== actorKey(actor))
+        throw new Error('Run request belongs to another authenticated principal.');
+      const { actorKey: _actorKey, ...result } = prior;
+      return { ...result, existing: true };
     }
 
     const ticket = catalog.ticket(command.ticketId);
@@ -66,8 +72,8 @@ export function createTicketRun({
     const selected = command.mode === 'continue' ? state.sessions[command.sessionId] : null;
     if (command.mode === 'continue' && !selected) throw new Error('Choose an existing session.');
     const assigned = sessionFor(ticket);
-    assertAvailable(selected, command.client);
-    assertAvailable(assigned, command.client);
+    assertAvailable(selected, command.client, actor);
+    assertAvailable(assigned, command.client, actor);
 
     if (selected?.projectId && selected.projectId !== ticket.projectId) {
       throw new Error('Session belongs to another project. Start a new session.');
@@ -126,6 +132,7 @@ export function createTicketRun({
     capabilities.pin(session, selectedProfile);
     session.lease = {
       client: command.client,
+      actorKey: actorKey(actor),
       label: 'Ticket execution',
       expiresAt: Date.now() + 90000,
     };
@@ -155,7 +162,7 @@ export function createTicketRun({
       workflowId: workflow.id,
       workflowVersion: workflow.version,
     };
-    state.ticketRunRequests[requestKey] = result;
+    state.ticketRunRequests[requestKey] = { ...result, actorKey: actorKey(actor) };
     event(session, 'ticket_run_requested', {
       ticketId: ticket.id,
       mode: command.mode,

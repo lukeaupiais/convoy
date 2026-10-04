@@ -2096,6 +2096,7 @@ export async function createRuntime({
     pinInstructions,
     event,
     save: () => store.save(),
+    actorKey: principalKey,
     normalizeWorkflow,
     resolveWorkflow: (id, version, projectId) => workflowForProject(state, id, version, projectId),
     digest,
