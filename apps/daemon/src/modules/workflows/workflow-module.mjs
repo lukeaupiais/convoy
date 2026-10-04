@@ -1079,6 +1079,42 @@ export function createWorkflows({
       slot.status = 'cancelled'; slot.completedAt = now(); await save();
       return { admitted: false, reason: 'The parent composition changed before the reserved child started.' };
     }
+    const latest = resolveCompositionLimits(run.organizationId ?? 'personal', run.projectId);
+    const latestEffective = Object.fromEntries(Object.keys(latest.effective).map(key => [key,
+      Math.min(latest.effective[key], pinned[key])]));
+    const latestNode = compositeNodeFor(attempt, run);
+    const latestDeadline = tightenCompositionDeadline(run, attempt, latestNode, latest);
+    if (latestDeadline <= Date.parse(now())) {
+      attempt.deadlineExpired = true;
+      slot.status = 'cancelled'; slot.completedAt = now();
+      await save();
+      return { admitted: false, reason: 'The workflow composition deadline expired before the child started.' };
+    }
+    if ((root.compositionBudget?.reservedDescendantRuns ?? 0) > latestEffective.maxDescendantRuns) {
+      slot.status = 'queued'; await save();
+      return { admitted: false, reason: 'Current descendant policy is below the reserved composition budget.' };
+    }
+    const latestReservations = activeCompositionReservations();
+    const latestOrganizationLimit = Math.min(latest.organization.limits.maxActiveDescendantRuns,
+      root.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? latest.organization.limits.maxActiveDescendantRuns);
+    const latestProjectLimit = Math.min(latest.project.limits?.maxActiveDescendantRuns ?? latestOrganizationLimit,
+      latest.organization.limits.maxActiveDescendantRuns,
+      root.compositionPolicyPin?.project?.limits?.maxActiveDescendantRuns ?? latestOrganizationLimit,
+      root.compositionPolicyPin?.organization?.limits?.maxActiveDescendantRuns ?? latestOrganizationLimit);
+    const latestRootLimit = Math.min(latestEffective.maxActiveDescendantsPerRoot,
+      root.compositionPolicyPin?.limits?.maxActiveDescendantsPerRoot ?? latestEffective.maxActiveDescendantsPerRoot);
+    const latestLocalActive = [...attempt.slots, ...(attempt.compensations ?? [])].filter(value =>
+      ['started', 'uncertain', 'starting', 'waiting'].includes(value.status) && value.slotId !== slotId &&
+      childActive(state.workflowRuns?.[value.runId]) && !isCoordinatorOnlyRun(state.workflowRuns?.[value.runId])).length;
+    const latestLocalLimit = Math.min(latestNode?.maxConcurrent ?? latestEffective.maxConcurrentChildren,
+      latestEffective.maxConcurrentChildren);
+    if (latestReservations.filter(value => value.organizationId === run.organizationId).length >= latestOrganizationLimit ||
+        latestReservations.filter(value => value.projectId === run.projectId).length >= latestProjectLimit ||
+        latestReservations.filter(value => value.rootRunId === root.id).length >= latestRootLimit ||
+        latestLocalActive >= latestLocalLimit) {
+      slot.status = 'queued'; await save();
+      return { admitted: false, reason: 'Current workflow composition capacity is occupied.' };
+    }
     const existing = state.workflowRuns?.[slot.runId];
     if (existing) {
       if (existing.parentComposition?.parentRunId !== run.id || existing.parentComposition?.slotId !== slot.slotId ||
