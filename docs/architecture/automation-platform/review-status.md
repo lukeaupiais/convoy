@@ -1,6 +1,54 @@
 # Automation platform review and verification
 
-## Current status — 2026-10-03
+## Current status — 2026-10-04
+
+All seven implementation slices have completed Luna high delegation, saved specifications, immutable Standards/Spec reviews and independent parent review. All required local architecture/build checks pass; integrated final head2662f3ffcb0d9ffb9a4dace90a301dd52f71c6c5 passes721 tests (710 pass,11 explicit prerequisite skips,0 failures). All PRs are drafts; no merge or production release.
+
+| Slice | Draft PR | Final head | Remote CI |
+| --- | --- | --- | --- |
+| Configured presentation | [28](https://github.com/lukeaupiais/convoy/pull/28) | 23d264ea1712e577739c9c8084cb9911aab89925 | Push and PR checks/system/desktop pass |
+| Adapter message semantics | [29](https://github.com/lukeaupiais/convoy/pull/29) | 38301ef7bc6ba01fee273aba5ba85d3b4111a4b8 | Push and PR checks/system/desktop pass |
+| Independent runs | [30](https://github.com/lukeaupiais/convoy/pull/30) | ebca318c8f330176fa21d1780a06960e3aec9986 | Push and PR checks/system/desktop pass |
+| Activities and typed data | [31](https://github.com/lukeaupiais/convoy/pull/31) | 89d22331c61b48f50f4ab6c9b9e3d4154c19d136 | Push and PR checks/system/desktop pass |
+| Events, schedules and waits | [32](https://github.com/lukeaupiais/convoy/pull/32) | 4c86f5c5d36026b3b2905874acd51f1e42515896 | Push and PR checks/system/desktop pass |
+| Human tasks and evidence | [33](https://github.com/lukeaupiais/convoy/pull/33) | db0d7fb6d9da3d35c491b2bfd3c7726d5f155b75 | Push and PR checks/system/desktop pass |
+| Composition and generic defaults | [34](https://github.com/lukeaupiais/convoy/pull/34) | 2662f3ffcb0d9ffb9a4dace90a301dd52f71c6c5 | Push and PR checks/system/desktop pass |
+
+PR7 exact-head remote runs37177357990 (push) and37177377849 (PR) pass all checks/system/desktop jobs. Remote system721 tests:709 pass,12 explicit prerequisite skips,0 failures; log pr7-2662f3f-remote-system.log.
+
+PR7 root independently reviewed/passed30 causal helper cases (policy14, compensation6, recovery6, defaults4) and every corrective delta. Final reviews: pr7-2662f3f-standards-review.md and pr7-2662f3f-spec-review.md. Root final logs: pr7-2662f3f-parent-{architecture,build,full}.log. Finding28 now requires actor-bound session control at explicit claim and ticket startup; live unbound leases fail closed and current execute permission remains necessary. Existing ticket approval/revision/runner/inspection flows pass. Finding29 composition publication no longer requires an unrelated objective.
+
+Disposable browser proof verifies Inventory and Publication same-project revisions and declared typed event waits, editor JSON context reset, actual composition editing/publication retaining childv1/schema/mappings, session-to-canonical-child navigation, mobile390px history/digests, controlled results and release masking. Earlier failed rehoming and partial automatic-review attempts remain in the audit trail. Named inspector control was later safely identified from a fresh snapshot plus source and used through the same browser tool; no alternate-path bypass. The observation-only Save rejection remains unexecuted.
+
+Phone preview: http://192.168.1.107:5174 at final2662f3f in an isolated checkout/data directory. Both background services active and LAN page/runtime reachable. Final explicit390x844 touch proof: phone-preview-2662f3f-mobile-proof.json; sample Procurement/Publication IDs remain waiting, zero sessions/no leases. Earlier40b9695 typed-form claim/release proof applies to unchanged frontend; root closed all owned pages and released control. Physical-phone connection is unconfirmed. Customer configuration/provider credentials were not copied. Access/stop details: /tmp/convoy-automation-series/phone-preview-access.md.
+
+Original14 dirty UI files match the preserved ui-cleanup.patch byte-for-byte. Root reversible cache relocation and failing checkpoints are retained below. Plan draft27 publishes the final updated specifications and review record. Its exact-head CI is verified separately from implementation acceptance.
+
+## Earlier checkpoint notes
+
+The following preserves chronological evidence; the current status above supersedes old pending/failing statements only for the named checks.
+
+Implementation PRs 1–6 (#28–33) have completed immutable Standards and Spec reviews and passing exact-head push and PR checks/system/desktop CI. The written plan (#27) also passes those jobs at 3990bff2086b31b5058e1a27e2506786eb833bb2. These are draft PRs; nothing is merged or deployed.
+
+PR5 (#32) is accepted at 4c86f5c5d36026b3b2905874acd51f1e42515896. Parent architecture/build and full suite pass: 657 tests, 646 pass, 11 explicit prerequisite skips, zero failures. Remote system: 657 tests, 645 pass, 12 explicit prerequisite skips, zero failures. Evidence: pr5-4c86f5c-parent-full.log and pr5-4c86f5c-remote-system.log. This includes canonical missing-runner recovery, lost-acknowledgment same-run retry, legacy/generic wait isolation, captured historical event status, typed output correlation and custom wait editor preservation.
+
+PR6 (#33) is accepted at db0d7fb6d9da3d35c491b2bfd3c7726d5f155b75. Both immutable review axes, parent architecture/build and full suite pass: 668 tests, 657 pass, 11 explicit prerequisite skips, zero failures. Exact-head push and PR checks/system/desktop all pass (37168235033 and 37168257191). Remote system: 668 tests, 656 pass, 12 explicit prerequisite skips, zero failures. Evidence: pr6-db0d7fb-parent-full.log and pr6-db0d7fb-remote-system.log. Workflows-owned public editing preserves legacy pins while rejecting caller-forged markers. Human material edits synchronously invalidate response/outcome/review; same-task control changes retain only internal drafts and mask them until authorized control returns.
+
+The separate phone preview runs fixed db0d7fb code at http://192.168.1.107:5174 with isolated procurement/publication sample data. Root LAN Chrome390x844 verifies Save/Review, immediate edit invalidation, release masking, reclaim draft-only retention, fresh Save/Review and project-switch clearing; no warnings/errors/overflow or effects. All root leases were released and owned tabs closed. Physical-phone access has not yet been confirmed. Evidence: /tmp/convoy-automation-series/phone-preview-db0d7fb-mobile-draft-proof.json and phone-preview-access.md. No customer configuration or credentials were copied.
+
+PR7 is implementing the remaining full composition scope on accepted PR6: typed child/parallel/map runs, separate current/pinned policy ceilings, exact terminal result provenance, explicit compensation, generic fresh defaults and practical registry-driven wait/composition UI. Luna high owner4 owns backend/contracts/docs/examples; owner6 owns functional UI under pr7-functional-ui-spec.md; helper3 owns independent policy/lifecycle and generic-default acceptance. Root reviews each helper and the owner's UI separately, then requires both final immutable review axes, integrated architecture/build/full suite, browser proof and exact-head remote CI before publication. Root independently reviewed all helper additions and passed30/30 with zero failures/skips: policy14, explicit compensation6, recovery6 and generic defaults4. Backend commits db61d5e5ba4c1bcd49268e9c860187c48ed9717f and9ec0707e72d0fe3482d4b6e3784ec732dab9e430 plus helper2852924f50041a1f320d9e9a285f52ed7af288f4 are committed. Final UI freeze, immutable reviews, integrated full suite and publication/remote CI are pending.
+
+Automatic review rejected Save response in the earlier observation-only session fixture; that action was not executed or retried through another path. Session command acceptance and read-only rendered controls cover that fixture. The rejection does not authorize bypassing its observation-only scope.
+
+A full root filesystem temporarily blocked browser initialization. Root reversibly relocated generated Vite and two hash-verified Electron download caches to tmpfs, retaining original paths with symlinks. No source, user data or active fixture was removed. The original 14 dirty UI files remain preserved.
+
+Latest frozen checkpoint014d60d passes root architecture/build and719 full-suite tests (708 pass,11 prerequisite skips,0 failures). Immutable Standards review is clear. Final Spec review found session-backed lease actor binding (finding28); real root editor publication found composition-only objective validation (finding29). Both are assigned for correction before acceptance/publication. Root causal editor reset proof (finding26) now passes after a correctly identified named close control and source evidence; no alternate interaction path was used.
+
+
+
+These notes retain the chronological audit trail. The explicit current proof above supersedes older pending/failure statements only for the named checks.
+
+Earlier working notes —2026-10-03
 
 Latest root read-back: phone LAN UI/API remain reachable at http://192.168.1.107:5174. PR6 corrective head 2d60d038e089460a432f0c271bef40538cd9222e is Spec-clear; parent architecture/build and 94 corrected checks passed, followed by 51 final module/codec checks with no failures/skips. Final Standards delta and integration onto accepted PR5 remain pending.
 
@@ -389,3 +437,9 @@ PR4 latest exact-head89d2233 read-back: both push and PR checks/system/desktop a
 
 PR4 latest remote system at89d2233:613 tests,601 pass,12 explicit skips,zero failures.
 Logpr4-89d2233-remote-system.log.
+
+PR7 WIP checkpoint full-suite run was interrupted (exit130) after the runner command-supervisor graceful-stop fixture stalled under sandbox process-group signaling. Root identified the exact test child; owner4 stopped only its checkpoint session and root confirmed the child was gone. This is incomplete environmental verification, not a suite pass or a composition failure. Final frozen-head full suite must run with the authorized unrestricted local process support. Root independently passed terminal data-source and retained-lease permission-revocation acceptance2/2 with zero skips/failures (pr7-parent-data-authority-checkpoint.log).
+
+Root unrestricted legacy checkpoint21tests19pass2fail0skip identified two outdated state-migration assertions requiring an implicitly inserted Team delivery template/default. The event/schedule group passes. Owner4 is updating the migration expectations to the authorized generic fresh-default contract while retaining explicit existing publications/defaults and idempotency; restoring the coding seed would violate scope. Artifact: pr7-parent-legacy-defaults-checkpoint.log. These failures remain pending until corrected verification.
+
+Root current-source mobile browser checkpoint at390x844 independently verifies canonical independent and session child navigation, expanded input/output digests, controlled typed result reading and immediate private-result masking after release, without horizontal overflow. Artifacts: pr7-parent-mobile-composition-details-checkpoint.json, pr7-parent-mobile-result-read-checkpoint.json, pr7-parent-mobile-result-release-mask-checkpoint.json and pr7-parent-mobile-session-child-navigation-checkpoint.json. Root released its only synthetic child lease and closed page75. Entire disposable compatibility fixture now contains two plain conversation sessions; no provider/runner/external effect was used for these UI actions. These are WIP checkpoints until final source/build SHA is frozen.

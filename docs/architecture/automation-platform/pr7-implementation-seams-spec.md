@@ -24,6 +24,36 @@ Capture/reuse canonical completed submission/evidence receipts in Workflows; do 
 
 ## Verification
 
-Add focused policy-owner, binding-owner and runtime acceptance coverage. Prove two simultaneous roots respect separate organization/project ceilings, project reductions do not restrict unrelated projects, queued map slots progress when active work completes, unknown effects retain reservations, and revoked/grant-changed principals cannot dispatch or reconcile through descendants.
+Add focused policy-owner, binding-owner and runtime acceptance coverage. Prove two simultaneous roots respect separate organization/project ceilings, project reductions do not restrict unrelated projects, queued map slots progress when active work completes, unknown effects retain reservations, and revoked/grant-changed principals cannot dispatch new descendants or bypass existing reconciliation authority.
 
 Prove custom human outcomes and exact accepted agent details can produce typed child results while stale/uncompleted receipts cannot; optional agents receive separate leases/sessions only when their declared route executes. Preserve the procurement zero-agent and bounded document-map examples, cancellation/restart/compensation tests and genericity audit from the main specification. Root reviews final immutable base/head against both axes before publication.
+
+## Registered wait authoring and compatibility
+
+The final genericity audit must replace the workflow editor's three fixed ticket-event choices and fresh default ticket_message_received/active_ticket assumption. PR5 owns preservation of full wait fields through the editor codec, including event revision, tenant scope, resource identity, correlation, predicates and timeout. PR7 completes practical authoring using registered descriptor data and pinned schemas.
+
+Fresh waits require an explicit selected registered event. Show its declared revision/scope and only meaningful compact resource, correlation, typed condition and timeout controls. Expose bounded descriptor correlation metadata through the owning read contract if currently absent; do not guess which payload fields may correlate. Source selections for run-input or registered upstream outputs follow the existing publication validation. Keep old configured ticket constraints visible only where actual stored data or an explicit Work-owned capability declares them; do not infer semantics from event labels, board names, workType, customer statuses or source owner strings in generic UI. Preserve old alias/node bytes and every unrelated wait field when an operator edits one field.
+
+Browser acceptance must author and save an inventory resource wait and an unrelated publication callback wait, read their exact canonical fields back, reopen/edit without data loss, and retain existing ticket wait editing. Mobile controls fit the viewport without explanatory paragraphs. This is part of the final functional platform UI, not a documentation-only promise.
+
+## Root active capacity and explicit compensation
+
+Keep a separate root-wide active descendant ceiling, default 8, in addition to per-composition concurrency 8, root total descendants 128, and independent organization/project active ceilings 32. Nested compositions share the root active ceiling. Current and pinned minima apply; waiting or uncertain dispatched descendants retain their reservations. Project overrides cannot reduce another project's organization capacity.
+
+Explicit compensation may reference a pinned child workflow rather than introducing a second activity-attempt owner. Validate its exact workflow version, registered activity revision, typed inputs/results, tenant scope, principal, grants and stable compensation role/slot before admission. A required approval uses a declared human gate; never automatically approve it. Resolve possibly applied forward effects before compensating. Uncertain compensation remains uncertain with its own receipt and reservation. Compensation history preserves the original forward outcome and cannot silently replay a mutation.
+
+The graph editor must preserve and render declared child, parallel and map kinds through edits, rather than converting unknown kinds to agent nodes. Run presentation exposes actual canonical child status and meaningful controls without customer terminology or explanatory filler.
+
+## Existing reconciliation authority
+
+Preserve the verified current-operator cleanup seam in tests/acceptance/workflow-run-revocation.test.mjs: a different currently authorized operator with the current actor-bound lease may reconcile an exact existing legacy effect after the stored run principal loses authority. The successor remains paused and cannot dispatch under the revoked principal. A revoked workload itself cannot use this exception. Registered activities retain their existing owner authorization and exact intent/receipt checks; do not broaden them merely to make cleanup easier. No new child, join-dependent successor, compensation or mutation may start under a revoked root principal. Keep the existing regression unchanged and add causal descendant-denial coverage where relevant.
+
+Active capacity measures actual reserved execution, not every nonterminal coordinator record. An effect-free composition waiting only on its own descendants must not exhaust leaf admission capacity and deadlock its queued children. All canonical descendants and queued slots still consume the root total budget. Waiting human/external activities and uncertain effects retain the reservations required by their declared contracts. Verify a nested composition with root/org/project ceilings lower than its total queued descendants actually makes progress and never exceeds its active reservation ceilings.
+
+## Cumulative map item ceiling
+
+maxMapItems=100 bounds both each map and the cumulative number of map item slots reserved under one root. Reserve item usage canonically before launch and reject overflow before creating any slots; never admit a composition that can only remain permanently blocked at dispatch. Current policy reductions prevent new admission/dispatch while preserving exact reconciliation of already dispatched effects.
+
+## Bounded reads and controlled results
+
+Approved public read additions: getWorkflowRun may accept compositionOffset and return at most 50 canonical attempts with total/offset/hasMore, bounded slot projections and childRunCreated. Preserve all authoritative attempts; UI pages older attempts and opens only created children. getWorkflowRunResult requires current project.execute and the exact current actor-bound run/session lease, returning only schema-validated immutable result plus matching digest from Workflows. Result bodies do not enter ordinary project-read snapshots. Deny absent/stale/foreign-actor control and revoked execute authority; UI clears private data on context/control changes and guards late async reads. Shared contracts remain data shapes and HTTP does not decide authorization.

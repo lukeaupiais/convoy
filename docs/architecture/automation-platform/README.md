@@ -1,6 +1,6 @@
 # Automation platform PR series
 
-Status: specified for implementation and review, 2026-10-02. No deployment or merge is authorized
+Status: seven implementation drafts reviewed and verified, 2026-10-04. No deployment or merge is authorized
 by this plan. Draft PR publication is part of delivery; root reviews and verifies each PR.
 
 ## Objective
@@ -40,6 +40,16 @@ Root reviews each final diff and publishes the draft after the two review axes c
 - [Human tasks and evidence](pr6-interface-design.md)
 - [Composition](pr7-interface-design.md)
 - [Composition implementation seams](pr7-implementation-seams-spec.md)
+- [Composition policy/lifecycle acceptance](pr7-policy-lifecycle-acceptance-spec.md)
+- [Functional composition and wait UI](pr7-functional-ui-spec.md)
+- [Fresh-platform acceptance](pr7-generic-defaults-acceptance-spec.md)
+- [Compensation acceptance](pr7-compensation-acceptance-spec.md)
+- [Recovery acceptance](pr7-recovery-acceptance-spec.md)
+- [Final immutable review](pr7-final-review-spec.md)
+- [Parent composition findings](pr7-parent-review-findings.md)
+- [Human-task mobile correction](pr6-mobile-render-correction-spec.md)
+- [Public definition editing correction](pr6-public-edit-correction-spec.md)
+- [Human material edit invalidation](pr6-material-edit-invalidation-spec.md)
 
 These proposals guide implementation; they are not proof of delivered behavior.
 The [review record](review-status.md) distinguishes implemented checks from pending work.
@@ -91,3 +101,7 @@ weaken checks. Do not add filler UI copy. Do not push, merge, deploy, or message
 root will review commits, publish draft PRs, and verify remote CI. Commit only scoped changes.
 Each handoff identifies base/head commits, spec path, changed ownership, tests/results,
 compatibility behavior, and known limitations. Ask root about genuine specification conflicts.
+
+- [PR7 final immutable reviews and parent verification](pr7-final-review-spec.md)
+
+- [PR7 recovery and bounded projections acceptance](pr7-recovery-acceptance-spec.md)
