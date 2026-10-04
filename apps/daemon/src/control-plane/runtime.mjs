@@ -971,6 +971,8 @@ export async function createRuntime({
     await requireLinkedWorkflowLease(s, client, actor);
     if (!s.lease || s.lease.expiresAt < Date.now() || s.lease.client !== client)
       throw new Error('Claim session control first. Another terminal or tab may own it.');
+    if (s.lease.actorKey && s.lease.actorKey !== principalKey(actor))
+      throw new Error('Session control belongs to another authenticated principal.');
     s.lease.expiresAt = Date.now() + 90000;
   }
   function idle(s) {
@@ -2348,7 +2350,8 @@ export async function createRuntime({
           } else {
             const session = state.sessions[run.sessionId];
             workflowRunResultEligible = session?.workflowRunId === run.id && session.lease?.expiresAt > Date.now() &&
-              session.lease?.client === command.client;
+              session.lease?.client === command.client && session.lease?.actorKey === principalKey(actor) &&
+              run.principal && principalKey(run.principal) === principalKey(actor);
           }
         } catch { workflowRunResultEligible = false; }
       }
@@ -2366,6 +2369,9 @@ export async function createRuntime({
       else {
         const session = state.sessions[run.sessionId];
         if (!session || session.workflowRunId !== run.id) throw new Error('Session-backed workflow control is unavailable.');
+        if (!run.principal || principalKey(run.principal) !== principalKey(actor) ||
+            session.lease?.actorKey !== principalKey(actor))
+          throw new Error('Session-backed workflow result control belongs to its stored principal.');
         await own(session, command.client, actor);
       }
       return workflows.readResult(run.id);
@@ -2913,13 +2919,18 @@ export async function createRuntime({
     if (action === 'claim') {
       clientId(command.client);
       await requireLinkedWorkflowLease(s, command.client, actor);
-      if (s.lease && s.lease.expiresAt > Date.now() && s.lease.client !== command.client)
+      const linkedRun = s.workflowRunId ? workflows.run(s.workflowRunId) : null;
+      if (linkedRun?.principal && principalKey(linkedRun.principal) !== principalKey(actor))
+        throw new Error('The linked workflow run is controlled by its stored execution principal.');
+      if (s.lease && s.lease.expiresAt > Date.now() &&
+          (s.lease.client !== command.client || s.lease.actorKey && s.lease.actorKey !== principalKey(actor)))
         throw new Error(
           `Session controlled by ${s.lease.label}. Release it there or wait for the 90-second lease to expire.`,
         );
       s.lease = {
         id: randomUUID(),
         client: command.client,
+        actorKey: principalKey(actor),
         label: text(command.label ?? 'Client', 60),
         expiresAt: Date.now() + 90000,
       };
