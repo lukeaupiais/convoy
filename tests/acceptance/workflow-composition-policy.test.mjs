@@ -879,6 +879,13 @@ test('nested coordinators consume descendant budget but do not deadlock per-root
       (value) => value.nodeId === 'map-leaves',
     );
     assert.equal(outerComposition.slots[0].status, 'started');
+    const reservedDescendantRuns = (await f.readState()).workflowRuns[workflowRunId]
+      .compositionBudget.reservedDescendantRuns;
+    assert.equal(
+      reservedDescendantRuns,
+      3,
+      'the coordinator and both stable leaf slots consume the total descendant budget, including the queued leaf',
+    );
     assert.equal(
       nestedComposition.slots.filter((slot) => slot.status === 'uncertain').length,
       rootLimit,
@@ -935,6 +942,11 @@ test('nested coordinators consume descendant budget but do not deadlock per-root
       `root cap ${rootLimit} did not complete after nested exact receipts settled`,
     );
     assert.equal(settled.status, 'completed');
+    assert.equal(
+      (await f.readState()).workflowRuns[workflowRunId].compositionBudget.reservedDescendantRuns,
+      reservedDescendantRuns,
+      'starting queued work and completing children must not reserve the same descendant slots twice',
+    );
     assert.equal(dispatches.length, 2);
     assert.deepEqual(dispatches.map((entry) => entry.input.item).sort(), [
       `cap-${rootLimit}-leaf-1`,
