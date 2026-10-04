@@ -94,6 +94,39 @@ test('standalone run tenancy comes from authoritative project and run, including
   assert.equal((await f.snapshot(a)).workflowRuns.find(value => value.id === workflowRunId).status, 'waiting_gate');
 });
 
+test('run detail projects lease control for the authenticated actor as well as the shared client', async t => {
+  const f = await fixture(t);
+  const a = f.principals['reviewer-a'];
+  const b = f.principals['reviewer-b'];
+  const { workflowRunId } = await f.act('startWorkflowRun', {
+    projectId: f.project.id,
+    workflowId: 'publication-review',
+    workflowVersion: 1,
+  }, a);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const { workflowRunId: laterRunId } = await f.act('startWorkflowRun', {
+    projectId: f.project.id,
+    workflowId: 'publication-review',
+    workflowVersion: 1,
+  }, a);
+  await f.act('claimWorkflowRun', { workflowRunId }, a);
+
+  const owned = await f.act('getWorkflowRun', { workflowRunId }, a);
+  const otherActor = await f.act('getWorkflowRun', { workflowRunId }, b);
+  assert.equal(owned.lease.ownedByCurrentCaller, true);
+  assert.equal(otherActor.lease.ownedByCurrentCaller, false);
+  assert.equal(owned.lease.principalKey, undefined);
+  assert.equal(otherActor.lease.principalKey, undefined);
+
+  const snapshot = await f.snapshot(a);
+  const leasedSnapshotIndex = snapshot.workflowRuns.findIndex((run) => run.id === workflowRunId);
+  const leasedSnapshotRun = snapshot.workflowRuns[leasedSnapshotIndex];
+  assert.ok(snapshot.workflowRuns.some((run) => run.id === laterRunId));
+  assert.ok(leasedSnapshotRun);
+  assert.ok(leasedSnapshotIndex > 0);
+  assert.equal('ownedByCurrentCaller' in leasedSnapshotRun.lease, false);
+});
+
 test('run decisions retain the exact governed workload principal rather than its kind alone', async t => {
   const f = await fixture(t);
   const sample = await f.snapshot(f.principals['reviewer-a']);

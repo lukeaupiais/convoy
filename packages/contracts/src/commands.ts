@@ -571,11 +571,16 @@ export type RuntimeCommandInputMap = {
   startWorkflow: SessionTarget;
   startWorkflowRun: { projectId: string; workflowId: string; workflowVersion: number; activeTicketId?: number; runInput?: Record<string, unknown> };
   prepareWorkflowActivity: { workflowRunId: string; gateInstance: string; targetNodeId: string };
+  submitWorkflowHumanResponse: { workflowRunId: string; instance: string; values: Record<string, unknown> };
+  prepareWorkflowHumanReview: { workflowRunId: string; instance: string; responseId: string; outcomeId: string; targetNodeId?: string };
+  captureWorkflowEvidence: { workflowRunId: string; instance: string; producer: 'document' | 'api_snapshot' | 'activity_receipt'; name: string; mime: string; data: string; nodeId?: string; attemptInstance?: string };
+  captureWorkflowActivityReceipt: { workflowRunId: string; nodeId: string; attemptInstance: string };
+  readWorkflowEvidence: { workflowRunId: string; evidenceId: string };
   getWorkflowRun: { workflowRunId: string };
   reconcileWorkflowRun: { workflowRunId: string; instance: string; effectKey: string; resolution: 'applied' | 'not_applied'; result?: Record<string, unknown> };
   claimWorkflowRun: { workflowRunId: string; label?: string };
   releaseWorkflowRun: { workflowRunId: string };
-  decideWorkflowRun: { workflowRunId: string; instance: string; decision: 'approve' | 'requestChanges'; feedback?: string; activityReservationId?: string; activityReservationDigest?: string };
+  decideWorkflowRun: { workflowRunId: string; instance: string; decision?: 'approve' | 'requestChanges' | 'request_changes'; outcomeId?: string; responseId?: string; reviewedMaterialDigest?: string; feedback?: string; activityReservationId?: string; activityReservationDigest?: string };
   continueWorkflowRun: { workflowRunId: string; instance: string };
   cancelWorkflowRun: { workflowRunId: string };
   submitWorkflowEvent: { descriptorId: string; descriptorRevision?: number; idempotencyKey: string; payload: Record<string, unknown>; projectId?: string; resourceRef?: { kind: string; id: string } };
@@ -617,6 +622,12 @@ export type RuntimeCommand<Action extends RuntimeAction = RuntimeAction> =
 
 type RuntimeCommandKnownResults = {
   prepareWorkflowActivity: import('./model/workflows').WorkflowActivityReservation;
+  submitWorkflowHumanResponse: import('./model/workflows').WorkflowHumanResponse;
+  prepareWorkflowHumanReview: import('./model/workflows').WorkflowHumanReview;
+  captureWorkflowEvidence: import('./model/workflows').WorkflowEvidenceRef;
+  readWorkflowEvidence: { evidence: import('./model/workflows').WorkflowEvidenceRef; data: string };
+  startWorkflowRun: { workflowRunId: string };
+  getWorkflowRun: import('./model/workflows').WorkflowRun;
   updateKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   createKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   setKnowledgeCollectionState: import('./model/knowledge').KnowledgeCollection;

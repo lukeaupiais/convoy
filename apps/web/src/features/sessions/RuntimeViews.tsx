@@ -5,7 +5,7 @@ import './runtime.css';
 import './session-monitor.css';
 import { liveModel, sessionProjectId, sessionStatus } from './sessionMonitor';
 import { SessionCapabilities } from '../library';
-import { WorkflowActivityHistory, WorkflowRunDetails, WorkflowRunInteraction, requiredGateActivityTarget } from '../workflows';
+import { WorkflowActivityHistory, WorkflowRunDetails, WorkflowRunInteraction, requiredGateActivityTarget, workflowHumanTaskActions } from '../workflows';
 
 export function SessionControls({
   session: s,
@@ -279,6 +279,7 @@ export function SessionControls({
           activityReservation={preparedActivityReservation}
           working={working || !owned || !runtimeAvailable}
           actions={{
+            ...workflowHumanTaskActions(s),
             requiresActivityReservation: !!approvalTargetNodeId,
             canPrepareActivityApproval: owned && runtimeAvailable,
             canShowPreparedActivityApproval: owned && runtimeAvailable,

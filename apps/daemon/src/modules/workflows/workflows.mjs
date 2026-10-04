@@ -11,6 +11,102 @@ const required = (value, label, limit = 6000) => {
 const kinds = new Set(['agent', 'human', 'check', 'action', 'branch', 'wait']);
 const sessionModes = new Set(['continue', 'new', 'reuse']);
 const safeId = value => typeof value === 'string' && /^[\w-]{1,80}$/.test(value);
+const safeFormFieldId = value => safeId(value) && !['__proto__', 'prototype', 'constructor'].includes(value);
+
+function normalizeHumanTask(node, original) {
+  delete node.legacyHumanTask;
+  if (node.kind !== 'human') {
+    if (original.humanTask !== undefined || original.legacyHumanTask !== undefined)
+      throw new Error(`${node.name}: human-task configuration requires a human node.`);
+    return;
+  }
+  const configured = original.humanTask;
+  const legacyMarker = original.legacyHumanTask === true;
+  if (original.legacyHumanTask !== undefined && !legacyMarker)
+    throw new Error(`${node.name}: legacy human-task compatibility marker is invalid.`);
+  if (legacyMarker) {
+    const outcomes = configured?.outcomes;
+    const compatibleLegacy = configured && typeof configured === 'object' && !Array.isArray(configured) &&
+      Object.keys(configured).every(key => ['outcomes'].includes(key)) &&
+      Object.keys(configured).length === 1 && Array.isArray(outcomes) && outcomes.length === 2 &&
+      outcomes[0]?.id === 'approved' && outcomes[0]?.effect === 'approve_activity' &&
+      outcomes[1]?.id === 'changes_requested' && outcomes[1]?.effect === undefined &&
+      Object.keys(outcomes[0]).every(key => ['id', 'label', 'effect'].includes(key)) &&
+      Object.keys(outcomes[1]).every(key => ['id', 'label'].includes(key));
+    if (!compatibleLegacy) throw new Error(`${node.name}: legacy compatibility cannot be combined with configured human-task policy.`);
+  }
+  if (configured === undefined || legacyMarker) {
+    node.legacyHumanTask = true;
+    node.humanTask = { outcomes: [
+      { id: 'approved', label: original.decisionLabels?.approved ?? 'Approved', effect: 'approve_activity' },
+      { id: 'changes_requested', label: original.decisionLabels?.changes_requested ?? 'Request changes' },
+    ] };
+    return;
+  }
+  if (!configured || typeof configured !== 'object' || Array.isArray(configured) || !Array.isArray(configured.outcomes) ||
+      configured.outcomes.length < 2 || configured.outcomes.length > 8)
+    throw new Error(`${node.name}: configure between two and eight human outcomes.`);
+  const outcomeIds = new Set();
+  const outcomes = configured.outcomes.map(outcome => {
+    if (!outcome || typeof outcome !== 'object' || Array.isArray(outcome) || !safeId(outcome.id) || outcomeIds.has(outcome.id) ||
+        typeof outcome.label !== 'string' || !outcome.label.trim() || outcome.label.length > 80 || /[\u0000-\u001f\u007f]/.test(outcome.label) ||
+        outcome.effect !== undefined && outcome.effect !== 'approve_activity')
+      throw new Error(`${node.name}: human outcomes need unique safe IDs, plain labels, and a supported effect policy.`);
+    outcomeIds.add(outcome.id);
+    return { id: outcome.id, label: outcome.label.trim(), ...(outcome.effect ? { effect: outcome.effect } : {}) };
+  });
+  let form;
+  if (configured.form !== undefined) {
+    if (!configured.form || typeof configured.form !== 'object' || !Array.isArray(configured.form.fields) || configured.form.fields.length > 32)
+      throw new Error(`${node.name}: human form must contain at most 32 fields.`);
+    const fieldIds = new Set();
+    form = { fields: configured.form.fields.map(field => {
+      if (!field || typeof field !== 'object' || Array.isArray(field) || !safeFormFieldId(field.id) || fieldIds.has(field.id) ||
+          typeof field.label !== 'string' || !field.label.trim() || field.label.length > 100 ||
+          !['text', 'number', 'boolean', 'choice', 'date'].includes(field.type) || typeof field.required !== 'undefined' && typeof field.required !== 'boolean')
+        throw new Error(`${node.name}: human form fields require unique safe IDs, labels and supported types.`);
+      fieldIds.add(field.id);
+      const result = { id: field.id, label: field.label.trim(), type: field.type, ...(field.required ? { required: true } : {}) };
+      if (field.type === 'text') {
+        const minLength = field.minLength ?? 0, maxLength = field.maxLength ?? 2000;
+        if (!Number.isInteger(minLength) || minLength < 0 || !Number.isInteger(maxLength) || maxLength < minLength || maxLength > 4000)
+          throw new Error(`${node.name}: invalid text bounds for ${field.id}.`);
+        result.minLength = minLength; result.maxLength = maxLength;
+      } else if (field.type === 'number') {
+        if (field.minimum !== undefined && !Number.isFinite(field.minimum) || field.maximum !== undefined && !Number.isFinite(field.maximum) ||
+            field.minimum !== undefined && field.maximum !== undefined && field.minimum > field.maximum)
+          throw new Error(`${node.name}: invalid numeric bounds for ${field.id}.`);
+        if (field.minimum !== undefined) result.minimum = field.minimum;
+        if (field.maximum !== undefined) result.maximum = field.maximum;
+      } else if (field.type === 'choice') {
+        if (!Array.isArray(field.options) || field.options.length < 1 || field.options.length > 32) throw new Error(`${node.name}: choice ${field.id} needs one to 32 options.`);
+        const seen = new Set(); result.options = field.options.map(option => {
+          if (!option || typeof option.value !== 'string' || !option.value || option.value.length > 120 || seen.has(option.value) ||
+              typeof option.label !== 'string' || !option.label.trim() || option.label.length > 100)
+            throw new Error(`${node.name}: invalid choice option for ${field.id}.`);
+          seen.add(option.value); return { value: option.value, label: option.label.trim() };
+        });
+      } else if (field.options !== undefined || field.minLength !== undefined || field.maxLength !== undefined || field.minimum !== undefined || field.maximum !== undefined)
+        throw new Error(`${node.name}: field ${field.id} has bounds that do not match its type.`);
+      return result;
+    }) };
+  }
+  let reviewerPolicy;
+  if (configured.reviewerPolicy !== undefined) {
+    const policy = configured.reviewerPolicy;
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy) ||
+        policy.permission !== undefined && !['project.execute', 'project.write'].includes(policy.permission) ||
+        policy.userIds !== undefined && (!Array.isArray(policy.userIds) || !policy.userIds.length || policy.userIds.length > 100 || policy.userIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 160)) ||
+        policy.permission === undefined && policy.userIds === undefined)
+      throw new Error(`${node.name}: reviewer policy must select project permission or user IDs.`);
+    reviewerPolicy = { ...(policy.permission ? { permission: policy.permission } : {}), ...(policy.userIds ? { userIds: [...new Set(policy.userIds.map(id => id.trim()))] } : {}) };
+  }
+  if (configured.dueAfterSeconds !== undefined && (!Number.isInteger(configured.dueAfterSeconds) || configured.dueAfterSeconds < 60 || configured.dueAfterSeconds > 31_536_000))
+    throw new Error(`${node.name}: deadline must be between one minute and one year.`);
+  node.humanTask = { outcomes, ...(form ? { form } : {}), ...(reviewerPolicy ? { reviewerPolicy } : {}), ...(configured.dueAfterSeconds !== undefined ? { dueAfterSeconds: configured.dueAfterSeconds } : {}) };
+  node.decisionLabels = Object.fromEntries(outcomes.filter(({ id }) => ['approved', 'changes_requested'].includes(id)).map(({ id, label }) => [id, label]));
+  if (!Object.keys(node.decisionLabels).length) delete node.decisionLabels;
+}
 
 function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (!original || typeof original !== 'object') throw new Error(`Step ${index + 1} is required.`);
@@ -77,6 +173,7 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     node.decisionLabels = Object.fromEntries(supported.filter(outcome => Object.hasOwn(labels, outcome)).map(outcome => [outcome, labels[outcome].trim()]));
     if (!Object.keys(node.decisionLabels).length) delete node.decisionLabels;
   }
+  normalizeHumanTask(node, original);
   delete node.phase;
   if (node.artifact) {
     required(node.artifact.path, 'Artifact path', 200);
@@ -190,6 +287,11 @@ export function normalizeWorkflow(input, { publishing = false } = {}) {
   if (!input || typeof input !== 'object') throw new Error('Workflow is required.');
   const isLegacy = !Array.isArray(input.nodes); const sourceNodes = isLegacy ? input.steps : input.nodes;
   if (!Array.isArray(sourceNodes) || !sourceNodes.length || sourceNodes.length > 100) throw new Error('Add between 1 and 100 workflow nodes.');
+  // This marker is an internal compatibility projection. Older clients may
+  // still publish a bare human node, but cannot submit the marker itself as
+  // caller-selectable publication policy.
+  if (publishing && sourceNodes.some(node => node?.legacyHumanTask !== undefined))
+    throw new Error('Legacy human-task markers are not accepted in published input.');
   const value = { id: input.id || randomUUID(), name: required(input.name, 'Workflow name', 120), schemaVersion: 3, nodes: [], edges: [], entryNode: input.entryNode ?? input.startNode, maxRevisions: input.maxRevisions ?? 3 };
   const runInputSchema = input.runInputSchema ?? { type: 'object', properties: {}, required: [], additionalProperties: false };
   validateActivitySchema(runInputSchema);
@@ -253,9 +355,13 @@ export function normalizeWorkflow(input, { publishing = false } = {}) {
   for (const node of value.nodes) if (node.kind === 'branch') {
     for (const outcome of [node.condition.trueOutcome, node.condition.falseOutcome]) if (!value.edges.some(edge => edge.from === node.id && (edge.outcome === outcome || edge.outcome === '*' || edge.outcome === 'default'))) throw new Error(`${node.name}: missing route for branch outcome ${outcome}.`);
   }
-  if (publishing) for (const node of value.nodes.filter(node => node.kind === 'human')) {
-    const unsupported = value.edges.find(edge => edge.from === node.id && !['approved', 'changes_requested', '*', 'default'].includes(edge.outcome));
-    if (unsupported) throw new Error(`${node.name}: unsupported human outcome ${unsupported.outcome}. Human decisions support approved and changes_requested.`);
+  for (const node of value.nodes.filter(node => node.kind === 'human')) {
+    const outcomes = new Set(node.humanTask.outcomes.map(outcome => outcome.id));
+    const unsupported = value.edges.find(edge => edge.from === node.id && !outcomes.has(edge.outcome) && !['*', 'default'].includes(edge.outcome));
+    if (node.legacyHumanTask) {
+      if (publishing && unsupported && !['success', 'approved', 'changes_requested', '*', 'default'].includes(unsupported.outcome))
+        throw new Error(`${node.name}: unsupported human outcome ${unsupported.outcome}.`);
+    } else if (unsupported) throw new Error(`${node.name}: outcome ${unsupported.outcome} is not configured for this human task.`);
   }
   for (const node of value.nodes.filter(node => node.operation === 'send_external_reply')) {
     const incoming = value.edges.filter(edge => edge.to === node.id);
@@ -312,6 +418,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
   function edgeFor(s, outcome) { const node = current(s); const edges = definition(s).edges.filter(e => e.from === node.id); return edges.find(e => e.outcome === outcome) ?? edges.find(e => e.outcome === '*') ?? edges.find(e => e.outcome === 'default') ?? null; }
   function assertOutcome(s, outcome) {
     const node = current(s);
+    if (node.kind === 'human' && node.humanTask?.outcomes?.some(item => item.id === outcome)) return;
     const {outcomes} = submissionContract(definition(s), node);
     if (outcomes === null || outcomes.includes(outcome)) return;
     throw new Error(`No workflow edge handles outcome ${outcome} from ${node.name}. Choose a configured outcome: ${outcomes.join(', ')}.`);
@@ -325,6 +432,9 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     delete s.flow.decisionSubmissionRef;
     if (list[index].operation !== 'send_external_reply') delete s.flow.approvedSubmission;
     const node = list[index]; s.flow.status = node.kind === 'human' ? 'waiting_gate' : node.kind === 'wait' ? 'waiting_event' : 'ready'; s.status = s.flow.status;
+    if (node.kind === 'human' && node.humanTask?.dueAfterSeconds)
+      s.flow.humanTaskDueAt = new Date(Date.now() + node.humanTask.dueAfterSeconds * 1000).toISOString();
+    else delete s.flow.humanTaskDueAt;
     if (owner) {
       owner.activityAttempts ??= []; if (owner.attempt) owner.activityAttempts.push(structuredClone(owner.attempt));
       owner.attempt = { instance: s.flow.instance, nodeId: node.id, status: s.flow.status === 'waiting_gate' || s.flow.status === 'waiting_event' ? 'waiting' : 'ready', startedAt: new Date().toISOString(),
@@ -337,7 +447,8 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
     assertOutcome(s, outcome);
     const node = current(s); const edge = edgeFor(s, outcome); const latestEvidence = s.flow.evidenceTrail?.at(-1)?.evidence;
     const workflowOwner = getWorkflowOwner();
-    if (node.kind === 'human' && outcome !== 'approved')
+    const authorizedOutcome = node.kind === 'human' && (node.humanTask?.outcomes?.find(item => item.id === outcome)?.effect === 'approve_activity' || node.legacyHumanTask && outcome === 'approved');
+    if (node.kind === 'human' && !authorizedOutcome)
       workflowOwner?.invalidateActivityReservations(s, { gateNodeId: node.id, gateInstance: s.flow.instance });
     const terminalResult = !edge ? workflowOwner?.resolveWorkflowResult(s) : null;
     if (!edge && terminalResult) workflowOwner.recordWorkflowResult(s, terminalResult);
@@ -356,11 +467,16 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       ...(validation.references ? { references: validation.references.map(({ path, startLine, endLine, sha256 }) => ({ path, startLine, endLine, sha256 })) } : {}),
     } : undefined;
     const reviewedSubmissionRef = node.kind === 'human' && s.flow.decisionSubmissionRef ? structuredClone(s.flow.decisionSubmissionRef) : undefined;
+    const reviewedHumanResponseId = node.kind === 'human' ? s.flow.reviewedHumanResponseId : undefined;
+    const reviewedHumanMaterialDigest = node.kind === 'human' ? s.flow.reviewedHumanMaterialDigest : undefined;
+    delete s.flow.reviewedHumanResponseId; delete s.flow.reviewedHumanMaterialDigest;
     const reservationDecision = s.flow.activityReservationDecision;
     delete s.flow.activityReservationDecision;
     s.flow.previousNodeId = node.id; s.flow.history.push({ nodeId: node.id, instance: completedInstance, outcome, at: new Date().toISOString(), to: edge?.to ?? null, ...(submission ? { submission } : {}), ...(sourceEvidence ? { sourceEvidence } : {}), ...(reviewedSubmissionRef ? { decisionSubmissionRef: reviewedSubmissionRef } : {}),
-      ...(outcome === 'approved' && reservationDecision ? {
+      ...(reviewedHumanResponseId ? { humanResponseId: reviewedHumanResponseId } : {}), ...(reviewedHumanMaterialDigest ? { humanMaterialDigest: reviewedHumanMaterialDigest } : {}),
+      ...(reservationDecision ? {
         activityReservationId: reservationDecision.id, activityReservationDigest: reservationDecision.digest,
+        humanOutcomeId: outcome,
         activityReservation: { targetNodeId: reservationDecision.targetNodeId,
           activityRef: structuredClone(reservationDecision.activityRef), inputDigest: reservationDecision.inputDigest,
           intentDigest: reservationDecision.intentDigest, preview: structuredClone(reservationDecision.preview) },
@@ -555,6 +671,28 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       const node = current(s);
       if (command.action === 'reviseSubmission' && s.flow.status === 'awaiting_continue') { event(s, 'evidence_invalidated', { instance: s.flow.instance }); activate(s, node.id, 'revision'); await save(); return; }
       if (s.flow.status === 'waiting_gate') {
+        if (node.humanTask?.outcomes?.length && !node.legacyHumanTask && command.action !== 'decideHumanTask')
+          throw new Error('This configured human task requires a reviewed response and configured outcome.');
+        if (command.action === 'decideHumanTask') {
+          const outcome = command.outcomeId;
+          const configured = node.humanTask?.outcomes?.find(item => item.id === outcome);
+          if (!configured) throw new Error('This human outcome is no longer configured for the active gate.');
+          if (configured.effect === 'approve_activity') {
+            const target = nodes(s).find(candidate => candidate.id === edgeFor(s, outcome)?.to);
+            const reservationDecision = target?.activity ? getWorkflowOwner()?.verifyActivityReservationDecision(s, {
+              gateNodeId: node.id, gateInstance: command.instance, targetNodeId: target.id,
+              reservationId: command.activityReservationId, reservationDigest: command.activityReservationDigest,
+            }) : null;
+            if (target?.activity && !reservationDecision) throw new Error('Prepare and review the exact activity intent before choosing this outcome.');
+            if (reservationDecision) s.flow.activityReservationDecision = reservationDecision;
+          }
+          s.flow.reviewedHumanResponseId = command.responseId;
+          s.flow.reviewedHumanMaterialDigest = command.reviewedMaterialDigest;
+          try { await finish(s, `Human selected ${outcome}`, [], outcome); }
+          catch (error) { delete s.flow.activityReservationDecision; throw error; }
+          event(s, 'gate_decided', { instance: command.instance, outcome, actor: command.actor, principal: command.principal });
+          await save(); return;
+        }
         if (command.action === 'requestChanges') { delete s.flow.approvedSubmission; const feedback = required(command.feedback, 'Review feedback'); if (!edgeFor(s, 'changes_requested')) throw new Error('This gate has no revision path. Configure an outcome edge for changes_requested.'); event(s, 'gate_changes_requested', { instance: command.instance, actor: command.actor ?? s.lease?.label, principal: command.principal, feedback }); s.flow.feedback = feedback; await finish(s, `Changes requested: ${feedback}`, [], 'changes_requested'); return; }
         if (command.action !== 'approveGate') throw new Error('This step needs a human workflow decision.');
         const decisionSource = resolveDecisionSubmission(s, node);

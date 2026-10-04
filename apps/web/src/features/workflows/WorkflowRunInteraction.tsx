@@ -2,9 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Session,
   WorkflowActivityReservation,
+  WorkflowEvidenceRef,
+  WorkflowHumanResponse,
+  WorkflowHumanReview,
+  WorkflowRun,
   WorkflowSubmission,
   WorkflowSubmissionArtifact,
 } from '../../shared/api/runtime';
+import { command } from '../../shared/api/runtime';
+import { WorkflowHumanTaskPanel } from './WorkflowHumanTaskPanel';
 import { artifactMarkdownBlocks } from './artifact-markdown';
 import {
   workflowActivityHistory,
@@ -35,7 +41,88 @@ export type WorkflowInteractionActions = {
   refreshDiff?: () => void;
   startRun?: () => void;
   rework?: () => void;
+  loadHumanTask?: () => Promise<WorkflowRun | null>;
+  submitHumanResponse?: (values: Record<string, unknown>) => Promise<WorkflowHumanResponse>;
+  captureHumanDocument?: (file: File) => Promise<WorkflowEvidenceRef>;
+  prepareHumanReview?: (input: {
+    responseId: string;
+    outcomeId: string;
+    targetNodeId?: string;
+  }) => Promise<WorkflowHumanReview>;
+  decideHumanOutcome?: (input: {
+    outcomeId: string;
+    responseId: string;
+    reviewedMaterialDigest: string;
+    activityReservationId?: string;
+    activityReservationDigest?: string;
+  }) => Promise<void>;
 };
+
+export function workflowHumanTaskActions(session: Session): Partial<WorkflowInteractionActions> {
+  const workflowRunId = session.flow?.id;
+  const instance = session.flow?.instance;
+  if (!workflowRunId || !instance) return {};
+  return {
+    loadHumanTask: async () => (await command('getWorkflowRun', { workflowRunId })).result,
+    submitHumanResponse: async (values) =>
+      (await command('submitWorkflowHumanResponse', { workflowRunId, instance, values })).result,
+    captureHumanDocument: async (file) => {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('Unable to read this document.'));
+        reader.onload = () => resolve(String(reader.result ?? ''));
+        reader.readAsDataURL(file);
+      });
+      const data = dataUrl.slice(dataUrl.indexOf(',') + 1);
+      const mime =
+        file.type ||
+        (/\.pdf$/i.test(file.name)
+          ? 'application/pdf'
+          : /\.json$/i.test(file.name)
+            ? 'application/json'
+            : /\.md$/i.test(file.name)
+              ? 'text/markdown'
+              : 'text/plain');
+      return (
+        await command('captureWorkflowEvidence', {
+          workflowRunId,
+          instance,
+          producer: 'document',
+          name: file.name,
+          mime,
+          data,
+        })
+      ).result;
+    },
+    prepareHumanReview: async ({ responseId, outcomeId, targetNodeId }) =>
+      (
+        await command('prepareWorkflowHumanReview', {
+          workflowRunId,
+          instance,
+          responseId,
+          outcomeId,
+          ...(targetNodeId ? { targetNodeId } : {}),
+        })
+      ).result,
+    decideHumanOutcome: async ({
+      outcomeId,
+      responseId,
+      reviewedMaterialDigest,
+      activityReservationId,
+      activityReservationDigest,
+    }) => {
+      await command('decideWorkflowRun', {
+        workflowRunId,
+        instance,
+        outcomeId,
+        responseId,
+        reviewedMaterialDigest,
+        ...(activityReservationId ? { activityReservationId } : {}),
+        ...(activityReservationDigest ? { activityReservationDigest } : {}),
+      });
+    },
+  };
+}
 
 function InlineMarkdown({ text }: { text: string }) {
   return (
@@ -258,19 +345,19 @@ function ArtifactViewer({
           {rowArtifacts.length} {rowArtifacts.length === 1 ? 'file' : 'files'}
           {rowArtifacts.length > 0 && ` · ${rowArtifacts.map((item) => item.name).join(', ')}`}
         </span>
-      <button
-        type="button"
-        className="workflow-inspector-open secondary"
-        ref={opener}
-        aria-label={`Open captured files: ${rowArtifacts.map((item) => item.name).join(', ')}`}
-        onClick={() => {
-          setSelectedId((inspectedPrimary ?? currentPrimary)?.id ?? '');
-          setInspectedSessionId(sessionId);
-          setInspectedSubmission(submission);
-        }}
-      >
-        Inspect
-      </button>
+        <button
+          type="button"
+          className="workflow-inspector-open secondary"
+          ref={opener}
+          aria-label={`Open captured files: ${rowArtifacts.map((item) => item.name).join(', ')}`}
+          onClick={() => {
+            setSelectedId((inspectedPrimary ?? currentPrimary)?.id ?? '');
+            setInspectedSessionId(sessionId);
+            setInspectedSubmission(submission);
+          }}
+        >
+          Inspect
+        </button>
       </div>
       {inspectedSubmission && (
         <dialog
@@ -415,7 +502,27 @@ export function WorkflowRunInteraction({
   const [preparedReservationGate, setPreparedReservationGate] = useState('');
   const [preparedReservationContext, setPreparedReservationContext] = useState('');
   const [reservationError, setReservationError] = useState('');
+  const [humanValues, setHumanValues] = useState<Record<string, unknown>>({});
+  const [humanValuesContext, setHumanValuesContext] = useState('');
+  const [humanRun, setHumanRun] = useState<WorkflowRun | null>(null);
+  const [humanResponse, setHumanResponse] = useState<WorkflowHumanResponse>();
+  const [humanResponseId, setHumanResponseId] = useState('');
+  const [humanResponseContext, setHumanResponseContext] = useState('');
+  const [humanReview, setHumanReview] = useState<WorkflowHumanReview>();
+  const [humanReviewContext, setHumanReviewContext] = useState('');
+  const [humanOutcomeId, setHumanOutcomeId] = useState('');
+  const [humanOutcomeContext, setHumanOutcomeContext] = useState('');
+  const [humanTaskBusy, setHumanTaskBusy] = useState(false);
+  const [humanTaskError, setHumanTaskError] = useState('');
+  const [humanLeaseClock, setHumanLeaseClock] = useState(Date.now());
   const reservationRequest = useRef(0);
+  const humanMaterialGeneration = useRef(0);
+  const humanTaskContext = useRef('');
+  const committedHumanDraftContext = useRef('');
+  const humanTaskCanOperateRef = useRef(false);
+  const humanTaskWasOperable = useRef(false);
+  const humanLoader = useRef(actions.loadHumanTask);
+  humanLoader.current = actions.loadHumanTask;
   const details = submission?.details ?? {};
   const detailBindings = bindings.filter(
     (binding) =>
@@ -479,10 +586,266 @@ export function WorkflowRunInteraction({
   const failureEvent = session.events
     .filter((event) => /failed|rejected|interrupted/.test(event.type))
     .slice(-1)[0];
+  const humanTaskKey =
+    flow?.status === 'waiting_gate' && node?.kind === 'human' && !node.legacyHumanTask
+      ? `${flow.id}:${node.id}:${flow.instance}`
+      : '';
+  const humanTaskCanLoad = Boolean(humanTaskKey && actions.loadHumanTask);
+  const humanTaskCanOperate = Boolean(
+    humanTaskCanLoad &&
+    actions.submitHumanResponse &&
+    actions.prepareHumanReview &&
+    actions.decideHumanOutcome &&
+    (actions.canShowPreparedActivityApproval ?? true) &&
+    humanRun?.humanTaskReviewerEligible === true &&
+    (session.lease?.expiresAt ?? 0) > humanLeaseClock,
+  );
+  humanTaskCanOperateRef.current = humanTaskCanOperate;
+  const humanTaskDraftContextKey = `${humanTaskKey}:${actions.approvalContextKey ?? ''}`;
+  const humanTaskContextKey = `${humanTaskKey}:${actions.approvalContextKey ?? ''}:${actions.approvalControlKey ?? ''}`;
+  humanTaskContext.current = humanTaskContextKey;
+  useEffect(() => {
+    if (!humanTaskKey) return;
+    const timer = window.setInterval(() => setHumanLeaseClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [humanTaskKey]);
+  useEffect(() => {
+    let active = true;
+    humanMaterialGeneration.current += 1;
+    const generation = humanMaterialGeneration.current;
+    if (committedHumanDraftContext.current !== humanTaskDraftContextKey) {
+      committedHumanDraftContext.current = humanTaskDraftContextKey;
+      setHumanValues({});
+      setHumanValuesContext(humanTaskDraftContextKey);
+    }
+    setHumanRun(null);
+    setHumanResponse(undefined);
+    setHumanResponseId('');
+    setHumanResponseContext('');
+    setHumanReview(undefined);
+    setHumanReviewContext('');
+    setHumanOutcomeId('');
+    setHumanOutcomeContext('');
+    if (humanTaskCanLoad && humanLoader.current)
+      void humanLoader
+        .current()
+        .then((run) => {
+          if (
+            !active ||
+            humanMaterialGeneration.current !== generation ||
+            humanTaskContext.current !== humanTaskContextKey ||
+            !run ||
+            run.id !== flow?.id ||
+            run.instance !== flow?.instance
+          )
+            return;
+          setHumanRun(run);
+        })
+        .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [humanTaskContextKey, humanTaskDraftContextKey, humanTaskCanLoad]);
+  useEffect(() => {
+    if (humanTaskCanOperate) {
+      humanTaskWasOperable.current = true;
+      return;
+    }
+    const controlWasLost = humanTaskWasOperable.current;
+    humanTaskWasOperable.current = false;
+    if (!controlWasLost) return;
+    humanMaterialGeneration.current += 1;
+    setHumanReview(undefined);
+    setHumanReviewContext('');
+    setHumanResponse(undefined);
+    setHumanResponseId('');
+    setHumanResponseContext('');
+    setHumanOutcomeId('');
+    setHumanOutcomeContext('');
+  }, [humanTaskCanOperate]);
+  function invalidateHumanMaterial() {
+    humanMaterialGeneration.current += 1;
+    setHumanResponse(undefined);
+    setHumanResponseId('');
+    setHumanResponseContext('');
+    setHumanOutcomeId('');
+    setHumanOutcomeContext('');
+    setHumanReview(undefined);
+    setHumanReviewContext('');
+  }
   useEffect(() => setSummaryExpanded(false), [submission && submissionIdentity(submission)]);
+  const currentHumanResponse =
+    humanResponseContext === humanTaskContextKey && humanResponseId
+      ? humanResponse?.id === humanResponseId
+        ? humanResponse
+        : humanRun?.humanResponses?.find((response) => response.id === humanResponseId)
+      : undefined;
+  const currentHumanEvidence = (
+    humanRun && flow && humanRun.id === flow.id && humanRun.instance === flow.instance
+      ? (humanRun.evidence ?? [])
+      : []
+  ).filter(
+    (item) => item.source.nodeId === node?.id && item.source.attemptInstance === flow?.instance,
+  );
+  async function refreshHumanRun(
+    contextKey: string,
+    generation: number,
+    instance: string,
+    workflowRunId: string,
+  ) {
+    const isCurrentRequest = () =>
+      humanTaskCanOperateRef.current &&
+      humanTaskContext.current === contextKey &&
+      humanMaterialGeneration.current === generation;
+    if (!isCurrentRequest()) return undefined;
+    const run = await humanLoader.current?.();
+    if (run && isCurrentRequest() && run.id === workflowRunId && run.instance === instance)
+      setHumanRun(run);
+    return run;
+  }
+  async function submitConfiguredResponse() {
+    if (!actions.submitHumanResponse || !flow?.instance) return;
+    const generation = humanMaterialGeneration.current;
+    const contextKey = humanTaskContextKey;
+    const instance = flow.instance;
+    const workflowRunId = flow.id;
+    const response = await actions.submitHumanResponse(humanValues);
+    if (
+      generation === humanMaterialGeneration.current &&
+      humanTaskCanOperateRef.current &&
+      contextKey === humanTaskContext.current &&
+      instance === flow?.instance &&
+      workflowRunId === flow?.id
+    ) {
+      setHumanResponse(response);
+      setHumanResponseId(response.id);
+      setHumanResponseContext(contextKey);
+      setHumanReview(undefined);
+      setHumanReviewContext('');
+    }
+    await refreshHumanRun(contextKey, generation, instance, workflowRunId);
+  }
+  async function captureConfiguredDocument(file?: File) {
+    if (!file || !actions.captureHumanDocument) return;
+    const generation = humanMaterialGeneration.current;
+    const contextKey = humanTaskContextKey;
+    const instance = flow?.instance;
+    const workflowRunId = flow?.id;
+    setHumanReview(undefined);
+    setHumanReviewContext('');
+    await actions.captureHumanDocument(file);
+    if (
+      instance &&
+      workflowRunId &&
+      generation === humanMaterialGeneration.current &&
+      humanTaskCanOperateRef.current &&
+      contextKey === humanTaskContext.current &&
+      instance === flow?.instance &&
+      workflowRunId === flow?.id
+    ) {
+      setHumanResponse(undefined);
+      setHumanResponseId('');
+      setHumanResponseContext('');
+      setHumanReview(undefined);
+      setHumanReviewContext('');
+      setHumanOutcomeId('');
+      setHumanOutcomeContext('');
+    }
+    if (instance && workflowRunId)
+      await refreshHumanRun(contextKey, generation, instance, workflowRunId);
+  }
+  async function readConfiguredEvidence(evidenceId: string, name: string) {
+    const result = await command('readWorkflowEvidence', { workflowRunId: flow!.id, evidenceId });
+    const bytes = Uint8Array.from(atob(result.result.data), (character) => character.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: result.result.evidence.mediaType }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function prepareConfiguredOutcome(outcomeId: string) {
+    if (!actions.prepareHumanReview || !flow?.instance || !currentHumanResponse) return;
+    const generation = humanMaterialGeneration.current;
+    const contextKey = humanTaskContextKey;
+    const responseId = currentHumanResponse.id;
+    const instance = flow.instance;
+    const workflowRunId = flow.id;
+    const route =
+      outgoingEdges.find((edge) => edge.outcome === outcomeId) ??
+      outgoingEdges.find((edge) => ['*', 'default'].includes(edge.outcome));
+    const review = await actions.prepareHumanReview({
+      responseId,
+      outcomeId,
+      ...(route ? { targetNodeId: route.to } : {}),
+    });
+    if (
+      generation === humanMaterialGeneration.current &&
+      humanTaskCanOperateRef.current &&
+      contextKey === humanTaskContext.current &&
+      instance === flow?.instance &&
+      workflowRunId === flow?.id &&
+      responseId === currentHumanResponse?.id &&
+      outcomeId === humanOutcomeId &&
+      contextKey === humanOutcomeContext
+    ) {
+      setHumanReview(review);
+      setHumanReviewContext(contextKey);
+    }
+  }
+  async function decideConfiguredOutcome() {
+    if (
+      !actions.decideHumanOutcome ||
+      !humanReview ||
+      humanReviewContext !== humanTaskContextKey ||
+      !humanOutcomeId ||
+      humanOutcomeContext !== humanTaskContextKey
+    )
+      return;
+    await actions.decideHumanOutcome({
+      outcomeId: humanOutcomeId,
+      responseId: humanReview.response.id,
+      reviewedMaterialDigest: humanReview.materialDigest,
+      ...(humanReview.reservation
+        ? {
+            activityReservationId: humanReview.reservation.id,
+            activityReservationDigest: humanReview.reservation.digest,
+          }
+        : {}),
+    });
+    setHumanReview(undefined);
+    setHumanReviewContext('');
+    setHumanResponse(undefined);
+    setHumanResponseId('');
+    setHumanResponseContext('');
+    setHumanOutcomeId('');
+    setHumanOutcomeContext('');
+    if (flow?.instance && flow.id)
+      await refreshHumanRun(
+        humanTaskContextKey,
+        humanMaterialGeneration.current,
+        flow.instance,
+        flow.id,
+      );
+  }
+  async function performHumanTask(action: () => Promise<void>) {
+    setHumanTaskBusy(true);
+    setHumanTaskError('');
+    try {
+      await action();
+    } catch (error) {
+      setHumanTaskError((error as Error).message);
+    } finally {
+      setHumanTaskBusy(false);
+    }
+  }
   const approvalGateKey = `${session.id}:${flow?.id ?? ''}:${flow?.nodeId ?? ''}:${flow?.instance ?? ''}`;
-  const canPrepareApproval = Boolean(actions.requiresActivityReservation && actions.prepareActivityApproval && actions.approveGate &&
-    (actions.canPrepareActivityApproval ?? true));
+  const canPrepareApproval = Boolean(
+    actions.requiresActivityReservation &&
+    actions.prepareActivityApproval &&
+    actions.approveGate &&
+    (actions.canPrepareActivityApproval ?? true),
+  );
   const canShowPreparedApproval = actions.canShowPreparedActivityApproval ?? canPrepareApproval;
   const currentApprovalGate = useRef(approvalGateKey);
   const currentCanPrepareApproval = useRef(canPrepareApproval);
@@ -517,11 +880,21 @@ export function WorkflowRunInteraction({
       setReservationError('');
     }
     approvalControlState.current = nextApprovalControlState;
-  }, [approvalGateKey, canPrepareApproval, canShowPreparedApproval, actions.approvalControlKey, actions.approvalContextKey]);
-  const activeReservation = canShowPreparedApproval && !approvalControlWasInvalidated
-    ? (preparedReservationGate === approvalGateKey && preparedReservationContext === (actions.approvalContextKey ?? '') ? preparedReservation : undefined) ??
-      (canShowPreparedApproval && activityReservation?.preview ? activityReservation : undefined)
-    : undefined;
+  }, [
+    approvalGateKey,
+    canPrepareApproval,
+    canShowPreparedApproval,
+    actions.approvalControlKey,
+    actions.approvalContextKey,
+  ]);
+  const activeReservation =
+    canShowPreparedApproval && !approvalControlWasInvalidated
+      ? ((preparedReservationGate === approvalGateKey &&
+        preparedReservationContext === (actions.approvalContextKey ?? '')
+          ? preparedReservation
+          : undefined) ??
+        (canShowPreparedApproval && activityReservation?.preview ? activityReservation : undefined))
+      : undefined;
   async function prepareActivityApproval() {
     if (!actions.prepareActivityApproval) return;
     const request = ++reservationRequest.current;
@@ -530,18 +903,27 @@ export function WorkflowRunInteraction({
     setReservationError('');
     try {
       const reservation = await actions.prepareActivityApproval();
-      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && contextKey === currentApprovalContext.current && currentCanPrepareApproval.current) {
+      if (
+        request === reservationRequest.current &&
+        gateKey === currentApprovalGate.current &&
+        contextKey === currentApprovalContext.current &&
+        currentCanPrepareApproval.current
+      ) {
         setPreparedReservationGate(gateKey);
         setPreparedReservationContext(contextKey);
         setPreparedReservation(reservation);
       }
     } catch (error) {
-      if (request === reservationRequest.current && gateKey === currentApprovalGate.current && contextKey === currentApprovalContext.current && currentCanPrepareApproval.current)
+      if (
+        request === reservationRequest.current &&
+        gateKey === currentApprovalGate.current &&
+        contextKey === currentApprovalContext.current &&
+        currentCanPrepareApproval.current
+      )
         setReservationError((error as Error).message);
     }
   }
-  if (!flow)
-    return null;
+  if (!flow) return null;
   return (
     <section className="workflow-run-interaction" aria-label="Current activity">
       <header className="workflow-run-heading">
@@ -607,7 +989,9 @@ export function WorkflowRunInteraction({
                 <ul>
                   {submission.references.map((ref) => (
                     <li key={`${ref.path}:${ref.startLine}:${ref.endLine}`}>
-                      <strong>{ref.path}:{ref.startLine}–{ref.endLine}</strong>
+                      <strong>
+                        {ref.path}:{ref.startLine}–{ref.endLine}
+                      </strong>
                       <pre>{ref.text}</pre>
                     </li>
                   ))}
@@ -633,6 +1017,56 @@ export function WorkflowRunInteraction({
             </button>
           )}
         </p>
+      )}
+      {flow.status === 'waiting_gate' && node?.kind === 'human' && !node.legacyHumanTask && (
+        <>
+          {humanRun?.humanTaskDueAt && Date.parse(humanRun.humanTaskDueAt) <= Date.now() && (
+            <span role="status">
+              Overdue · {new Date(humanRun.humanTaskDueAt).toLocaleString()}
+            </span>
+          )}
+          <WorkflowHumanTaskPanel
+            node={node}
+            values={
+              humanTaskCanOperate && humanValuesContext === humanTaskDraftContextKey
+                ? humanValues
+                : {}
+            }
+            onValuesChange={(values) => {
+              setHumanValues(values);
+              setHumanValuesContext(humanTaskDraftContextKey);
+            }}
+            onMaterialChange={invalidateHumanMaterial}
+            response={humanTaskCanOperate ? currentHumanResponse : undefined}
+            evidence={currentHumanEvidence}
+            review={
+              humanTaskCanOperate && humanReviewContext === humanTaskContextKey
+                ? humanReview
+                : undefined
+            }
+            selectedOutcomeId={humanOutcomeContext === humanTaskContextKey ? humanOutcomeId : ''}
+            onOutcomeChange={(id) => {
+              humanMaterialGeneration.current += 1;
+              setHumanOutcomeId(id);
+              setHumanOutcomeContext(humanTaskContextKey);
+              setHumanReview(undefined);
+              setHumanReviewContext('');
+            }}
+            disabled={!humanTaskCanOperate || humanTaskBusy}
+            onSubmit={() => void performHumanTask(submitConfiguredResponse)}
+            onCaptureDocument={(file) =>
+              void performHumanTask(async () => captureConfiguredDocument(file))
+            }
+            onReadEvidence={(id, name) =>
+              void performHumanTask(async () => readConfiguredEvidence(id, name))
+            }
+            onPrepareOutcome={(id) =>
+              void performHumanTask(async () => prepareConfiguredOutcome(id))
+            }
+            onDecide={() => void performHumanTask(decideConfiguredOutcome)}
+          />
+          {humanTaskError && <p role="alert">{humanTaskError}</p>}
+        </>
       )}
       {(session.pendingQuestion || session.pending) && (
         <section className="workflow-interaction-slot" aria-label="Required interaction">
@@ -695,12 +1129,12 @@ export function WorkflowRunInteraction({
         <section className="workflow-blocking-state" role="alert">
           <p>
             {session.assignment?.state === 'uncertain'
-              ? session.assignment.message ?? 'Execution outcome needs reconciliation.'
-              : failureEvent?.message ??
+              ? (session.assignment.message ?? 'Execution outcome needs reconciliation.')
+              : (failureEvent?.message ??
                 failureEvent?.text ??
                 (flow.status === 'awaiting_submission'
                   ? 'Required output is unavailable.'
-                  : 'This activity needs recovery.')}
+                  : 'This activity needs recovery.'))}
           </p>
           {onRecovery && recoveryNeeded && (
             <button type="button" className="secondary" onClick={onRecovery}>
@@ -714,46 +1148,83 @@ export function WorkflowRunInteraction({
         <footer className="workflow-interaction-footer">
           {flow.status === 'waiting_gate' && (
             <>
-              {actions.requiresActivityReservation && !activeReservation && canPrepareApproval && (
-                <button className="secondary" disabled={working} onClick={() => void prepareActivityApproval()}>
-                  Prepare approval
-                </button>
-              )}
-              {activeReservation?.preview && (
-                <div className="workflow-approval-preview" aria-label="Prepared activity approval">
-                  <strong>{activeReservation.preview.activity}</strong>
-                  {activeReservation.preview.resources?.model && <small>Model: {activeReservation.preview.resources.model}</small>}
-                  {activeReservation.preview.action && <small>{activeReservation.preview.action}</small>}
-                  {activeReservation.preview.summary && <p>{activeReservation.preview.summary}</p>}
-                  {activeReservation.preview.body && <blockquote>{activeReservation.preview.body}</blockquote>}
-                  <details>
-                    <summary>Prepared values</summary>
-                    <pre>{JSON.stringify({ input: activeReservation.preview.input, intent: activeReservation.preview.intent,
-                      ...(activeReservation.preview.resources ? { resources: activeReservation.preview.resources } : {}) }, null, 2)}</pre>
-                  </details>
-                </div>
-              )}
-              {reservationError && <p role="alert">{reservationError}</p>}
-              {approvalReady && actions.approveGate && (!actions.requiresActivityReservation || !!activeReservation) ? (
-                <button className="primary" disabled={working} onClick={() => actions.approveGate?.(activeReservation)}>
-                  {workflowDecisionLabel(node, 'approved')}
-                </button>
-              ) : actions.requiresActivityReservation && !activeReservation ? (
-                null
-              ) : approvalMaterialRequired && !submission ? (
-                <p role="alert">Reviewed material is unavailable. Refresh before deciding.</p>
-              ) : (
-                <p role="alert">No supported approval outcome is configured.</p>
-              )}
-              {canRevise && actions.requestChanges && (
-                <button
-                  type="button"
-                  className="secondary"
-                  aria-expanded={showFeedback}
-                  onClick={() => setShowFeedback((value) => !value)}
-                >
-                  {showFeedback ? 'Cancel' : workflowDecisionLabel(node, 'changes_requested')}
-                </button>
+              {(node?.kind !== 'human' || node.legacyHumanTask) && (
+                <>
+                  {actions.requiresActivityReservation &&
+                    !activeReservation &&
+                    canPrepareApproval && (
+                      <button
+                        className="secondary"
+                        disabled={working}
+                        onClick={() => void prepareActivityApproval()}
+                      >
+                        Prepare approval
+                      </button>
+                    )}
+                  {activeReservation?.preview && (
+                    <div
+                      className="workflow-approval-preview"
+                      aria-label="Prepared activity approval"
+                    >
+                      <strong>{activeReservation.preview.activity}</strong>
+                      {activeReservation.preview.resources?.model && (
+                        <small>Model: {activeReservation.preview.resources.model}</small>
+                      )}
+                      {activeReservation.preview.action && (
+                        <small>{activeReservation.preview.action}</small>
+                      )}
+                      {activeReservation.preview.summary && (
+                        <p>{activeReservation.preview.summary}</p>
+                      )}
+                      {activeReservation.preview.body && (
+                        <blockquote>{activeReservation.preview.body}</blockquote>
+                      )}
+                      <details>
+                        <summary>Prepared values</summary>
+                        <pre>
+                          {JSON.stringify(
+                            {
+                              input: activeReservation.preview.input,
+                              intent: activeReservation.preview.intent,
+                              ...(activeReservation.preview.resources
+                                ? { resources: activeReservation.preview.resources }
+                                : {}),
+                            },
+                            null,
+                            2,
+                          )}
+                        </pre>
+                      </details>
+                    </div>
+                  )}
+                  {reservationError && <p role="alert">{reservationError}</p>}
+                  {approvalReady &&
+                  actions.approveGate &&
+                  (!actions.requiresActivityReservation || !!activeReservation) ? (
+                    <button
+                      className="primary"
+                      disabled={working}
+                      onClick={() => actions.approveGate?.(activeReservation)}
+                    >
+                      {workflowDecisionLabel(node, 'approved')}
+                    </button>
+                  ) : actions.requiresActivityReservation &&
+                    !activeReservation ? null : approvalMaterialRequired && !submission ? (
+                    <p role="alert">Reviewed material is unavailable. Refresh before deciding.</p>
+                  ) : (
+                    <p role="alert">No supported approval outcome is configured.</p>
+                  )}
+                  {canRevise && actions.requestChanges && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      aria-expanded={showFeedback}
+                      onClick={() => setShowFeedback((value) => !value)}
+                    >
+                      {showFeedback ? 'Cancel' : workflowDecisionLabel(node, 'changes_requested')}
+                    </button>
+                  )}
+                </>
               )}
             </>
           )}
@@ -838,7 +1309,9 @@ export function WorkflowRunDetails({
           <p>{node.prompt}</p>
         </section>
       )}
-      <p>Session {session.id} · instance {flow.instance}</p>
+      <p>
+        Session {session.id} · instance {flow.instance}
+      </p>
       {submission?.revision != null && <p>Captured revision {submission.revision}</p>}
       {uncapturedPaths.length > 0 && (
         <section>
@@ -935,12 +1408,15 @@ export function WorkflowRunDetails({
       )}
       <section>
         <h3>Recent execution events</h3>
-        {session.events.slice(-20).reverse().map((event) => (
-          <div key={event.seq}>
-            <small>{event.type.replaceAll('_', ' ')}</small>
-            <p>{event.message ?? event.summary ?? event.text}</p>
-          </div>
-        ))}
+        {session.events
+          .slice(-20)
+          .reverse()
+          .map((event) => (
+            <div key={event.seq}>
+              <small>{event.type.replaceAll('_', ' ')}</small>
+              <p>{event.message ?? event.summary ?? event.text}</p>
+            </div>
+          ))}
       </section>
     </section>
   );

@@ -1,5 +1,6 @@
 import { createWorkflowRegistry } from './workflow-registry.mjs';
 import { activityDigest, validateActivityValue, resolveActivityBindings, activitySchemaAtPath } from './activity-data.mjs';
+import { humanFormSchema } from './activity-data.mjs';
 import { legacyActivityRef } from './activity-catalog.mjs';
 import { createWorkflowEventJournal, workflowEventPath } from './event-journal.mjs';
 import { randomUUID } from 'node:crypto';
@@ -238,8 +239,14 @@ export function createWorkflows({
   state.workflowWebhookBindings ??= [];
   const readDefinition = workflow => {
     try {
+      const definition = normalize(workflow);
+      definition.nodes = definition.nodes.map(node => {
+        if (!node.legacyHumanTask) return node;
+        const { humanTask: _humanTask, legacyHumanTask: _legacyHumanTask, ...authoringNode } = node;
+        return authoringNode;
+      });
       return {
-        ...normalize(workflow), organizationId: workflow.organizationId ?? 'personal',
+        ...definition, organizationId: workflow.organizationId ?? 'personal',
         ...(workflow.teamId ? { teamId: workflow.teamId } : {}),
         ...(workflow.projectId ? { projectId: workflow.projectId } : {}), version: workflow.version ?? 1,
       };
@@ -661,7 +668,7 @@ export function createWorkflows({
       return {
         workflowRunsTotal: visibleRuns.length,
         workflowRunsTruncated: visibleRuns.length > 200,
-        workflowRuns: visibleRuns.slice(0, 200).map(publicRun),
+        workflowRuns: visibleRuns.slice(0, 200).map((run) => publicRun(run)),
         workflows: state.workflows.filter(workflow => visible({ ...workflow, organizationId: workflow.organizationId ?? 'personal' })).map(readDefinition),
         workflowDrafts: Object.fromEntries(
           Object.entries(state.workflowDrafts).filter(
@@ -768,7 +775,7 @@ export function createWorkflows({
       if (command.action === 'saveAutomation')
         return automations.save(command, principal);
       return command.action === 'saveWorkflow'
-        ? registry.publish(command)
+        ? registry.publish(command).then(readDefinition)
         : registry.saveDraft(command);
     },
     async sessionCommand(session, command) {
@@ -1085,17 +1092,128 @@ export function createWorkflows({
           projectId: value.projectId, workflowId: value.workflowId, workflowVersion: value.workflowVersion,
           at: value.at, ...(value.message ? { message: value.message } : {}) }));
     },
+    submitHumanResponse(run, { instance, values }) {
+      if (!run || state.workflowRuns?.[run.id] !== run || run.flow?.status !== 'waiting_gate' ||
+          run.flow.instance !== instance || run.attempt?.instance !== instance || run.attempt?.status !== 'waiting')
+        throw new Error('The human task is no longer the active workflow step.');
+      const workflow = normalize(run.workflow);
+      const node = workflow.nodes.find(item => item.id === run.flow.nodeId);
+      if (node?.kind !== 'human') throw new Error('The active workflow step is not a human task.');
+      const checked = validateActivityValue(values, humanFormSchema(node));
+      for (const field of node.humanTask.form?.fields ?? []) if (field.type === 'date' && Object.hasOwn(checked, field.id) &&
+          (typeof checked[field.id] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(checked[field.id]) ||
+            Number.isNaN(Date.parse(`${checked[field.id]}T00:00:00Z`)) || new Date(`${checked[field.id]}T00:00:00Z`).toISOString().slice(0, 10) !== checked[field.id]))
+        throw new Error(`${field.label}: enter a valid date.`);
+      if (Buffer.byteLength(JSON.stringify(checked)) > 16_000) throw new Error('Human response is too large.');
+      const response = { id: randomUUID(), runId: run.id, workflowId: workflow.id, workflowVersion: workflow.version ?? run.flow.workflowVersion,
+        nodeId: node.id, instance, values: checked, digest: activityDigest(checked), at: new Date().toISOString(),
+        evidenceIds: (run.workflowEvidence ?? []).filter(item => item.source.nodeId === node.id && item.source.attemptInstance === instance).map(item => item.id) };
+      run.humanResponses ??= [];
+      if (run.humanResponses.length >= 500) throw new Error('Workflow response history is full.');
+      run.humanResponses.push(response);
+      run.humanReviews = (run.humanReviews ?? []).filter(item => item.instance !== instance);
+      this.invalidateActivityReservations(run, { gateNodeId: node.id, gateInstance: instance });
+      return structuredClone(response);
+    },
+    currentHumanResponse(run, responseId, instance) {
+      const response = (run?.humanResponses ?? []).find(item => item.id === responseId && item.instance === instance && item.runId === run.id);
+      if (!response || (run.humanResponses ?? []).filter(item => item.instance === instance).at(-1)?.id !== response.id)
+        throw new Error('Submit the current human response before reviewing it.');
+      return response;
+    },
+    async prepareHumanReview(run, { instance, responseId, outcomeId, targetNodeId }) {
+      if (!run || state.workflowRuns?.[run.id] !== run || run.flow?.status !== 'waiting_gate' || run.flow.instance !== instance || run.attempt?.instance !== instance)
+        throw new Error('The human task is no longer the active workflow step.');
+      const workflow = normalize(run.workflow);
+      const node = workflow.nodes.find(item => item.id === run.flow.nodeId);
+      const outcome = node?.humanTask?.outcomes?.find(item => item.id === outcomeId);
+      const edge = workflow.edges.find(item => item.from === node?.id && item.outcome === outcomeId) ?? workflow.edges.find(item => item.from === node?.id && ['*', 'default'].includes(item.outcome));
+      if (node?.kind !== 'human' || !outcome || (edge ? targetNodeId !== edge.to : targetNodeId !== undefined))
+        throw new Error('The selected outcome route is no longer configured.');
+      const response = this.currentHumanResponse(run, responseId, instance);
+      let reservation = null;
+      if (outcome.effect === 'approve_activity') {
+        reservation = await this.reserveActivityIntent({ runId: run.id, gateNodeId: node.id, gateInstance: instance, targetNodeId: edge.to, responseId });
+      }
+      const evidence = (run.workflowEvidence ?? []).filter(item => response.evidenceIds.includes(item.id));
+      const materialDigest = activityDigest({ runId: run.id, workflowId: workflow.id, workflowVersion: run.flow.workflowVersion ?? workflow.version ?? 1,
+        nodeId: node.id, instance, responseId, responseDigest: response.digest, evidence, outcomeId,
+        ...(reservation ? { reservationId: reservation.id, reservationDigest: reservation.digest, preview: reservation.preview } : {}) });
+      run.humanReviews ??= [];
+      run.humanReviews = run.humanReviews.filter(item => !(item.instance === instance && item.responseId === responseId && item.outcomeId === outcomeId));
+      run.humanReviews.push({ instance, responseId, outcomeId, materialDigest, ...(reservation ? { reservationId: reservation.id, reservationDigest: reservation.digest } : {}), at: new Date().toISOString() });
+      return structuredClone({ response, evidence, materialDigest, ...(reservation ? { reservation } : {}) });
+    },
+    async captureEvidence(run, { instance, producer, name, mime, data, nodeId, attemptInstance }, contextFiles) {
+      if (!run || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
+      let sourceNodeId = nodeId ?? run.flow?.nodeId;
+      let sourceInstance = attemptInstance ?? instance;
+      let node = normalize(run.workflow).nodes.find(item => item.id === sourceNodeId);
+      if (producer === 'document') {
+        const gate = normalize(run.workflow).nodes.find(item => item.id === run.flow?.nodeId);
+        if (run.flow?.status !== 'waiting_gate' || gate?.kind !== 'human' || instance !== run.flow.instance ||
+            nodeId !== undefined && nodeId !== gate.id || attemptInstance !== undefined && attemptInstance !== run.flow.instance)
+          throw new Error('Document evidence must belong to the current human task instance.');
+        sourceNodeId = gate.id;
+        sourceInstance = run.flow.instance;
+        node = gate;
+      }
+      if (!node || !sourceInstance || !['waiting_gate', 'ready', 'completed', 'awaiting_continue'].includes(run.flow?.status))
+        throw new Error('Evidence source is not available for this workflow run.');
+      if (producer === 'activity_receipt') {
+        const attempt = (run.activityAttempts ?? []).find(item => item.nodeId === sourceNodeId && item.instance === sourceInstance && item.status === 'completed') ??
+          (run.attempt?.nodeId === sourceNodeId && run.attempt?.instance === sourceInstance && run.attempt?.status === 'completed' ? run.attempt : null);
+        const receipt = attempt?.output ?? attempt?.effectResult;
+        if (!attempt || !receipt) throw new Error('The exact completed activity receipt is unavailable.');
+        const descriptor = node.activity && activityCatalog?.get(node.activity);
+        if (descriptor?.resources?.location === 'integration') producer = 'api_snapshot';
+        name = name || `${node.name}-receipt.json`; mime = 'application/json'; data = Buffer.from(JSON.stringify(receipt)).toString('base64');
+      }
+      if (!['document', 'api_snapshot', 'activity_receipt'].includes(producer)) throw new Error('Unsupported workflow evidence producer.');
+      const source = `${run.id}:${sourceNodeId}:${sourceInstance}:${producer}`;
+      const meta = await contextFiles.add(run, { name, mime, data }, source, { genericEvidence: true });
+      run.workflowEvidence ??= [];
+      const prior = run.workflowEvidence.find(item => item.id === meta.id);
+      if (prior) return structuredClone(prior);
+      const ref = { id: meta.id, digest: meta.hash, mediaType: meta.mime, byteLength: meta.size, name: meta.name,
+        source: { nodeId: sourceNodeId, attemptInstance: sourceInstance, producer } };
+      run.workflowEvidence.push(ref);
+      for (const response of run.humanResponses ?? []) if (response.instance === instance && response.nodeId === run.flow?.nodeId)
+        run.humanReviews = (run.humanReviews ?? []).filter(item => item.responseId !== response.id);
+      if (sourceNodeId === run.flow?.nodeId && sourceInstance === instance)
+        this.invalidateActivityReservations(run, { gateNodeId: sourceNodeId, gateInstance: sourceInstance });
+      return structuredClone(ref);
+    },
     async decideRun(run, command) {
-      if (!run?.independentRun || state.workflowRuns?.[run.id] !== run)
+      if (!run || state.workflowRuns?.[run.id] !== run)
         throw new Error('Workflow run is not available.');
       if (run.flow?.instance !== command.instance)
         throw new Error('This workflow step has changed. Refresh before acting.');
-      const action = command.decision === 'approve' ? 'approveGate' : 'requestChanges';
+      const action = command.outcomeId ? 'decideHumanTask' : command.decision === 'approve' ? 'approveGate' : 'requestChanges';
+      if (command.outcomeId) {
+        const review = (run.humanReviews ?? []).find(item => item.instance === command.instance && item.responseId === command.responseId && item.outcomeId === command.outcomeId && item.materialDigest === command.reviewedMaterialDigest);
+        if (!review) throw new Error('Human review material changed. Prepare and review the current response again.');
+        const response = this.currentHumanResponse(run, command.responseId, command.instance);
+        const node = normalize(run.workflow).nodes.find(item => item.id === run.flow.nodeId);
+        const edge = normalize(run.workflow).edges.find(item => item.from === node.id && item.outcome === command.outcomeId) ?? normalize(run.workflow).edges.find(item => item.from === node.id && ['*', 'default'].includes(item.outcome));
+        const outcome = node.humanTask.outcomes.find(item => item.id === command.outcomeId);
+        const evidence = (run.workflowEvidence ?? []).filter(item => response.evidenceIds.includes(item.id));
+        const reservation = review.reservationId && run.activityReservations?.find(item => item.id === review.reservationId);
+        const materialDigest = activityDigest({ runId: run.id, workflowId: run.workflow.id, workflowVersion: run.flow.workflowVersion ?? run.workflow.version ?? 1,
+          nodeId: node.id, instance: command.instance, responseId: response.id, responseDigest: response.digest, evidence, outcomeId: outcome.id,
+          ...(reservation ? { reservationId: reservation.id, reservationDigest: reservation.digest, preview: reservation.preview } : {}) });
+        if (materialDigest !== command.reviewedMaterialDigest) throw new Error('Human review material changed. Prepare and review the current response again.');
+        if (outcome.effect === 'approve_activity' && (!reservation || review.reservationDigest !== reservation.digest || !edge)) throw new Error('Prepare and review the exact effect intent before choosing this outcome.');
+      }
       const context = state.sessions[run.sessionId] ?? run;
       await engine.decide(context, { action, instance: command.instance, feedback: command.feedback, actor: command.actor, principal: command.principal,
-        activityReservationId: command.activityReservationId, activityReservationDigest: command.activityReservationDigest });
+        outcomeId: command.outcomeId, responseId: command.responseId, reviewedMaterialDigest: command.reviewedMaterialDigest,
+        activityReservationId: command.activityReservationId ?? (command.outcomeId && run.humanReviews?.find(item => item.instance === command.instance && item.responseId === command.responseId && item.outcomeId === command.outcomeId)?.reservationId),
+        activityReservationDigest: command.activityReservationDigest ?? (command.outcomeId && run.humanReviews?.find(item => item.instance === command.instance && item.responseId === command.responseId && item.outcomeId === command.outcomeId)?.reservationDigest) });
       run.decisions ??= [];
-      run.decisions.push({ instance: command.instance, decision: command.decision, actor: command.actor, principal: structuredClone(command.principal), at: new Date().toISOString() });
+      run.decisions.push({ instance: command.instance, decision: command.decision ?? command.outcomeId, outcomeId: command.outcomeId,
+        ...(command.responseId ? { responseId: command.responseId } : {}), ...(command.reviewedMaterialDigest ? { materialDigest: command.reviewedMaterialDigest } : {}),
+        actor: command.actor, principal: structuredClone(command.principal), at: new Date().toISOString() });
       return structuredClone(run);
     },
     claimRun(run, { client, label, actorKey }) {
@@ -1215,18 +1333,22 @@ export function createWorkflows({
       if (!run || state.workflowRuns?.[run.id] !== run) return false;
       const workflow = normalize(run.workflow);
       const history = run.flow?.history?.at(-1);
-      return Boolean(history && history.to === nodeId && history.outcome === 'approved' &&
-        workflow.nodes.some(node => node.id === history.nodeId && node.kind === 'human') &&
-        workflow.edges.some(edge => edge.from === history.nodeId && edge.to === nodeId && edge.outcome === 'approved'));
+      const gate = workflow.nodes.find(node => node.id === history?.nodeId);
+      const authorized = gate?.humanTask?.outcomes?.some(outcome => outcome.id === history?.outcome && outcome.effect === 'approve_activity') ?? (gate?.legacyHumanTask && history?.outcome === 'approved');
+      return Boolean(history && history.to === nodeId && authorized &&
+        gate?.kind === 'human' && workflow.edges.some(edge => edge.from === history.nodeId && edge.to === nodeId && edge.outcome === history.outcome));
     },
-    async reserveActivityIntent({ runId, gateNodeId, gateInstance, targetNodeId }) {
+    async reserveActivityIntent({ runId, gateNodeId, gateInstance, targetNodeId, responseId }) {
       const run = state.workflowRuns?.[runId];
       if (!run || run.flow?.status !== 'waiting_gate' || run.flow?.nodeId !== gateNodeId ||
           run.flow?.instance !== gateInstance || run.attempt?.instance !== gateInstance || run.attempt?.status !== 'waiting')
         throw new Error('The human gate is no longer the active workflow step.');
       const workflow = normalize(run.workflow);
       const gate = workflow.nodes.find(node => node.id === gateNodeId);
-      const route = workflow.edges.find(edge => edge.from === gateNodeId && edge.to === targetNodeId && edge.outcome === 'approved');
+      const route = workflow.edges.find(edge => edge.from === gateNodeId && edge.to === targetNodeId &&
+        (edge.outcome === 'approved' && !gate?.humanTask?.outcomes?.length ||
+          gate?.humanTask?.outcomes?.some(outcome => outcome.effect === 'approve_activity' &&
+            (outcome.id === edge.outcome || ['*', 'default'].includes(edge.outcome)))));
       const target = workflow.nodes.find(node => node.id === targetNodeId);
       if (gate?.kind !== 'human' || !route || !target?.activity)
         throw new Error('The reservation target must be the configured approved activity route.');
@@ -1241,7 +1363,7 @@ export function createWorkflows({
       if (run.activityReservations.filter(item => !item.consumedAt && !item.invalidatedAt).length >= 32)
         throw new Error('Workflow has too many outstanding activity reservations.');
       const targetInstance = randomUUID();
-      const prepared = await prepareActivityIntent(run, target, targetInstance, { gateNodeId, gateInstance });
+      const prepared = await prepareActivityIntent(run, target, targetInstance, { gateNodeId, gateInstance, ...(responseId ? { responseId } : {}) });
       const intent = checkedActivityIntent(prepared.intent);
       const resourcePins = checkedActivityIntent(prepared.resourcePins ?? {});
       const intentDigest = activityDigest(intent);
@@ -1252,6 +1374,7 @@ export function createWorkflows({
       if (activityDigest(prepared.ref) !== activityDigest(target.activity)) throw new Error('Prepared activity revision changed.');
       const reservation = {
         id: randomUUID(), runId, gateNodeId, gateInstance, targetNodeId, targetInstance,
+        ...(responseId ? { humanResponseId: responseId } : {}),
         activityRef: structuredClone(prepared.ref), inputDigest: prepared.inputDigest,
         activityDescriptorDigest: target.activityDescriptorDigest ?? activityDigest(descriptor),
         intentDigest, idempotencyKey: prepared.idempotencyKey, resourcePins,
@@ -1268,7 +1391,10 @@ export function createWorkflows({
     activityReservationForActivation(runContext, nodeId) {
       const run = runContext?.independentRun ? runContext : state.workflowRuns?.[runContext?.workflowRunId];
       const history = run?.flow?.history?.at(-1);
-      if (!run || !history || history.outcome !== 'approved') return null;
+      const workflow = run && normalize(run.workflow);
+      const gate = workflow?.nodes.find(node => node.id === history?.nodeId);
+      const authorized = gate?.humanTask?.outcomes?.some(outcome => outcome.id === history?.outcome && outcome.effect === 'approve_activity') ?? (gate?.legacyHumanTask && history?.outcome === 'approved');
+      if (!run || !history || !authorized) return null;
       const reservation = (run.activityReservations ?? []).find(item => item.gateNodeId === history.nodeId &&
         item.gateInstance === history.instance && item.targetNodeId === nodeId && item.id === history.activityReservationId &&
         item.digest === history.activityReservationDigest && !item.consumedAt && !item.invalidatedAt);
@@ -1301,7 +1427,7 @@ export function createWorkflows({
       if (!run || attempt?.nodeId !== nodeId || attempt?.instance !== instance || !attempt.reservationId) return null;
       const reservation = (run.activityReservations ?? []).find(item => item.id === attempt.reservationId &&
         item.targetNodeId === nodeId && item.targetInstance === instance);
-      const approved = (run.flow?.history ?? []).some(item => item.outcome === 'approved' &&
+      const approved = (run.flow?.history ?? []).some(item =>
         item.activityReservationId === reservation?.id && item.activityReservationDigest === reservation?.digest);
       return reservation && approved ? structuredClone(reservation) : null;
     },
@@ -1312,16 +1438,28 @@ export function createWorkflows({
         if (reservation.gateNodeId === gateNodeId && reservation.gateInstance === gateInstance && !reservation.consumedAt)
           reservation.invalidatedAt = new Date().toISOString();
     },
-    resolveActivityInput(run, node) {
+    resolveActivityInput(run, node, { responseId } = {}) {
       if (!run || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
       const ref = this.getActivityRef(node);
       const descriptor = activityCatalog?.get(ref);
       if (!descriptor) throw new Error(`${node.name}: pinned activity revision is unavailable.`);
-      if (node.activity) return resolveActivityBindings(node.bindings ?? {}, descriptor.inputSchema, {
+      if (node.activity) {
+        responseId ??= (run.activityReservations ?? []).find(item => item.id === run.attempt?.reservationId)?.humanResponseId;
+        const approvedResponseIds = new Set((run.flow?.history ?? []).map(item => item.humanResponseId).filter(Boolean));
+        if (responseId) approvedResponseIds.add(responseId);
+        const humanResponses = {};
+        for (const response of run.humanResponses ?? []) {
+          if (!approvedResponseIds.has(response.id)) continue;
+          const sourceNode = normalize(run.workflow).nodes.find(item => item.id === response.nodeId);
+          humanResponses[response.nodeId] = { value: response.values, schema: humanFormSchema(sourceNode) };
+        }
+        return resolveActivityBindings(node.bindings ?? {}, descriptor.inputSchema, {
         runInputSchema: normalize(run.workflow).runInputSchema,
         runInput: run.runInput ?? {},
         activityOutputs: run.activityOutputs ?? {},
+        humanResponses,
       });
+      }
       return structuredClone(node.input ?? {});
     },
     async recordActivityIntent(context, { instance, nodeId, ref, input, intent, idempotencyKey, reservationId, legacy = false, legacyCommand }) {
@@ -1562,10 +1700,19 @@ export function createWorkflows({
         await save();
       }
     },
-    readRun(id) {
+    readRun(id, leaseIdentity, projection = {}) {
       const run = state.workflowRuns?.[id];
       if (!run) return null;
-      return structuredClone(publicRun(run));
+      return structuredClone(publicRun(run, leaseIdentity, projection));
+    },
+    async readEvidence(run, evidenceId, contextFiles) {
+      if (!run || state.workflowRuns?.[run.id] !== run) throw new Error('Workflow run is not available.');
+      const evidence = (run.workflowEvidence ?? []).find(item => item.id === evidenceId);
+      if (!evidence || !Object.hasOwn(run.contextFiles ?? {}, evidenceId)) throw new Error('Workflow evidence is not available.');
+      const captured = await contextFiles.read(run, evidenceId);
+      if (captured.meta.hash !== evidence.digest || captured.bytes.length !== evidence.byteLength || captured.meta.mime !== evidence.mediaType)
+        throw new Error('Workflow evidence integrity check failed.');
+      return { evidence: structuredClone(evidence), data: captured.bytes.toString('base64') };
     },
     bindSessionRun(session, flow, migrationPrincipal = defaultPrincipal) {
       if (session.independentRun) return;
@@ -1697,7 +1844,7 @@ export function createWorkflows({
   };
 }
 
-function publicRun(run) {
+function publicRun(run, leaseIdentity, projection = {}) {
   const safeAttempt = attempt => attempt && ({
     instance: attempt.instance, nodeId: attempt.nodeId, status: attempt.status,
     startedAt: attempt.startedAt, completedAt: attempt.completedAt, outcome: attempt.outcome,
@@ -1719,6 +1866,14 @@ function publicRun(run) {
     startedAt: run.flow?.startedAt ?? run.startedAt, updatedAt: run.updatedAt ?? run.flow?.history?.at(-1)?.at ?? run.flow?.startedAt ?? run.startedAt,
     ...(run.runInputDigest ? { runInputDigest: run.runInputDigest } : {}),
     ...(run.resultDigest ? { resultDigest: run.resultDigest } : {}),
+    ...(run.flow?.humanTaskDueAt ? { humanTaskDueAt: run.flow.humanTaskDueAt, humanTaskDue: Date.parse(run.flow.humanTaskDueAt) <= Date.now() } : {}),
+    ...(typeof projection.humanTaskReviewerEligible === 'boolean' ? { humanTaskReviewerEligible: projection.humanTaskReviewerEligible } : {}),
+    ...(run.humanResponses?.length && projection.visibleHumanResponseIds?.length ? {
+      humanResponses: run.humanResponses.filter(response => projection.visibleHumanResponseIds.includes(response.id)).slice(-50).map(({ id, runId, workflowId, workflowVersion, nodeId, instance, values, digest, at, evidenceIds }) =>
+        ({ id, runId, workflowId, workflowVersion, nodeId, instance, values: structuredClone(values), digest, at, ...(evidenceIds?.length ? { evidenceIds: [...evidenceIds] } : {}) })),
+      humanResponsesTotal: run.humanResponses.filter(response => projection.visibleHumanResponseIds.includes(response.id)).length,
+    } : {}),
+    ...(run.workflowEvidence?.length ? { evidence: run.workflowEvidence.slice(-100).map(value => structuredClone(value)), evidenceTotal: run.workflowEvidence.length } : {}),
     ...(() => {
       const reservation = [...(run.activityReservations ?? [])].reverse().find(value =>
         value.gateNodeId === run.flow?.nodeId && value.gateInstance === run.flow?.instance && !value.consumedAt && !value.invalidatedAt);
@@ -1728,10 +1883,23 @@ function publicRun(run) {
         digest: reservation.digest }] } : {};
     })(),
     attempt: safeAttempt(run.attempt), activityAttempts: [...(run.activityAttempts ?? []).slice(-50).map(safeAttempt), ...(run.attempt ? [safeAttempt(run.attempt)] : [])],
-    history: (run.flow?.history ?? []).slice(-200).map(({ nodeId, instance, outcome, at, to, submission }) => ({ nodeId, instance, outcome, at, to, ...(typeof submission?.summary === 'string' ? { summary: submission.summary.slice(0, 500) } : {}) })),
+    history: (run.flow?.history ?? []).slice(-200).map(({ nodeId, instance, outcome, at, to, submission, humanResponseId, humanMaterialDigest }) => ({ nodeId, instance, outcome, at, to,
+      ...(typeof submission?.summary === 'string' ? { summary: submission.summary.slice(0, 500) } : {}),
+      ...(humanResponseId ? { humanResponseId } : {}), ...(humanMaterialDigest ? { humanMaterialDigest } : {}) })),
     historyTotal: (run.flow?.history ?? []).length,
     historyTruncated: (run.flow?.history ?? []).length > 200,
-    lease: run.lease ? { id: run.lease.id, client: run.lease.client, label: run.lease.label, expiresAt: run.lease.expiresAt } : null,
+    lease: run.lease ? {
+      id: run.lease.id,
+      client: run.lease.client,
+      label: run.lease.label,
+      expiresAt: run.lease.expiresAt,
+      ...(leaseIdentity ? {
+        ownedByCurrentCaller:
+          run.lease.expiresAt > Date.now() &&
+          run.lease.client === leaseIdentity.client &&
+          run.lease.principalKey === leaseIdentity.actorKey,
+      } : {}),
+    } : null,
     decisions: (run.decisions ?? []).slice(-50),
     decisionsTotal: (run.decisions ?? []).length,
     decisionsTruncated: (run.decisions ?? []).length > 50,

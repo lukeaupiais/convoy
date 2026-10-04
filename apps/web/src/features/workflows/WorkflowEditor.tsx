@@ -12,7 +12,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { command, type RuntimeState, type WorkflowActivityBinding, type WorkflowActivityDescriptor, type WorkflowJsonSchema } from '../../shared/api/runtime';
+import { command, type RuntimeState, type WorkflowActivityBinding, type WorkflowActivityDescriptor, type WorkflowJsonSchema, type WorkflowStep } from '../../shared/api/runtime';
 import { activityBindingSelectionValue, activityBindingSourceIsAvailable, activityBindingSourceKey, activityEnumOptionIndex, activityEnumValueAt, activityJsonEditKey, activityPermissionEditor, activityPinIsStale, activitySchemaPathLabel, activitySourceOptionKey, changedActivityPin, declaredObjectPaths, parseActivityJsonEdit, parseRunInputSchemaEdit } from './workflow-authoring';
 import { ProfilePicker, profileRef } from '../library';
 import { newId } from '../../shared/lib/browser';
@@ -198,6 +198,13 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
     setDraft((current) => ({
       ...current,
       nodes: current.nodes.map((node) => (node.id === id ? { ...node, ...patch } : node)),
+    }));
+  }
+  function patchHumanTask(id: string, humanTask: WorkflowStep['humanTask'], rename?: { from: string; to: string }) {
+    setDraft((current) => ({
+      ...current,
+      nodes: current.nodes.map((node) => node.id === id ? { ...node, humanTask, legacyHumanTask: undefined } : node),
+      edges: rename ? current.edges.map((edge) => edge.from === id && edge.outcome === rename.from ? { ...edge, outcome: rename.to } : edge) : current.edges,
     }));
   }
   function patchInput(id: string, key: string, value: string) {
@@ -725,6 +732,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
                 state={state}
                 boards={state.boards}
                 onPatch={patchNode}
+                onPatchHumanTask={patchHumanTask}
                 onPatchInput={patchInput}
                 activityJsonDrafts={activityJsonDrafts}
                 activityJsonErrors={activityJsonErrors}
@@ -832,6 +840,7 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
                 state={state}
                 boards={state.boards}
                 onPatch={patchNode}
+                onPatchHumanTask={patchHumanTask}
                 onPatchInput={patchInput}
                 activityJsonDrafts={activityJsonDrafts}
                 activityJsonErrors={activityJsonErrors}
@@ -933,6 +942,7 @@ function NodeInspector({
   state,
   boards,
   onPatch,
+  onPatchHumanTask,
   onPatchInput,
   activityJsonDrafts,
   activityJsonErrors,
@@ -947,6 +957,7 @@ function NodeInspector({
   state: RuntimeState;
   boards: BoardSummary[];
   onPatch: (id: string, patch: Partial<GraphNode>) => void;
+  onPatchHumanTask: (id: string, task: WorkflowStep['humanTask'], rename?: { from: string; to: string }) => void;
   onPatchInput: (id: string, key: string, value: string) => void;
   activityJsonDrafts: Record<string, string>;
   activityJsonErrors: Record<string, string>;
@@ -957,6 +968,14 @@ function NodeInspector({
   onClose: () => void;
 }) {
   const headings = node.artifact?.headings.join('\n') ?? '';
+  const humanTask = node.humanTask ?? {
+    outcomes: [
+      { id: 'approved', label: node.decisionLabels?.approved ?? 'Approve', effect: 'approve_activity' as const },
+      { id: 'changes_requested', label: node.decisionLabels?.changes_requested ?? 'Request changes' },
+    ],
+  };
+  const patchTask = (next: NonNullable<WorkflowStep['humanTask']>, rename?: { from: string; to: string }) =>
+    onPatchHumanTask(node.id, next, rename);
   const patchArtifact = (path: string, nextHeadings: string) =>
     onPatch(node.id, {
       artifact: path || nextHeadings ? { path, headings: nextHeadings.split('\n') } : undefined,
@@ -1321,43 +1340,80 @@ function NodeInspector({
         </label>
       )}
       {node.type === 'approval' && (
-        <details open={!!node.decisionLabels}>
-          <summary>Decision labels</summary>
-          <label>
-            Approved
-            <input
-              value={node.decisionLabels?.approved ?? ''}
-              placeholder="Approve"
-              maxLength={80}
-              onChange={(event) => {
-                const value = event.target.value;
-                const decisionLabels = { ...node.decisionLabels, approved: value || undefined };
-                if (!decisionLabels.approved) delete decisionLabels.approved;
-                onPatch(node.id, {
-                  decisionLabels: Object.keys(decisionLabels).length ? decisionLabels : undefined,
-                });
-              }}
-            />
-          </label>
-          <label>
-            Changes requested
-            <input
-              value={node.decisionLabels?.changes_requested ?? ''}
-              placeholder="Request changes"
-              maxLength={80}
-              onChange={(event) => {
-                const value = event.target.value;
-                const decisionLabels = {
-                  ...node.decisionLabels,
-                  changes_requested: value || undefined,
-                };
-                if (!decisionLabels.changes_requested) delete decisionLabels.changes_requested;
-                onPatch(node.id, {
-                  decisionLabels: Object.keys(decisionLabels).length ? decisionLabels : undefined,
-                });
-              }}
-            />
-          </label>
+        <details open={Boolean(node.humanTask)}>
+          <summary>Human task</summary>
+          {humanTask.outcomes.map((outcome, index) => (
+            <fieldset key={`${outcome.id}-${index}`}>
+              <label>
+                Outcome ID
+                <input value={outcome.id} maxLength={80} onChange={(event) => {
+                  const id = event.target.value;
+                  const outcomes = humanTask.outcomes.map((item, itemIndex) => itemIndex === index ? { ...item, id } : item);
+                  patchTask({ ...humanTask, outcomes }, { from: outcome.id, to: id });
+                }} />
+              </label>
+              <label>
+                Label
+                <input value={outcome.label} maxLength={80} onChange={(event) => {
+                  const outcomes = humanTask.outcomes.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item);
+                  patchTask({ ...humanTask, outcomes });
+                }} />
+              </label>
+              <label>
+                Effect
+                <select value={outcome.effect ?? ''} onChange={(event) => {
+                  const outcomes = humanTask.outcomes.map((item, itemIndex) => itemIndex === index
+                    ? { ...item, ...(event.target.value ? { effect: 'approve_activity' as const } : { effect: undefined }) } : item);
+                  patchTask({ ...humanTask, outcomes });
+                }}>
+                  <option value="">No effect authority</option>
+                  <option value="approve_activity">Authorize prepared activity</option>
+                </select>
+              </label>
+              {humanTask.outcomes.length > 2 && <button type="button" className="secondary" onClick={() => patchTask({ ...humanTask, outcomes: humanTask.outcomes.filter((_, itemIndex) => itemIndex !== index) })}>Remove outcome</button>}
+            </fieldset>
+          ))}
+          <button type="button" className="secondary" disabled={humanTask.outcomes.length >= 8} onClick={() => patchTask({ ...humanTask, outcomes: [...humanTask.outcomes, { id: `outcome-${humanTask.outcomes.length + 1}`, label: 'New outcome' }] })}>Add outcome</button>
+          <details>
+            <summary>Response fields</summary>
+            {(humanTask.form?.fields ?? []).map((field, index) => (
+              <fieldset key={`${field.id}-${index}`}>
+                <label>Field ID<input value={field.id} maxLength={80} onChange={(event) => {
+                  const fields = [...(humanTask.form?.fields ?? [])]; fields[index] = { ...field, id: event.target.value };
+                  patchTask({ ...humanTask, form: { fields } });
+                }} /></label>
+                <label>Label<input value={field.label} maxLength={100} onChange={(event) => {
+                  const fields = [...(humanTask.form?.fields ?? [])]; fields[index] = { ...field, label: event.target.value };
+                  patchTask({ ...humanTask, form: { fields } });
+                }} /></label>
+                <label>Type<select value={field.type} onChange={(event) => {
+                  const fields = [...(humanTask.form?.fields ?? [])]; fields[index] = { id: field.id, label: field.label, type: event.target.value as typeof field.type, ...(field.required ? { required: true } : {}) };
+                  patchTask({ ...humanTask, form: { fields } });
+                }}>
+                  <option value="text">Text</option><option value="number">Number</option><option value="boolean">Boolean</option><option value="choice">Choice</option><option value="date">Date</option>
+                </select></label>
+                <label>Required<input type="checkbox" checked={Boolean(field.required)} onChange={(event) => {
+                  const fields = [...(humanTask.form?.fields ?? [])]; fields[index] = { ...field, required: event.target.checked || undefined };
+                  patchTask({ ...humanTask, form: { fields } });
+                }} /></label>
+                {field.type === 'choice' && <label>Options<input value={(field.options ?? []).map((option) => `${option.value}:${option.label}`).join(', ')} onChange={(event) => {
+                  const options = event.target.value.split(',').map((item) => item.trim()).filter(Boolean).map((item) => { const [value, ...label] = item.split(':'); return { value, label: label.join(':') || value }; });
+                  const fields = [...(humanTask.form?.fields ?? [])]; fields[index] = { ...field, options };
+                  patchTask({ ...humanTask, form: { fields } });
+                }} /></label>}
+                <button type="button" className="secondary" onClick={() => patchTask({ ...humanTask, form: { fields: humanTask.form?.fields.filter((_, itemIndex) => itemIndex !== index) ?? [] } })}>Remove field</button>
+              </fieldset>
+            ))}
+            <button type="button" className="secondary" disabled={(humanTask.form?.fields.length ?? 0) >= 32} onClick={() => patchTask({ ...humanTask, form: { fields: [...(humanTask.form?.fields ?? []), { id: `field-${(humanTask.form?.fields.length ?? 0) + 1}`, label: 'New field', type: 'text' }] } })}>Add field</button>
+          </details>
+          <label>Reviewer permission<select value={humanTask.reviewerPolicy?.permission ?? ''} onChange={(event) => patchTask({ ...humanTask, reviewerPolicy: { ...(humanTask.reviewerPolicy?.userIds ? { userIds: humanTask.reviewerPolicy.userIds } : {}), ...(event.target.value ? { permission: event.target.value as 'project.execute' | 'project.write' } : {}) } })}>
+            <option value="">Default project execution permission</option><option value="project.execute">Project execution</option><option value="project.write">Project write</option>
+          </select></label>
+          <label>Reviewer user IDs<input value={(humanTask.reviewerPolicy?.userIds ?? []).join(', ')} onChange={(event) => {
+            const userIds = event.target.value.split(',').map((value) => value.trim()).filter(Boolean);
+            patchTask({ ...humanTask, reviewerPolicy: { ...(humanTask.reviewerPolicy?.permission ? { permission: humanTask.reviewerPolicy.permission } : {}), ...(userIds.length ? { userIds } : {}) } });
+          }} /></label>
+          <label>Deadline (minutes)<input type="number" min={1} max={525600} value={humanTask.dueAfterSeconds ? humanTask.dueAfterSeconds / 60 : ''} onChange={(event) => patchTask({ ...humanTask, dueAfterSeconds: event.target.value ? Number(event.target.value) * 60 : undefined })} /></label>
         </details>
       )}
       {(node.type === 'agent' || node.type === 'check' || node.type === 'approval') && (

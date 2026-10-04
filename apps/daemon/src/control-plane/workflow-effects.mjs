@@ -323,7 +323,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     if (run.attempt?.activityRef && activityDigest(run.attempt.activityRef) === activityDigest(ref) &&
         run.attempt.activityDescriptorDigest && run.attempt.activityDescriptorDigest !== activityDigest(descriptor))
       throw new Error('Pinned activity metadata changed; preparation is blocked.');
-    const input = owner.resolveActivityInput(run, node);
+    const input = owner.resolveActivityInput(run, node, approvalReservation?.responseId ? { responseId: approvalReservation.responseId } : undefined);
     const identity = { runId: run.id, organizationId: run.organizationId, projectId: run.projectId,
       principal: structuredClone(run.principal), nodeId: node.id, instance, idempotencyKey: `${run.id}:${instance}` };
     const sourceRef = run.flow?.decisionSubmissionRef;

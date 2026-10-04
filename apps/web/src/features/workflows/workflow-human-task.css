@@ -1,0 +1,49 @@
+.workflow-human-task {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.workflow-human-task form,
+.workflow-human-task .workflow-human-outcomes,
+.workflow-human-task .workflow-human-review {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.workflow-human-task label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.workflow-human-review pre {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.workflow-human-review-values,
+.workflow-human-prepared dl {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.workflow-human-review-values > div,
+.workflow-human-prepared dl > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr);
+  gap: 0.6rem;
+}
+
+.workflow-human-review-values dt,
+.workflow-human-prepared dt {
+  color: var(--muted, #777);
+}
+
+.workflow-human-review-values dd,
+.workflow-human-prepared dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

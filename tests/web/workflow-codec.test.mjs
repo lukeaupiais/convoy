@@ -188,6 +188,45 @@ test('decision labels survive draft codec round trips and invalid metadata is re
   assert.match(validateWorkflow(draft).join(' '), /supported human outcomes/);
 });
 
+test('legacy gate editor conversion emits labels-only data without the internal trust marker', () => {
+  const graph = fromWorkflow({ id: 'legacy-editor', name: 'Legacy editor', nodes: [{
+    id: 'review', kind: 'human', name: 'Review', prompt: 'Review',
+    legacyHumanTask: true,
+    humanTask: { outcomes: [
+      { id: 'approved', label: 'Accept estimate', effect: 'approve_activity' },
+      { id: 'changes_requested', label: 'Revise estimate' },
+    ] },
+    decisionLabels: { approved: 'Accept estimate', changes_requested: 'Revise estimate' },
+  }] });
+  const [wire] = toWorkflow(graph).nodes;
+  assert.equal(wire.legacyHumanTask, undefined);
+  assert.equal(wire.humanTask, undefined);
+  assert.deepEqual(wire.decisionLabels, { approved: 'Accept estimate', changes_requested: 'Revise estimate' });
+  graph.nodes[0] = { ...graph.nodes[0], legacyHumanTask: undefined, humanTask: {
+    outcomes: [{ id: 'approve', label: 'Approve' }, { id: 'decline', label: 'Decline' }],
+  } };
+  assert.deepEqual(toWorkflow(graph).nodes[0].humanTask?.outcomes.map(({ id }) => id), ['approve', 'decline']);
+});
+
+test('configured human task form and explicit effect policy survive codec round trips', () => {
+  const task = { outcomes: [
+    { id: 'authorize_purchase', label: 'Authorize purchase', effect: 'approve_activity' },
+    { id: 'request_revision', label: 'Request a revised quote' },
+  ], form: { fields: [
+    { id: 'total', label: 'Approved total', type: 'number', required: true, minimum: 1, maximum: 100000 },
+    { id: 'deliveryDate', label: 'Delivery date', type: 'date' },
+  ] }, reviewerPolicy: { permission: 'project.write', userIds: ['finance-reviewer'] }, dueAfterSeconds: 3600 };
+  const graph = fromWorkflow({ id: 'purchase', name: 'Purchase review', nodes: [
+    { id: 'review', kind: 'human', name: 'Review quote', humanTask: task },
+    { id: 'send', kind: 'action', name: 'Submit purchase', activity: { id: 'procurement.submit', revision: 4 } },
+  ], edges: [{ id: 'authorize', from: 'review', to: 'send', outcome: 'authorize_purchase' }] });
+  assert.deepEqual(toWorkflow(graph).nodes[0].humanTask, task);
+  assert.deepEqual(validateWorkflow(graph), []);
+  graph.nodes[0].humanTask.outcomes[0].label = 'Publish';
+  assert.equal(toWorkflow(graph).nodes[0].humanTask.outcomes[0].effect, 'approve_activity', 'labels cannot create or remove explicit authority');
+  assert.match(validateWorkflow({ ...graph, edges: [{ id: 'invalid', from: 'review', to: 'send', outcome: 'accept' }] }).join(' '), /not configured/i);
+});
+
 test('an empty create-ticket project uses the run project when encoded', () => {
   const editor = fromWorkflow({ id: 'run-project-create', name: 'Run project create', nodes: [
     { id: 'create', kind: 'action', name: 'Create work', operation: 'create_ticket', input: {
@@ -412,5 +451,5 @@ test('editor validation rejects non-agent bindings and unsupported human outcome
   });
   const errors = validateWorkflow(graph).join(' ');
   assert.match(errors, /material bindings require an agent submission/);
-  assert.match(errors, /human outcomes support approved and changes_requested only/);
+  assert.match(errors, /route outcome is not configured for this human task/);
 });

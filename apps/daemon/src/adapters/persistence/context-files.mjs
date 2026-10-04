@@ -10,6 +10,7 @@ const textExtensions = new Set(
 );
 const imageTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const textTypes = new Set(['text/plain', 'text/markdown', 'application/json']);
+const evidenceTypes = new Set(['application/pdf', 'application/json', 'text/plain', 'text/markdown']);
 export const contextLimits = {
   image: 4 * 1024 * 1024,
   text: 64000,
@@ -44,7 +45,7 @@ export function createContextFiles(directory) {
   return {
     metadata,
     read,
-    async add(s, input, source, { exactUtf8Snapshot = false } = {}) {
+    async add(s, input, source, { exactUtf8Snapshot = false, genericEvidence = false } = {}) {
       if (
         typeof input.name !== 'string' ||
         !input.name.trim() ||
@@ -62,6 +63,38 @@ export function createContextFiles(directory) {
         throw new Error('File must contain valid base64 data, no larger than 4 MB.');
       const bytes = Buffer.from(input.data, 'base64');
       let mime = input.mime;
+      if (genericEvidence) {
+        if (!evidenceTypes.has(mime) || /\.(?:html?|svg|xhtml)$/i.test(input.name) || bytes.length > contextLimits.image || bytes.toString('base64') !== input.data)
+          throw new Error('Evidence must be a bounded PDF or UTF-8 text document.');
+        if (mime === 'application/pdf') {
+          if (bytes.length < 5 || bytes.toString('ascii', 0, 5) !== '%PDF-') throw new Error('Invalid PDF evidence.');
+        } else {
+          let text;
+          try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+          catch { throw new Error('Evidence text must use UTF-8 encoding.'); }
+          if (/\u0000/.test(text)) throw new Error('Evidence text cannot contain binary content.');
+          if (mime === 'application/json') {
+            try { JSON.parse(text); } catch { throw new Error('API snapshot evidence must be valid JSON.'); }
+          }
+        }
+        const digest = hash(bytes);
+        const id = hash(JSON.stringify([s.id, input.name, digest, source ?? null]));
+        s.contextFiles ??= {};
+        if (s.contextFiles[id]) return s.contextFiles[id];
+        const files = Object.values(s.contextFiles);
+        if (files.length >= 100 || files.reduce((n, file) => n + file.size, 0) + bytes.length > contextLimits.session)
+          throw new Error('Evidence storage is full (100 files / 32 MB).');
+        await mkdir(root, { recursive: true, mode: 0o700 });
+        try { await writeFile(join(root, id), bytes, { flag: 'wx', mode: 0o600 }); }
+        catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          const existing = await readFile(join(root, id));
+          if (hash(existing) !== digest) throw new Error('Evidence storage integrity check failed.');
+        }
+        const meta = { id, name: input.name, mime, size: bytes.length, hash: digest, ...(source ? { source } : {}), at: new Date().toISOString() };
+        s.contextFiles[id] = meta;
+        return meta;
+      }
       const image = imageTypes.has(mime);
       if (bytes.toString('base64') !== input.data) throw new Error('Invalid base64 data.');
       if (image) {
