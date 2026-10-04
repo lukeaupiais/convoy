@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.mjs';
+import { createProviderAdapterRegistry } from '../../apps/daemon/src/adapters/providers/registry.mjs';
 
 const defaults = {
   maxDescendantRuns: 128,
@@ -104,7 +105,7 @@ function echoRegistration(barriers) {
   };
 }
 
-async function fixture(t, { workflowActivities = [], beforeClose = [], generate } = {}) {
+async function fixture(t, { workflowActivities = [], beforeClose = [], generate, runtimeOptions = {} } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'convoy-workflow-composition-policy-'));
   const options = {
     directory,
@@ -120,6 +121,7 @@ async function fixture(t, { workflowActivities = [], beforeClose = [], generate 
       close: async () => {},
     },
     workflowActivities,
+    ...runtimeOptions,
   };
   let runtime = await createRuntime(options);
   t.after(async () => {
@@ -1717,19 +1719,46 @@ test('a human-approved agent child waits above current active capacity, then run
   let providerCalls = 0;
   const f = await fixture(t, {
     workflowActivities: [registration],
-    generate: async function* () {
-      providerCalls += 1;
-      yield {
-        type: 'result',
-        message: {
-          role: 'assistant',
-          content: [{ type: 'toolCall', id: `submit-${providerCalls}`, name: 'submit_step', arguments: {
-            summary: 'Reviewed after capacity became available', outcome: 'success', artifacts: [], references: [],
-          } }],
-          stopReason: 'stop', timestamp: Date.now(),
+    runtimeOptions: {
+      provider: { id: 'composition-legacy', name: 'Composition legacy provider', capabilities: [] },
+      credentialBroker: { resolve: async () => ({ value: 'fixture-credential' }) },
+      providerAdapters: createProviderAdapterRegistry({ 'composition-mock': () => ({
+        protocol: 'openai-compatible', capabilities: ['streaming', 'tool-calls'],
+        inspectConnection: async () => ({ available: true }),
+        discoverModels: async () => [{ id: 'capacity-model', name: 'Capacity fixture model', input: ['text'] }],
+        async *generate() {
+          providerCalls += 1;
+          yield {
+            type: 'result',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'toolCall', id: `submit-${providerCalls}`, name: 'submit_step', arguments: {
+                summary: 'Reviewed after capacity became available',
+                details: { summary: 'Reviewed after capacity became available' },
+                outcome: 'success', artifacts: [], references: [],
+              } }],
+              stopReason: 'stop', timestamp: Date.now(),
+            },
+          };
         },
-      };
+      }) }),
+      deployment: { id: 'composition-policy-test', displayName: 'Composition policy test',
+        issuer: 'https://composition.test', publicOrigin: 'https://composition.test',
+        capabilities: ['organizations', 'provider-connections'], authenticationMethods: ['local-bootstrap'] },
     },
+  });
+  const connection = await f.act('createProviderConnection', {
+    organizationId: f.organization.id, providerId: 'composition-mock',
+    displayName: 'Composition mock', owner: { kind: 'organization', organizationId: f.organization.id },
+    credentialRef: { kind: 'none' },
+  });
+  const probe = await f.act('probeProviderConnection', {
+    organizationId: f.organization.id, connectionId: connection.id, expectedRevision: connection.revision,
+  });
+  const route = await f.act('createModelRoute', {
+    organizationId: f.organization.id, name: 'composition-capacity-route', purposes: ['coding'],
+    candidates: [{ connectionId: connection.id, offeringId: probe.offerings[0].id }],
+    policy: { fallback: 'never' },
   });
 
   const unknownChild = durableMapChildWorkflow(f.projectA.id, registration.descriptor.ref.id);
@@ -1758,7 +1787,7 @@ test('a human-approved agent child waits above current active capacity, then run
         ],
         form: { fields: [{ id: 'reason', label: 'Review note', type: 'text', required: true, minLength: 3, maxLength: 120 }] },
       } },
-      { id: 'assess', kind: 'agent', model: 'fixture', permissions: 'none', name: 'Assess record',
+      { id: 'assess', kind: 'agent', model: route.id, permissions: 'none', name: 'Assess record',
         prompt: 'Assess the record and submit a concise summary.', maxRounds: 2,
         submissionRequirements: { success: { fields: ['summary'], minReferences: 0 } } },
     ],
@@ -1825,7 +1854,9 @@ test('a human-approved agent child waits above current active capacity, then run
     run => ['paused', 'failed', 'completed'].includes(run.status) || providerCalls > 0,
     'the approved agent child did not reach a dispatch decision under the reduced active ceiling');
   assert.equal(agentRun.status, 'paused', JSON.stringify(agentRun));
-  assert.match(agentRun.queueReason ?? '', /capacity|descendant|composition/i);
+  const heldState = await f.readState();
+  assert.match(heldState.workflowRuns[agentRunId].queueReason ?? '', /capacity|descendant|composition/i);
+  assert.equal(agentRun.attempt.status, 'ready', 'the approved activity remains safely before provider dispatch');
   const blockedInstance = agentRun.instance;
   assert.equal(agentRun.workflowVersion, gatedAgent.version);
   assert.equal(providerCalls, 0, 'capacity denial occurs before provider generation');
@@ -1838,6 +1869,12 @@ test('a human-approved agent child waits above current active capacity, then run
   assert.equal(recoveredAgent.instance, blockedInstance);
   assert.equal(recoveredAgent.workflowVersion, gatedAgent.version);
   assert.equal(providerCalls, 0);
+  const recoveredAgentParent = await f.readRun(agentRoot.workflowRunId);
+  assert.equal(recoveredAgentParent.status, 'interrupted');
+  await f.act('claimWorkflowRun', { workflowRunId: agentRoot.workflowRunId });
+  await f.act('continueWorkflowRun', {
+    workflowRunId: agentRoot.workflowRunId, instance: recoveredAgentParent.instance,
+  });
 
   const recoveredUnknown = await f.readRun(unknownSlot.runId);
   await f.act('claimWorkflowRun', { workflowRunId: unknownSlot.runId });
@@ -1845,18 +1882,30 @@ test('a human-approved agent child waits above current active capacity, then run
     workflowRunId: unknownSlot.runId, instance: recoveredUnknown.instance,
     effectKey: recoveredUnknown.attempt.effectKey, resolution: 'applied',
   });
+  const recoveredUnknownParent = await f.readRun(unknownRoot.workflowRunId);
+  await f.act('claimWorkflowRun', { workflowRunId: unknownRoot.workflowRunId });
+  await f.act('continueWorkflowRun', {
+    workflowRunId: unknownRoot.workflowRunId, instance: recoveredUnknownParent.instance,
+  });
   await f.act('claimWorkflowRun', { workflowRunId: agentRunId });
   await f.act('continueWorkflowRun', { workflowRunId: agentRunId, instance: blockedInstance });
   agentRun = await waitFor(() => f.readRun(agentRunId),
     run => run.status === 'completed' || run.status === 'failed',
     'the exact human-approved child did not resume when active capacity became available');
-  assert.equal(agentRun.status, 'completed', JSON.stringify(agentRun));
+  const finalState = await f.readState();
+  assert.equal(agentRun.status, 'completed', JSON.stringify({
+    run: agentRun, providerCalls, owner: finalState.workflowRuns[agentRunId],
+    unknownParent: finalState.workflowRuns[unknownRoot.workflowRunId],
+    unknownChild: finalState.workflowRuns[unknownSlot.runId],
+    session: agentRun.sessionId ? finalState.sessions?.[agentRun.sessionId] : null,
+  }));
   assert.equal(agentRun.workflowVersion, gatedAgent.version);
   assert.equal(providerCalls, 1, 'the accepted mock-provider submission runs exactly once');
   assert.equal(dispatches.length, 1, 'the unrelated unknown effect is reconciled, never replayed');
-  const finalAgentState = await f.readState();
-  assert.equal(finalAgentState.workflowRuns[agentRunId].flow.instance, blockedInstance);
-  assert.equal(finalAgentState.workflowRuns[agentRunId].submissions?.length, 1,
-    'the child retains one accepted submit_step receipt');
+  assert.equal(finalState.workflowRuns[agentRunId].flow.instance, blockedInstance);
+  assert.equal(agentRun.history.filter(entry => entry.nodeId === 'assess').length, 1,
+    'the child retains one accepted submit_step receipt in canonical workflow history');
+  assert.equal(agentRun.history.find(entry => entry.nodeId === 'assess')?.summary,
+    'Reviewed after capacity became available');
   assert.equal((await f.readRun(agentRoot.workflowRunId)).status, 'completed');
 });
