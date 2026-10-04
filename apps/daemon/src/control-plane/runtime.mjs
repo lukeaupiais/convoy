@@ -971,7 +971,7 @@ export async function createRuntime({
     await requireLinkedWorkflowLease(s, client, actor);
     if (!s.lease || s.lease.expiresAt < Date.now() || s.lease.client !== client)
       throw new Error('Claim session control first. Another terminal or tab may own it.');
-    if (s.lease.actorKey && s.lease.actorKey !== principalKey(actor))
+    if (s.lease.actorKey !== principalKey(actor))
       throw new Error('Session control belongs to another authenticated principal.');
     s.lease.expiresAt = Date.now() + 90000;
   }

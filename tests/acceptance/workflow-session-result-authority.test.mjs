@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.mjs';
+import { createPersistence } from '../../apps/daemon/src/adapters/persistence/index.mjs';
+import { createRuntime } from '../../apps/daemon/src/control-plane/runtime.mjs';
+import { initialControlPlaneState } from '../../apps/daemon/src/control-plane/state-schema.mjs';
 
 test('session-backed result reads and control remain bound to the authenticated actor', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'convoy-session-result-authority-'));
@@ -24,7 +26,8 @@ test('session-backed result reads and control remain bound to the authenticated 
     generate: async function* () { assert.fail('A data-only workflow must not invoke a provider.'); },
     runners: { execute: async () => assert.fail('A data-only workflow must not acquire a runner.'), close: async () => {} },
   };
-  let runtime = await createRuntime(options);
+  const persistence = await createPersistence({ directory, initialState: initialControlPlaneState() });
+  let runtime = await createRuntime({ persistence, ...options });
   t.after(async () => { await runtime?.close(); await rm(directory, { recursive: true, force: true }); });
   const client = 'shared-browser-client';
   const act = (action, fields = {}, principal) => runtime.command({ action, client, ...fields }, principal);
@@ -40,16 +43,12 @@ test('session-backed result reads and control remain bound to the authenticated 
       bindings: { count: { literal: 73 } } }], edges: [],
   } });
 
-  await runtime.close();
-  const statePath = join(directory, 'state.json');
-  const persisted = JSON.parse(await readFile(statePath, 'utf8'));
   const first = { kind: 'user', userId: 'session-result-owner' };
   const second = { kind: 'user', userId: 'session-result-other' };
   const timestamp = new Date().toISOString();
-  persisted.identity.users.push(...[first, second].map(principal => ({ id: principal.userId,
+  persistence.store.data.identity.users.push(...[first, second].map(principal => ({ id: principal.userId,
     displayName: principal.userId, state: 'active', revision: 1, createdAt: timestamp, updatedAt: timestamp })));
-  await writeFile(statePath, JSON.stringify(persisted));
-  runtime = await createRuntime(options);
+  await persistence.store.save();
   await act('createMembership', { organizationId: organization.id, principal: first,
     scope: { kind: 'organization', organizationId: organization.id }, roles: ['member'] });
   await act('createMembership', { organizationId: organization.id, principal: second,
@@ -74,7 +73,7 @@ test('session-backed result reads and control remain bound to the authenticated 
   assert.equal(session?.flow?.status, 'completed', JSON.stringify(session?.flow));
   const workflowRunId = session.flow.id;
   assert.equal(session.lease.actorKey, undefined, 'session snapshots do not disclose the private lease principal key');
-  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).sessions[conversation.sessionId].lease.actorKey,
+  assert.equal(persistence.store.data.sessions[conversation.sessionId].lease.actorKey,
     'user:session-result-owner', 'the stored lease is bound to the authenticated principal');
   assert.equal((await act('getWorkflowRun', { workflowRunId }, first)).workflowRunResultEligible, true);
   assert.deepEqual((await act('getWorkflowRunResult', { workflowRunId }, first)).result, { count: 73 });
@@ -86,17 +85,24 @@ test('session-backed result reads and control remain bound to the authenticated 
   await assert.rejects(act('claim', { sessionId: conversation.sessionId }, second), /stored execution principal|controlled/i);
   await assert.rejects(act('release', { sessionId: conversation.sessionId }, second), /another authenticated principal/i);
   await assert.rejects(act('getWorkflowRunResult', { workflowRunId }, second), /stored principal|authenticated principal/i);
-  const afterForeignControl = JSON.parse(await readFile(statePath, 'utf8')).sessions[conversation.sessionId].lease;
+  const afterForeignControl = persistence.store.data.sessions[conversation.sessionId].lease;
   assert.equal(afterForeignControl.expiresAt, beforeForeignControl, 'rejected foreign control does not renew or replace the owner lease');
 
-  await runtime.close();
-  const legacyState = JSON.parse(await readFile(statePath, 'utf8'));
-  delete legacyState.sessions[conversation.sessionId].lease.actorKey;
-  await writeFile(statePath, JSON.stringify(legacyState));
-  runtime = await createRuntime(options);
+  const liveUnboundLease = persistence.store.data.sessions[conversation.sessionId].lease;
+  delete liveUnboundLease.actorKey;
+  await persistence.store.save();
   const legacyLeaseRead = await act('getWorkflowRun', { workflowRunId }, first);
   assert.equal(legacyLeaseRead.workflowRunResultEligible, false, 'a legacy unbound lease is not result-read authority');
   await assert.rejects(act('getWorkflowRunResult', { workflowRunId }, first), /stored principal|authenticated principal/i);
+  const unboundBeforeControl = structuredClone(persistence.store.data.sessions[conversation.sessionId].lease);
+  for (const principal of [first, second]) {
+    await assert.rejects(act('release', { sessionId: conversation.sessionId }, principal), /authenticated principal/i);
+    await assert.rejects(act('heartbeat', { sessionId: conversation.sessionId }, principal), /authenticated principal/i);
+  }
+  const unboundAfterControl = persistence.store.data.sessions[conversation.sessionId].lease;
+  assert.equal(unboundAfterControl.actorKey, undefined);
+  assert.equal(unboundAfterControl.expiresAt, unboundBeforeControl.expiresAt,
+    'neither the prior owner nor another actor can renew/release an unbound legacy lease');
   await act('claim', { sessionId: conversation.sessionId }, first);
   assert.deepEqual((await act('getWorkflowRunResult', { workflowRunId }, first)).result, { count: 73 },
     'the stored workflow principal can explicitly rebind legacy session control');
