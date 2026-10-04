@@ -662,6 +662,87 @@ test('map slots obey independent project and organization ceilings and advance f
   assert.equal(publishedChildB.version, 1);
 });
 
+test('per-root active-descendant ceilings allow unrelated roots while limiting each root independently', async (t) => {
+  const barriers = new Map();
+  const echo = echoRegistration(barriers);
+  const f = await fixture(t, {
+    workflowActivities: [{ descriptor: echo.descriptor, implementation: echo.implementation }],
+    beforeClose: [
+      async () => {
+        for (const item of barriers.keys()) echo.release(item);
+      },
+    ],
+  });
+  await f.act('selectActiveContext', {
+    context: { organizationId: f.organization.id, projectId: f.projectA.id },
+  });
+  const child = echoChildWorkflow(f.projectA.id);
+  await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: child });
+  const parentA = mapWorkflow(f.projectA.id, child.id);
+  parentA.nodes[0].maxConcurrent = 4;
+  const parentB = { ...parentA, id: 'map-parent-root-b', name: 'Map parent root B' };
+  const publishedA = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: parentA });
+  const publishedB = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: parentB });
+  await f.act('setWorkflowCompositionPolicy', {
+    organizationId: f.organization.id,
+    baseRevision: 0,
+    limits: {
+      ...defaults,
+      maxConcurrentChildren: 4,
+      maxActiveDescendantRuns: 4,
+      maxActiveDescendantsPerRoot: 1,
+    },
+  });
+  const firstRoot = await f.act('startWorkflowRun', {
+    projectId: f.projectA.id,
+    workflowId: publishedA.id,
+    workflowVersion: publishedA.version,
+    runInput: { items: ['root-a-1', 'root-a-2'] },
+  });
+  await waitFor(
+    () => Promise.resolve([...echo.started]),
+    (started) => started.includes('root-a-1'),
+    'the first root did not admit its first descendant',
+  );
+  const secondRoot = await f.act('startWorkflowRun', {
+    projectId: f.projectA.id,
+    workflowId: publishedB.id,
+    workflowVersion: publishedB.version,
+    runInput: { items: ['root-b-1', 'root-b-2'] },
+  });
+  await waitFor(
+    () => Promise.resolve([...echo.started]),
+    (started) => started.includes('root-b-1'),
+    'one root at its per-root ceiling incorrectly starved another root',
+  );
+  assert.deepEqual([...echo.started].sort(), ['root-a-1', 'root-b-1']);
+  assert.deepEqual([...echo.active].sort(), ['root-a-1', 'root-b-1']);
+  const first = (await f.readRun(firstRoot.workflowRunId)).compositions[0];
+  const second = (await f.readRun(secondRoot.workflowRunId)).compositions[0];
+  assert.equal(first.slots.filter((slot) => slot.status === 'started').length, 1);
+  assert.equal(first.slots.filter((slot) => slot.status === 'queued').length, 1);
+  assert.equal(second.slots.filter((slot) => slot.status === 'started').length, 1);
+  assert.equal(second.slots.filter((slot) => slot.status === 'queued').length, 1);
+
+  echo.completeAutomatically();
+  echo.release('root-a-1');
+  echo.release('root-b-1');
+  const settled = await waitFor(
+    async () => [
+      await f.readRun(firstRoot.workflowRunId),
+      await f.readRun(secondRoot.workflowRunId),
+    ],
+    (runs) => runs.every((run) => run.status === 'completed'),
+    'each root did not advance its own queued descendant after completion',
+  );
+  assert.deepEqual(
+    settled.map((run) => run.status),
+    ['completed', 'completed'],
+  );
+  assert.deepEqual([...echo.started].sort(), ['root-a-1', 'root-a-2', 'root-b-1', 'root-b-2']);
+  assert.equal((await f.snapshot()).sessions.length, 0);
+});
+
 test('a map-local concurrency ceiling holds queued work through restart until the exact unknown child receipt is reconciled', async (t) => {
   const receipts = new Map();
   const dispatches = [];
