@@ -183,6 +183,7 @@ export type RuntimeSnapshot = {
   workflowRuns?: import('./model/workflows').WorkflowRun[];
   workflowRunsTotal?: number;
   workflowRunsTruncated?: boolean;
+  workflowCompositionPolicies?: import('./model/workflows').WorkflowCompositionPolicySnapshot;
   automationCapabilities?: AutomationCapabilities;
   automations?: AutomationRule[];
   boardAutomations?: Record<string, BoardAutomationView>;

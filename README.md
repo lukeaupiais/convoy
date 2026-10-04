@@ -8,12 +8,13 @@ Treasure fleets had a simple plan:
 
 > One ship = gold. Two ships = 2× gold. Many ships = many gold.
 
-We're applying the same logic to coding agents. More agents can ship more
-work, as long as you can keep track of their tasks, permissions, and results.
+We're applying the same logic to durable automation. More workflows can move
+more work forward when their inputs, permissions, and results stay visible.
 
-**Convoy is a local-first control plane for coding agents.** It connects
-projects, conversations, tickets, versioned workflows, and local or SSH runners.
-The web UI and native terminal client show the same durable sessions.
+**Convoy is a local-first control plane for durable automation.** It connects
+projects, versioned workflows, events, human decisions, and optional agent or
+runner resources. Conversations remain available without a workflow. The web UI
+follows durable runs, while the native terminal client attaches to agent sessions.
 
 Convoy is an **early, Linux-first alpha**. Desktop packaging targets Linux,
 Windows, and macOS; contained local execution still needs Linux runner tools.
@@ -22,29 +23,34 @@ It does not automatically merge, push, or deploy code.
 ## What you can do
 
 - **Organize work:** Connect conversations, tickets, boards, and workflows.
-- **Run work locally or over SSH:** Assign repository-specific runners that use
-  the same worker protocol.
+- **Compose work:** Start pinned child workflows, join parallel outcomes, and
+  process bounded collections with explicit limits and typed results.
+- **Use resources when a step needs them:** Workflows can run as data-only
+  automation or acquire declared provider sessions and local or SSH runners.
 - **Follow sessions:** Check progress in the browser or attach with the native
   terminal client.
 - **Keep control:** The daemon checks approvals, session leases, runner
   assignments, and pinned revisions when work executes. Interrupted mutations
   require inspection and explicit reconciliation before retry.
 
-The daemon owns durable state and policy. Workers execute in repository
-worktrees. See the [architecture overview](docs/architecture/README.md) for
-more detail.
+The daemon owns durable run state and policy. Optional workers execute repository
+operations in worktrees. See the [architecture overview](docs/architecture/README.md)
+for more detail.
 
 ## Who it is for
 
-Convoy is for developers experimenting with AI coding agents across projects
-who want to track durable sessions, run work locally or over SSH, and review
-agent results before work continues. The Linux-first alpha welcomes bug
-reports, workflow feedback, and focused open-source contributions.
+Convoy is for teams and developers coordinating repeatable work across projects.
+They can connect events and human decisions to durable runs, review typed results,
+and add provider or runner resources only to the steps that need them. The
+Linux-first alpha welcomes bug reports, workflow feedback, and focused
+open-source contributions.
 
 ## Get it running
 
-You'll need **Node.js 22.13+**, **Git**, Linux **Bubblewrap** (`bwrap`) for
-sandboxed shell execution, and **tmux** for persistent native terminals.
+You'll need **Node.js 22.13+** and **Git** for the daemon and web UI. Linux
+**Bubblewrap** (`bwrap`) is required when using a contained local shell runner;
+**tmux** is required for persistent native terminals. Data-only workflows do
+not need either optional execution tool.
 
 ```sh
 npm ci

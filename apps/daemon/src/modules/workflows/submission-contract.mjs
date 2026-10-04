@@ -6,7 +6,11 @@ export function submissionContract(workflow, node) {
   const terminal = !edges.some(edge => !['failed', 'changes_requested'].includes(edge.outcome));
   const timeout = node.kind === 'wait' && node.waitFor?.timeoutSeconds
     ? [node.waitFor.timeoutOutcome ?? 'timeout'] : [];
-  const outcomes = [...new Set([...edges.map(edge => edge.outcome), ...timeout, ...(terminal ? ['success', 'approved'] : [])])];
+  // Submission requirements declare the supported agent outcomes and their
+  // evidence fields. Include them even when the agent node is terminal so a
+  // completed, configured submission can be used as a typed run result.
+  const outcomes = [...new Set([...edges.map(edge => edge.outcome), ...timeout,
+    ...Object.keys(node.submissionRequirements ?? {}), ...(terminal ? ['success', 'approved'] : [])])];
   return { outcomes: open ? null : outcomes, explicitOutcome: !open && !outcomes.includes('success'), artifact: node.artifact ?? null, requirements: node.submissionRequirements ?? null };
 }
 export function submissionToolSchema(base, contract) {

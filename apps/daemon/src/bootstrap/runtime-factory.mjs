@@ -1,7 +1,6 @@
 import { createPersistence } from '../adapters/persistence/index.mjs';
 import { createRuntime as createControlPlaneRuntime } from '../control-plane/runtime.mjs';
 import { initialControlPlaneState } from '../control-plane/state-schema.mjs';
-import { defaultWorkflowDefinition } from '../modules/workflows/index.mjs';
 import { createLinearTickets } from '../adapters/linear-tickets.mjs';
 import { createCustomTicketSource } from '../adapters/custom-ticket-source.mjs';
 import { createTicketSources } from '../adapters/ticket-sources.mjs';
@@ -15,7 +14,7 @@ export async function createRuntime({ directory, legacyDirectory, persistenceBac
   const persistence = await createPersistence({
     directory,
     legacyDirectory,
-    initialState: initialControlPlaneState(defaultWorkflowDefinition),
+    initialState: initialControlPlaneState(),
     backend: persistenceBackend,
     databaseUrl,
     importLegacy,

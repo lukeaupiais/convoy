@@ -192,6 +192,12 @@ export function resolveActivityBindings(bindings, inputSchema, sources) {
         if (!response || !response.value || !response.schema) throw new Error(`Human response ${from.nodeId} is not available for this workflow effect.`);
         activitySchemaAtPath(response.schema, from.path);
         value[key] = resolveActivityPath(response.value, from.path);
+      } else if (from.kind === 'agent_submission') {
+        const submission = sources.agentSubmissions?.[from.nodeId];
+        if (!submission || !submission.value || !submission.schema)
+          throw new Error(`Accepted agent submission ${from.nodeId} is not available for this workflow effect.`);
+        activitySchemaAtPath(submission.schema, from.path);
+        value[key] = resolveActivityPath(submission.value, from.path);
       } else throw new Error(`Activity input ${key} has an unsupported reference kind.`);
     }
   }
@@ -212,6 +218,15 @@ export function humanFormSchema(node) {
     if (field.required) required.push(field.id);
   }
   return { type: 'object', properties, required, additionalProperties: false };
+}
+
+export function agentSubmissionSchema(node) {
+  const fields = [...new Set(Object.values(node?.submissionRequirements ?? {}).flatMap(rule => rule.fields ?? []))];
+  return { type: 'object', properties: {
+    summary: { type: 'string', minLength: 1, maxLength: 4000 },
+    details: { type: 'object', properties: Object.fromEntries(fields.map(field => [field, { type: 'string', minLength: 1, maxLength: 4000 }])),
+      required: [], additionalProperties: false },
+  }, required: ['summary'], additionalProperties: false };
 }
 
 export function validateActivityBindings(node, workflow, activityCatalog) {
@@ -257,11 +272,12 @@ export function validateActivityBindings(node, workflow, activityCatalog) {
       const sourceIndex = nodeIndex.get(binding.from.nodeId);
       const source = workflow.nodes[sourceIndex];
       const sourceDescriptor = source && (source.activity ? activityCatalog.get(source.activity) : null);
+      const sourceSchema = sourceDescriptor?.outputSchema ?? (['child', 'parallel', 'map'].includes(source?.kind) ? source.outputSchema : null);
       if (Object.keys(binding.from).some(field => !['kind', 'nodeId', 'path'].includes(field)) || typeof binding.from.nodeId !== 'string' ||
-          sourceIndex === undefined || !canReach(source.id, node.id) || !sourceDescriptor || !Array.isArray(binding.from.path) || binding.from.path.some(part => !safePathPart(part)))
+          sourceIndex === undefined || !canReach(source.id, node.id) || !sourceSchema || !Array.isArray(binding.from.path) || binding.from.path.some(part => !safePathPart(part)))
         throw new Error(`${node.name}: activity output reference must name a prior registered activity.`);
-      const sourceSchema = activitySchemaAtPath(sourceDescriptor.outputSchema, binding.from.path);
-      if (!schemaAssignable(sourceSchema, properties[key])) throw new Error(`${node.name}: activity output reference is incompatible with activity input ${key}.`);
+      const sourcePropertySchema = activitySchemaAtPath(sourceSchema, binding.from.path);
+      if (!schemaAssignable(sourcePropertySchema, properties[key])) throw new Error(`${node.name}: activity output reference is incompatible with activity input ${key}.`);
     } else if (binding.from?.kind === 'human_response') {
       const sourceIndex = nodeIndex.get(binding.from.nodeId);
       const source = workflow.nodes[sourceIndex];
@@ -270,6 +286,15 @@ export function validateActivityBindings(node, workflow, activityCatalog) {
         throw new Error(`${node.name}: form response reference must name a prior human task field.`);
       const sourceSchema = activitySchemaAtPath(humanFormSchema(source), binding.from.path);
       if (!schemaAssignable(sourceSchema, properties[key])) throw new Error(`${node.name}: human response reference is incompatible with activity input ${key}.`);
+    } else if (binding.from?.kind === 'agent_submission') {
+      const sourceIndex = nodeIndex.get(binding.from.nodeId);
+      const source = workflow.nodes[sourceIndex];
+      if (Object.keys(binding.from).some(field => !['kind', 'nodeId', 'path'].includes(field)) || typeof binding.from.nodeId !== 'string' ||
+          sourceIndex === undefined || !canReach(source.id, node.id) || source.kind !== 'agent' ||
+          !Array.isArray(binding.from.path) || binding.from.path.some(part => !safePathPart(part)))
+        throw new Error(`${node.name}: agent submission reference must name a prior configured submission field.`);
+      const sourceSchema = activitySchemaAtPath(agentSubmissionSchema(source), binding.from.path);
+      if (!schemaAssignable(sourceSchema, properties[key])) throw new Error(`${node.name}: agent submission reference is incompatible with activity input ${key}.`);
     } else throw new Error(`${node.name}: activity input ${key} has an invalid binding.`);
   }
 }
@@ -311,32 +336,60 @@ export function schemaAssignable(source, target) {
 export function validateWorkflowResultBindings(workflow, activityCatalog) {
   if (!workflow.resultSchema) return;
   const schema = workflow.resultSchema;
-  const bindings = workflow.resultBindings;
   const properties = schema.properties ?? {};
-  if (Object.keys(bindings).some(key => !Object.hasOwn(properties, key)) ||
-      (schema.required ?? []).some(key => !Object.hasOwn(bindings, key)))
-    throw new Error('Workflow result bindings must provide exactly the declared result fields.');
   const nodeIds = new Set(workflow.nodes.map(node => node.id));
-  for (const [key, binding] of Object.entries(bindings)) {
-    if (!binding || typeof binding !== 'object' || Array.isArray(binding) || Object.getPrototypeOf(binding) !== Object.prototype)
-      throw new Error(`Workflow result ${key} has an invalid binding.`);
-    const fields = Object.keys(binding);
-    if (fields.length !== 1 || !['literal', 'from'].includes(fields[0])) throw new Error(`Workflow result ${key} has an invalid binding.`);
-    if (Object.hasOwn(binding, 'literal')) validateActivityValue(binding.literal, properties[key], `result.${key}`);
-    else {
+  const nodeById = new Map(workflow.nodes.map(node => [node.id, node]));
+  const reaches = (from, to) => {
+    if (from === to) return true;
+    const todo = [from], seen = new Set();
+    while (todo.length) {
+      const current = todo.pop();
+      if (current === to) return true;
+      if (seen.has(current)) continue;
+      seen.add(current);
+      for (const edge of workflow.edges) if (edge.from === current) todo.push(edge.to);
+    }
+    return false;
+  };
+  const terminalNodes = workflow.nodes.filter(node => !workflow.edges.some(edge => edge.from === node.id));
+  const mappings = workflow.resultBindingsByTerminal ?? {};
+  for (const terminalId of Object.keys(mappings)) if (!nodeIds.has(terminalId) || workflow.edges.some(edge => edge.from === terminalId))
+    throw new Error(`Workflow result mapping ${terminalId} must identify a successful terminal node.`);
+  for (const terminal of terminalNodes) {
+    const bindings = mappings[terminal.id] ?? workflow.resultBindings;
+    if (!bindings) throw new Error(`Workflow terminal ${terminal.id} needs an explicit result mapping.`);
+    if (Object.keys(bindings).some(key => !Object.hasOwn(properties, key)) ||
+        (schema.required ?? []).some(key => !Object.hasOwn(bindings, key)))
+      throw new Error(`Workflow result bindings for ${terminal.id} must provide the declared result fields.`);
+    for (const [key, binding] of Object.entries(bindings)) {
+      if (!binding || typeof binding !== 'object' || Array.isArray(binding) || Object.getPrototypeOf(binding) !== Object.prototype)
+        throw new Error(`Workflow result ${terminal.id}.${key} has an invalid binding.`);
+      const fields = Object.keys(binding);
+      if (fields.length !== 1 || !['literal', 'from'].includes(fields[0])) throw new Error(`Workflow result ${terminal.id}.${key} has an invalid binding.`);
+      if (Object.hasOwn(binding, 'literal')) { validateActivityValue(binding.literal, properties[key], `result.${key}`); continue; }
       const from = binding.from;
-      if (!from || typeof from !== 'object' || Array.isArray(from)) throw new Error(`Workflow result ${key} has an invalid reference.`);
-      if (from.kind === 'run_input' && Object.keys(from).every(field => ['kind', 'path'].includes(field)) && Array.isArray(from.path)) {
-        const source = activitySchemaAtPath(workflow.runInputSchema, from.path);
-        if (!schemaAssignable(source, properties[key])) throw new Error(`Workflow result ${key} is incompatible with its run input reference.`);
-      } else if (from.kind === 'activity_output' && Object.keys(from).every(field => ['kind', 'nodeId', 'path'].includes(field)) &&
-          typeof from.nodeId === 'string' && nodeIds.has(from.nodeId) && Array.isArray(from.path)) {
-        const node = workflow.nodes.find(candidate => candidate.id === from.nodeId);
-        const descriptor = node?.activity ? activityCatalog.get(node.activity) : null;
-        if (!descriptor) throw new Error(`Workflow result ${key} must reference a registered activity output.`);
-        const source = activitySchemaAtPath(descriptor.outputSchema, from.path);
-        if (!schemaAssignable(source, properties[key])) throw new Error(`Workflow result ${key} is incompatible with its activity output reference.`);
-      } else throw new Error(`Workflow result ${key} has an invalid reference.`);
+      if (!from || typeof from !== 'object' || Array.isArray(from)) throw new Error(`Workflow result ${terminal.id}.${key} has an invalid reference.`);
+      let source;
+      if (from.kind === 'run_input' && Object.keys(from).every(field => ['kind', 'path'].includes(field)) && Array.isArray(from.path))
+        source = activitySchemaAtPath(workflow.runInputSchema, from.path);
+      else if (['activity_output', 'human_response', 'agent_submission'].includes(from.kind) &&
+          Object.keys(from).every(field => ['kind', 'nodeId', 'path'].includes(field)) && typeof from.nodeId === 'string' &&
+          nodeIds.has(from.nodeId) && Array.isArray(from.path) && reaches(from.nodeId, terminal.id)) {
+        const node = nodeById.get(from.nodeId);
+        if (from.kind === 'activity_output') {
+          const descriptor = node?.activity ? activityCatalog.get(node.activity) : null;
+          const outputSchema = descriptor?.outputSchema ?? (['child', 'parallel', 'map'].includes(node?.kind) ? node.outputSchema : null);
+          if (!outputSchema) throw new Error(`Workflow result ${terminal.id}.${key} must reference a declared activity output.`);
+          source = activitySchemaAtPath(outputSchema, from.path);
+        } else if (from.kind === 'human_response') {
+          if (node?.kind !== 'human') throw new Error(`Workflow result ${terminal.id}.${key} must reference a human task response.`);
+          source = activitySchemaAtPath(humanFormSchema(node), from.path);
+        } else {
+          if (node?.kind !== 'agent') throw new Error(`Workflow result ${terminal.id}.${key} must reference an agent submission.`);
+          source = activitySchemaAtPath(agentSubmissionSchema(node), from.path);
+        }
+      } else throw new Error(`Workflow result ${terminal.id}.${key} has an invalid reference.`);
+      if (!schemaAssignable(source, properties[key])) throw new Error(`Workflow result ${terminal.id}.${key} is incompatible with its source.`);
     }
   }
 }

@@ -6,6 +6,7 @@ import { createRunnerEnrollment } from './enrollment.mjs';
 import { createChannelGrants } from './channel-grants.mjs';
 import { createRunnerChannelAuthorization } from './runner-channel-authorization.mjs';
 import { createCapacity } from './capacity.mjs';
+import { createWorkflowCompositionPolicy } from './workflow-composition-policy.mjs';
 
 const commands = [
   'publishRuntimeDefinition',
@@ -18,6 +19,7 @@ const commands = [
   'setPlacement',
   'setExecutionProfile',
   'setScheduler',
+  'setWorkflowCompositionPolicy',
 ];
 
 /**
@@ -34,6 +36,7 @@ export function createExecution(dependencies) {
   const enrollment = createRunnerEnrollment(dependencies);
   const channelGrants = createChannelGrants(dependencies);
   const runnerChannels = createRunnerChannelAuthorization({ enrollment, channelGrants });
+  const workflowComposition = createWorkflowCompositionPolicy(dependencies);
   return {
     id: 'execution',
     commands,
@@ -45,6 +48,7 @@ export function createExecution(dependencies) {
     channelGrants,
     runnerChannels,
     capacity,
+    workflowComposition,
     snapshot({ scope } = {}) {
       const value = {
         ...placement.snapshot(),
@@ -70,6 +74,7 @@ export function createExecution(dependencies) {
         ),
         capacityRequests: capacity.requests(),
         capacityStatuses: capacity.statuses(),
+        workflowCompositionPolicies: workflowComposition.snapshot(scope),
       };
       if (!scope) return value;
       const organizationId = scope.organizationId;
@@ -107,8 +112,13 @@ export function createExecution(dependencies) {
         ),
       };
     },
-    command(command) {
+    async command(command) {
       if (command.action === 'publishRuntimeDefinition') return verification.publish(command);
+      if (command.action === 'setWorkflowCompositionPolicy') {
+        const value = workflowComposition.saveWorkflowCompositionLimits(command);
+        await dependencies.save?.();
+        return value;
+      }
       return placement.command(command);
     },
     runnerSelection(session, runnerId) {

@@ -60,6 +60,23 @@ Agent submissions capture every declared artifact as an immutable, content-addre
 review package. Human decisions apply to that captured submission; the mutable
 workspace remains separately checked for stale evidence before advancement.
 
+Child, parallel, and map nodes pin child workflow revisions, typed inputs, and
+declared outputs. Workflows reserves stable slot and run IDs before child start,
+then keeps each child receipt, waiting gate, cancellation, and compensation in
+the same canonical run history. First-success joins keep the winner fixed while
+dispatched losers drain; uncertain effects and live agent/runner cleanup retain
+their capacity until the owning reconciliation or stop operation finishes.
+Current and pinned organization, project, root, and per-node limits are checked
+before admission and again before a child acquires resources. Pure coordinators
+do not consume leaf capacity while they wait for their own children.
+Map item budget is cumulative per root. A first-success join records the first
+successful child completed before its deadline; it holds that winner while
+already-dispatched losers settle, and late results cannot create a new winner.
+Configured compensation points to a pinned child workflow and has its own
+reserved identity and receipts. It preserves the original failed or cancelled
+forward outcome, waits for uncertain forward effects to reconcile, and never
+invents rollback behavior.
+
 Workflow definition publication and draft commands are registered through the
 control-plane module command registry. Workflows owns canonical run identities,
 pinned definitions, activity attempts, run history, run leases, migration from
@@ -77,6 +94,12 @@ principal with the actor label; stale instances fail closed. An uncertain Work
 effect stays uncertain through cancellation and restart until its exact effect
 key is explicitly reconciled. Restart clears live run leases while retaining
 actor and decision evidence.
+
+Terminal result schemas are evaluated against immutable run input and completed
+attempt, agent-submission, or human-response receipts before a run becomes
+successful. `getWorkflowRun` exposes only the result digest. The separate
+`getWorkflowRunResult` command rechecks current project execution authority and
+the exact run/session lease before returning the validated result body.
 
 The built-in **Team delivery** template is an explicitly selected, editable starting graph:
 plan ticket → approve plan → implement → verify → human review. Failed checks

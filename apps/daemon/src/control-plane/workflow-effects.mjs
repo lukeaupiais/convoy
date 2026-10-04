@@ -237,7 +237,9 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
     // activities must see null here; linked runs arrive through their real session.
     const context = { run, session: session?.independentRun ? null : session, node, instance, signal, owner,
       ...(reservation ? { activityReservation: reservation } : {}) };
-    const authorization = await authorizeActivity(run, descriptor, node, reservation);
+    const authorization = await authorizeActivity(run, descriptor, node, reservation, {
+      phase: run.attempt?.dispatchStarted || run.attempt?.outputDigest ? 'confirm' : 'dispatch',
+    });
     if (authorization?.model) context.model = authorization.model;
     if (run.attempt?.instance !== instance || run.attempt?.nodeId !== node.id)
       throw new Error('Workflow activity attempt changed before dispatch.');
@@ -403,7 +405,7 @@ export function createWorkflowEffects({ state, catalog, conversations, sessionFo
       if (node.activityDescriptorDigest && activityDigest(descriptor) !== node.activityDescriptorDigest)
         throw new Error('Pinned activity metadata changed; reconciliation is blocked.');
       const reservation = owner.activityReservationForAttempt(run, node.id, command.instance);
-      const authorization = await authorizeActivity(run, descriptor, node, reservation);
+      const authorization = await authorizeActivity(run, descriptor, node, reservation, { phase: 'reconcile' });
       if (run.attempt?.instance !== command.instance || run.attempt.nodeId !== node.id ||
           JSON.stringify(run.attempt.activityRef) !== JSON.stringify(ref) || !run.attempt.intent)
         throw new Error('Workflow activity intent is unavailable for reconciliation.');

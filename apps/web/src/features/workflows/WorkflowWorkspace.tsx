@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { RuntimeState } from '../../shared/api/runtime';
 import { WorkflowEditor } from './WorkflowEditor';
 import { WorkflowRuns } from './WorkflowRuns';
@@ -9,11 +9,18 @@ type WorkflowPane = 'definitions' | 'runs';
 export function WorkflowWorkspace({
   state,
   projectId,
+  workflowRunId,
 }: {
   state: RuntimeState;
   projectId?: string;
+  workflowRunId?: string;
 }) {
-  const [pane, setPane] = useState<WorkflowPane>('definitions');
+  const [pane, setPane] = useState<WorkflowPane>(() =>
+    workflowRunId ? 'runs' : 'definitions',
+  );
+  useEffect(() => {
+    if (workflowRunId) setPane('runs');
+  }, [workflowRunId]);
 
   return (
     <section className="workflow-workspace" aria-label="Workflow workspace">
@@ -33,7 +40,7 @@ export function WorkflowWorkspace({
         {pane === 'definitions' ? (
           <WorkflowEditor state={state} />
         ) : (
-          <WorkflowRuns state={state} projectId={projectId} />
+          <WorkflowRuns state={state} projectId={projectId} initialRunId={workflowRunId} />
         )}
       </div>
     </section>

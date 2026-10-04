@@ -7,6 +7,7 @@ export { createEnvironmentAccess } from './access.mjs';
 export { createRunnerEnrollment } from './enrollment.mjs';
 export { createChannelGrants } from './channel-grants.mjs';
 export { createRunnerChannelAuthorization } from './runner-channel-authorization.mjs';
+export { createWorkflowCompositionPolicy } from './workflow-composition-policy.mjs';
 export {
   createCapacity,
   createStaticCapacityAdapter,

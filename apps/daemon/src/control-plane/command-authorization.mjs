@@ -352,6 +352,13 @@ export function createCommandAuthorization({
       await organization(command.organizationId, 'environment.manage', command, actor);
       return;
     }
+    if (command.action === 'setWorkflowCompositionPolicy') {
+      if (command.projectId) {
+        const value = await projectId(command.projectId, 'project.manage', command, actor);
+        if (value.organizationId !== command.organizationId) denied();
+      } else await organization(command.organizationId, 'organization.manage', command, actor);
+      return;
+    }
     if (
       [
         'exportSkill',

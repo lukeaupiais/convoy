@@ -62,7 +62,8 @@ export function createSnapshotQuery({
       (session) => !scope || scope.projectIds.includes(session.projectId),
     );
     const publicSessions = sessions.map(
-      ({ messages, requests, steeringRequests, agentSessions, executionPrincipal, flow, workflowRunId, pastRuns, ...session }) => {
+      ({ messages, requests, steeringRequests, agentSessions, executionPrincipal, flow, workflowRunId, pastRuns, lease, ...session }) => {
+        const publicLease = lease ? Object.fromEntries(Object.entries(lease).filter(([key]) => key !== 'actorKey')) : null;
         const publicFlow = flow ? structuredClone(flow) : null;
         // Exact approval input/effect material is returned only by the
         // execute-authorized, leased prepare command, never by project reads.
@@ -83,6 +84,7 @@ export function createSnapshotQuery({
             : undefined;
         return {
           ...session,
+          lease: publicLease,
           workflowRunId: workflowRunId ?? flow?.id,
           pastRuns: publicPastRuns,
           pastRunsTotal: runHistory.length,

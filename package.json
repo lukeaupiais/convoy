@@ -52,7 +52,7 @@
     "vite": "^6.3.5"
   },
   "main": "apps/desktop/main.mjs",
-  "description": "Local-first control plane for coding agents.",
+  "description": "Local-first control plane for durable automation.",
   "author": {
     "name": "Luke Aupiais",
     "email": "luke.aupiais@gmail.com"

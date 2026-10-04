@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntime } from '../../apps/daemon/src/bootstrap/runtime-factory.mjs';
+import { initialControlPlaneState } from '../../apps/daemon/src/control-plane/state-schema.mjs';
 
 async function until(read) {
   for (let i = 0; i < 400; i++) {
@@ -52,10 +53,18 @@ async function fixture(t) {
               : { code: 0, output: 'checks passed' },
     },
   };
+  const createdAt = new Date().toISOString();
+  const initialState = initialControlPlaneState();
+  initialState.identity = {
+    users: ['local', 'different-principal'].map((id) => ({ id, displayName: id,
+      state: 'active', revision: 1, createdAt, updatedAt: createdAt })),
+    deviceSessions: [], workloadIdentities: [], servicePrincipals: [], externalIdentityLinks: [],
+  };
+  await writeFile(join(options.directory, 'state.json'), JSON.stringify(initialState), { mode: 0o600 });
   let runtime = await createRuntime(options);
   t.after(() => runtime.close());
-  const act = (action, input = {}) =>
-    runtime.command({ action, client: 'ticket-test-client', ...input });
+  const act = (action, input = {}, principal) =>
+    runtime.command({ action, client: 'ticket-test-client', ...input }, principal);
   await act('saveWorkflow', {
     workflow: {
       id: 'ticket-loop',
@@ -100,6 +109,14 @@ async function fixture(t) {
     launch,
     prompts,
     snapshot: () => runtime.snapshot(),
+    storedState: async () => JSON.parse(await readFile(join(options.directory, 'state.json'), 'utf8')),
+    authorizeActor: async (principal) => {
+      await act('createMembership', { organizationId: 'personal', principal,
+        scope: { kind: 'organization', organizationId: 'personal' }, roles: ['member'] });
+      await act('createMembership', { organizationId: 'personal', principal,
+        scope: { kind: 'project', projectId: 'agent-platform' }, roles: ['contributor'] });
+      await act('selectActiveContext', { context: { organizationId: 'personal', projectId: 'agent-platform' } }, principal);
+    },
     restart: async () => {
       await runtime.close();
       runtime = await createRuntime(options);
@@ -230,8 +247,17 @@ test('ticket run: status values do not define whether a workflow may start', asy
 test('ticket run: active run cannot be replaced or started twice', async (t) => {
   const f = await fixture(t);
   const one = await f.act('runTicket', f.launch);
+  const stored = await f.storedState();
+  assert.match(stored.sessions[one.sessionId].lease.actorKey, /^user:/);
   const retry = await f.act('runTicket', f.launch);
   assert.equal(one.sessionId, retry.sessionId);
+  const foreign = { kind: 'user', userId: 'different-principal' };
+  await f.authorizeActor(foreign);
+  await assert.rejects(
+    f.act('runTicket', f.launch, foreign),
+    /another authenticated principal/,
+    'same-client retries must not disclose an idempotent result to a different principal',
+  );
   const state = await f.snapshot();
   await assert.rejects(
     f.act('runTicket', { ...f.launch, requestId: 'another', revision: state.tickets[0].revision }),

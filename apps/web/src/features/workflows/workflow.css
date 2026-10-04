@@ -1232,3 +1232,39 @@
   color: var(--wf-muted, #65746b);
   font-size: 13px;
 }
+
+.workflow-composition-fields {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.workflow-composition-fields > label,
+.workflow-composition-fields fieldset > label {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.workflow-composition-fields textarea,
+.workflow-composition-fields input,
+.workflow-composition-fields select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.workflow-compose-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.workflow-compose-row > * {
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
+.workflow-field-value {
+  color: var(--wf-muted, #65746b);
+  font-size: 0.8rem;
+}

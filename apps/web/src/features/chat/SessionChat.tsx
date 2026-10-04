@@ -77,10 +77,12 @@ export function SessionChat({
   sessionId: taskId,
   openTicket,
   openConversation,
+  openWorkflowRun,
 }: {
   sessionId: string;
   openTicket: (id: number) => void;
   openConversation: (id: string) => void;
+  openWorkflowRun?: (runId: string) => void;
 }) {
   const key = `convoy.chat.v1.${taskId}`;
   const [local, setLocal] = useState(() => load(key));
@@ -346,6 +348,7 @@ export function SessionChat({
             onOpenTicketMessages={
               session.activeTicketId ? () => openTicket(session.activeTicketId!) : undefined
             }
+            onOpenWorkflowRun={openWorkflowRun}
           />
         )}
         {!!session?.agentSessions?.length && (

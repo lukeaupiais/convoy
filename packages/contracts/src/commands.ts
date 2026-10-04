@@ -39,7 +39,7 @@ import type {
   Ticket,
   TicketConnection,
 } from './model/work';
-import type { WorkflowDefinition, AutomationRule } from './model/workflows';
+import type { WorkflowDefinition, AutomationRule, WorkflowCompositionLimits } from './model/workflows';
 
 type SessionTarget = { sessionId?: string; taskId?: string | number };
 type RequestIdentity = { requestId: string };
@@ -561,6 +561,7 @@ export type RuntimeCommandInputMap = {
     expected?: ProfileReference | null;
   };
   setScheduler: { organizationId?: string; maxConcurrent: number };
+  setWorkflowCompositionPolicy: { organizationId: string; projectId?: string; baseRevision: number; limits: WorkflowCompositionLimits };
   setToolEnabled: {
     organizationId?: string;
     projectId?: string;
@@ -576,7 +577,8 @@ export type RuntimeCommandInputMap = {
   captureWorkflowEvidence: { workflowRunId: string; instance: string; producer: 'document' | 'api_snapshot' | 'activity_receipt'; name: string; mime: string; data: string; nodeId?: string; attemptInstance?: string };
   captureWorkflowActivityReceipt: { workflowRunId: string; nodeId: string; attemptInstance: string };
   readWorkflowEvidence: { workflowRunId: string; evidenceId: string };
-  getWorkflowRun: { workflowRunId: string };
+  getWorkflowRun: { workflowRunId: string; compositionOffset?: number };
+  getWorkflowRunResult: { workflowRunId: string };
   reconcileWorkflowRun: { workflowRunId: string; instance: string; effectKey: string; resolution: 'applied' | 'not_applied'; result?: Record<string, unknown> };
   claimWorkflowRun: { workflowRunId: string; label?: string };
   releaseWorkflowRun: { workflowRunId: string };
@@ -628,6 +630,7 @@ type RuntimeCommandKnownResults = {
   readWorkflowEvidence: { evidence: import('./model/workflows').WorkflowEvidenceRef; data: string };
   startWorkflowRun: { workflowRunId: string };
   getWorkflowRun: import('./model/workflows').WorkflowRun;
+  getWorkflowRunResult: { result: Record<string, unknown>; resultDigest: string };
   updateKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   createKnowledgeCollection: import('./model/knowledge').KnowledgeCollection;
   setKnowledgeCollectionState: import('./model/knowledge').KnowledgeCollection;

@@ -21,12 +21,14 @@ export function TicketExecution({
   runtimeAvailable = true,
   focusRecovery = false,
   onOpenTicketMessages,
+  onOpenWorkflowRun,
 }: {
   state: RuntimeState;
   ticket: Ticket;
   runtimeAvailable?: boolean;
   focusRecovery?: boolean;
   onOpenTicketMessages?: () => void;
+  onOpenWorkflowRun?: (runId: string) => void;
 }) {
   const session = state.sessions.find(
     (s) => s.id === ticket.executionSessionId && s.activeTicketId === ticket.id,
@@ -220,6 +222,7 @@ export function TicketExecution({
                 runtimeAvailable={runtimeAvailable}
                 openRecovery={focusRecovery}
                 onOpenTicketMessages={onOpenTicketMessages}
+                onOpenWorkflowRun={onOpenWorkflowRun}
               />
             ) : (
               <p role="status">Reconnect to refresh before changing this session.</p>

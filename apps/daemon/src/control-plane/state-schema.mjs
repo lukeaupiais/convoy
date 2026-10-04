@@ -1,10 +1,12 @@
-export function initialControlPlaneState(defaultWorkflow) {
+export function initialControlPlaneState() {
   return {
     version: 2,
     sessions: {},
     runners: [],
     instructions: [],
-    workflows: [structuredClone(defaultWorkflow)],
+    // Templates live in the authoring library. Fresh workspaces start without
+    // an implicit executable workflow or selected default.
+    workflows: [],
   };
 }
 

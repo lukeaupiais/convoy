@@ -148,11 +148,13 @@ export function SettingsPage({
   view,
   projectId,
   workflowReference,
+  workflowRunId,
   onCloseReference,
 }: {
   view: SettingsView;
   projectId?: string;
   workflowReference?: WorkflowReference;
+  workflowRunId?: string;
   onCloseReference?: () => void;
 }) {
   const { state, error } = useRuntime();
@@ -188,7 +190,7 @@ export function SettingsPage({
             onBack={() => onCloseReference?.()}
           />
         ) : (
-          <WorkflowWorkspace state={state} projectId={projectId} />
+          <WorkflowWorkspace state={state} projectId={projectId} workflowRunId={workflowRunId} />
         ))}
       {view === 'Skills & instructions' && state && (
         <CapabilityLibrary state={state} projectId={projectId}>

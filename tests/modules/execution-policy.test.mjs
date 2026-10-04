@@ -97,6 +97,48 @@ test('scheduler limits are owned and projected per organization', async () => {
   );
 });
 
+test('workflow composition limits keep organization and project ceilings separate', async () => {
+  const state = { sessions: {}, runners: [], projects: [
+    { id: 'inventory', organizationId: 'org-a' },
+    { id: 'publication', organizationId: 'org-a' },
+    { id: 'other-org', organizationId: 'org-b' },
+  ], tickets: [] };
+  const catalog = { project: id => state.projects.find(value => value.id === id), ticket: () => undefined, assertEditable: () => {} };
+  const execution = createExecution({ state, catalog, workExecution: { hasFixedWork: () => false, clearPlacement: () => {} }, save: async () => {} });
+  const defaults = execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'inventory');
+  assert.deepEqual(defaults.effective, {
+    maxDescendantRuns: 128, maxMapItems: 100, maxConcurrentChildren: 8,
+    maxDeadlineMs: 604_800_000, maxActiveDescendantRuns: 32,
+    maxActiveDescendantsPerRoot: 8,
+  });
+  const orgLimits = { ...defaults.organization.limits, maxActiveDescendantRuns: 12, maxDescendantRuns: 64 };
+  await execution.command({ action: 'setWorkflowCompositionPolicy', organizationId: 'org-a', baseRevision: 0, limits: orgLimits });
+  const projectLimits = { ...orgLimits, maxActiveDescendantRuns: 3, maxDescendantRuns: 20 };
+  await execution.command({ action: 'setWorkflowCompositionPolicy', organizationId: 'org-a', projectId: 'inventory', baseRevision: 0, limits: projectLimits });
+  assert.deepEqual(execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'inventory').effective, projectLimits);
+  assert.deepEqual(execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'publication').effective, orgLimits,
+    'one project override does not lower the organization ceiling for another project');
+  assert.equal(execution.workflowComposition.resolveWorkflowCompositionLimits('org-b', 'other-org').effective.maxActiveDescendantRuns, 32);
+  await assert.rejects(execution.command({ action: 'setWorkflowCompositionPolicy', organizationId: 'org-a', projectId: 'publication', baseRevision: 0,
+    limits: { ...orgLimits, maxActiveDescendantRuns: 13 } }), /cannot exceed organization/);
+  await assert.rejects(execution.command({ action: 'setWorkflowCompositionPolicy', organizationId: 'org-a', baseRevision: 1,
+    limits: { ...orgLimits, maxDescendantRuns: 10 } }), /cannot be reduced below an existing project policy/);
+  const scoped = execution.snapshot({ scope: { organizationId: 'org-a', projectIds: ['inventory'] } }).workflowCompositionPolicies;
+  assert.deepEqual(Object.keys(scoped.projects), ['inventory']);
+});
+
+test('stored workflow composition limits fail closed when durable policy data is malformed', async () => {
+  const state = { sessions: {}, runners: [], projects: [{ id: 'project-a', organizationId: 'org-a' }], tickets: [] };
+  const catalog = { project: id => state.projects.find(value => value.id === id), ticket: () => undefined, assertEditable: () => {} };
+  const execution = createExecution({ state, catalog, workExecution: { hasFixedWork: () => false, clearPlacement: () => {} }, save: async () => {} });
+  const defaults = execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'project-a').effective;
+  state.workflowCompositionPolicies.organizations['org-a'] = { revision: 0, limits: { ...defaults, maxDescendantRuns: Number.NaN } };
+  assert.throws(() => execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'project-a'), /Stored organization composition policy maxDescendantRuns/);
+  state.workflowCompositionPolicies.organizations['org-a'] = undefined;
+  state.workflowCompositionPolicies.projects['project-a'] = { organizationId: 'org-a', revision: 1, limits: { ...defaults, maxDescendantRuns: Number.POSITIVE_INFINITY } };
+  assert.throws(() => execution.workflowComposition.resolveWorkflowCompositionLimits('org-a', 'project-a'), /Stored project composition policy maxDescendantRuns/);
+});
+
 test('organization policy denial stops full system placement before runner dispatch', async () => {
   let decisions = 0;
   const { execution, project, state } = fixture('trusted', async (_session, profileId) => {

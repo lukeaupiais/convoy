@@ -14,12 +14,14 @@ export function ChatWorkspace({
   select,
   create,
   openTicket,
+  openWorkflowRun,
 }: {
   state: RuntimeState;
   selectedId: string;
   select: (id: string) => void;
   create: () => void;
   openTicket: (id: number) => void;
+  openWorkflowRun?: (runId: string) => void;
 }) {
   const [query, setQuery] = useState('');
   const ticketPopover = useDetailsPopover();
@@ -325,6 +327,7 @@ export function ChatWorkspace({
               sessionId={current.sessionId}
               openTicket={openTicket}
               openConversation={select}
+              openWorkflowRun={openWorkflowRun}
             />
           </>
         )}

@@ -6,6 +6,7 @@ import {
   type WorkflowHumanReview,
 } from '../../shared/api/runtime';
 import { WorkflowHumanTaskPanel } from './WorkflowHumanTaskPanel';
+import { WorkflowRunComposition, WorkflowRunResultPanel } from './WorkflowRunComposition';
 import {
   independentWorkflowRuns,
   currentWorkflowRunDetail,
@@ -24,7 +25,21 @@ function recordedAt(value?: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projectId?: string }) {
+type LoadedWorkflowResult = {
+  contextKey: string;
+  result: Record<string, unknown>;
+  resultDigest: string;
+};
+
+export function WorkflowRuns({
+  state,
+  projectId,
+  initialRunId,
+}: {
+  state: RuntimeState;
+  projectId?: string;
+  initialRunId?: string;
+}) {
   const [selectedProjectId, setSelectedProjectId] = useState(projectId ?? '');
   const [selectedWorkflow, setSelectedWorkflow] = useState('');
   const [runInputValues, setRunInputValues] = useState<Record<string, unknown>>({});
@@ -34,6 +49,7 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   const [actionError, setActionError] = useState('');
   const [refreshError, setRefreshError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [compositionOffset, setCompositionOffset] = useState<number>();
   const [humanValues, setHumanValues] = useState<Record<string, unknown>>({});
   const [humanValuesContext, setHumanValuesContext] = useState('');
   const [humanResponseId, setHumanResponseId] = useState('');
@@ -42,6 +58,9 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
   const [humanOutcomeContext, setHumanOutcomeContext] = useState('');
   const [humanReview, setHumanReview] = useState<WorkflowHumanReview | null>(null);
   const [humanReviewContext, setHumanReviewContext] = useState('');
+  const [terminalResult, setTerminalResult] = useState<LoadedWorkflowResult | null>(null);
+  const [terminalResultBusy, setTerminalResultBusy] = useState(false);
+  const [terminalResultError, setTerminalResultError] = useState('');
   const detailRef = useRef<WorkflowRun | null>(null);
   const lastHumanTaskIdentity = useRef<
     | {
@@ -52,6 +71,8 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     | undefined
   >(undefined);
   const humanMaterialGeneration = useRef(0);
+  const terminalResultGeneration = useRef(0);
+  const compositionPageGeneration = useRef(0);
   const humanContextRef = useRef('');
   const committedHumanContext = useRef('');
   const canReviewTaskRef = useRef(false);
@@ -62,6 +83,8 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     setSelectedWorkflow('');
     setRunInputValues({});
     setSelectedRunId('');
+    compositionPageGeneration.current += 1;
+    setCompositionOffset(undefined);
     setDetail(null);
     setActionError('');
     setRefreshError('');
@@ -74,7 +97,14 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     setHumanReview(null);
     setHumanReviewContext('');
     humanMaterialGeneration.current += 1;
+    terminalResultGeneration.current += 1;
+    setTerminalResult(null);
+    setTerminalResultError('');
   }, [projectId]);
+
+  useEffect(() => {
+    if (initialRunId) void selectRun(initialRunId);
+  }, [initialRunId]);
 
   useEffect(() => {
     if (selectedProjectId && !state.projects.some((value) => value.id === selectedProjectId)) {
@@ -82,13 +112,23 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
       setSelectedWorkflow('');
       setRunInputValues({});
       setSelectedRunId('');
+      compositionPageGeneration.current += 1;
+      setCompositionOffset(undefined);
       setDetail(null);
+      terminalResultGeneration.current += 1;
+      setTerminalResult(null);
+      setTerminalResultError('');
     }
     if (detail && !state.projects.some((value) => value.id === detail.projectId)) {
       setSelectedRunId('');
       setDetail(null);
+      compositionPageGeneration.current += 1;
+      setCompositionOffset(undefined);
       setActionError('');
       setRefreshError('');
+      terminalResultGeneration.current += 1;
+      setTerminalResult(null);
+      setTerminalResultError('');
     }
   }, [detail, selectedProjectId, state.projects]);
 
@@ -121,10 +161,14 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
       return;
     }
     let current = true;
+    const pageGeneration = compositionPageGeneration.current;
     const refresh = async () => {
       try {
-        const response = await command('getWorkflowRun', { workflowRunId: selectedRunId });
-        if (current) {
+        const response = await command('getWorkflowRun', {
+          workflowRunId: selectedRunId,
+          ...(compositionOffset !== undefined ? { compositionOffset } : {}),
+        });
+        if (current && pageGeneration === compositionPageGeneration.current) {
           if (!state.projects.some((project) => project.id === response.result.projectId)) {
             setDetail(null);
             setRefreshError('');
@@ -132,11 +176,22 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
             return;
           }
           setDetail(response.result);
+          if (
+            Number.isInteger(response.result.compositionAttemptsOffset) &&
+            response.result.compositionAttemptsOffset !== compositionOffset
+          ) {
+            setCompositionOffset(response.result.compositionAttemptsOffset);
+          }
           setRefreshError('');
         }
       } catch (caught) {
-        if (current) {
+        if (current && pageGeneration === compositionPageGeneration.current) {
+          detailRef.current = null;
           setDetail(null);
+          terminalResultGeneration.current += 1;
+          setTerminalResult(null);
+          setTerminalResultError('');
+          setTerminalResultBusy(false);
           setRefreshError(caught instanceof Error ? caught.message : String(caught));
         }
       }
@@ -147,7 +202,7 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
       current = false;
       window.clearInterval(timer);
     };
-  }, [selectedRunId, refreshKey, state.projects]);
+  }, [selectedRunId, refreshKey, state.projects, compositionOffset]);
 
   async function startRun(event: React.FormEvent) {
     event.preventDefault();
@@ -179,6 +234,9 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
       state.projects.map((value) => value.id),
     );
     if (busy || !target) return;
+    terminalResultGeneration.current += 1;
+    setTerminalResult(null);
+    setTerminalResultError('');
     setBusy(true);
     setActionError('');
     try {
@@ -207,6 +265,11 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     detailRef.current = null;
     setDetail(null);
     setSelectedRunId(runId);
+    terminalResultGeneration.current += 1;
+    setTerminalResult(null);
+    setTerminalResultError('');
+    compositionPageGeneration.current += 1;
+    setCompositionOffset(undefined);
     setHumanValues({});
     setHumanValuesContext('');
     humanMaterialGeneration.current += 1;
@@ -303,6 +366,77 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
     ?.slice()
     .reverse()
     .find((response) => response.instance === currentDetail.instance);
+
+  useEffect(() => {
+    if (
+      !currentDetail ||
+      currentDetail.status !== 'completed' ||
+      !currentDetail.resultDigest ||
+      !ownsRunControl ||
+      currentDetail.workflowRunResultEligible !== true
+    ) {
+      terminalResultGeneration.current += 1;
+      setTerminalResult(null);
+      setTerminalResultError('');
+      setTerminalResultBusy(false);
+      return;
+    }
+    if (terminalResult?.contextKey !== humanContextKey) {
+      terminalResultGeneration.current += 1;
+      setTerminalResult(null);
+    }
+  }, [
+    currentDetail?.id,
+    currentDetail?.status,
+    currentDetail?.resultDigest,
+    currentDetail?.workflowRunResultEligible,
+    ownsRunControl,
+    humanContextKey,
+    terminalResult?.contextKey,
+  ]);
+
+  async function loadTerminalResult() {
+    if (
+      !currentDetail ||
+      currentDetail.status !== 'completed' ||
+      !currentDetail.resultDigest ||
+      !ownsRunControl ||
+      currentDetail.workflowRunResultEligible !== true
+    )
+      return;
+    const runId = currentDetail.id;
+    const digest = currentDetail.resultDigest;
+    const contextKey = humanContextKey;
+    const generation = ++terminalResultGeneration.current;
+    setTerminalResultBusy(true);
+    setTerminalResultError('');
+    try {
+      const response = await command('getWorkflowRunResult', { workflowRunId: runId });
+      const latest = detailRef.current;
+      if (
+        generation === terminalResultGeneration.current &&
+        humanContextRef.current === contextKey &&
+        latest?.id === runId &&
+        latest.status === 'completed' &&
+        latest.resultDigest === digest &&
+        runControlEligibility(latest).ownsControl &&
+        (latest.lease?.expiresAt ?? 0) > Date.now() &&
+        response.result.resultDigest === digest
+      ) {
+        setTerminalResult({ contextKey, result: response.result.result, resultDigest: digest });
+      }
+    } catch (caught) {
+      if (
+        generation === terminalResultGeneration.current &&
+        humanContextRef.current === contextKey &&
+        detailRef.current?.id === runId
+      ) {
+        setTerminalResultError(caught instanceof Error ? caught.message : String(caught));
+      }
+    } finally {
+      if (generation === terminalResultGeneration.current) setTerminalResultBusy(false);
+    }
+  }
 
   useEffect(() => {
     const contextChanged = committedHumanContext.current !== humanContextKey;
@@ -751,6 +885,27 @@ export function WorkflowRuns({ state, projectId }: { state: RuntimeState; projec
                 </div>
               )}
             </dl>
+            <WorkflowRunResultPanel
+              run={currentDetail}
+              canRead={ownsRunControl && currentDetail.workflowRunResultEligible === true}
+              contextKey={humanContextKey}
+              loaded={terminalResult}
+              busy={terminalResultBusy}
+              error={terminalResultError}
+              onRead={() => void loadTerminalResult()}
+            />
+            <WorkflowRunComposition
+              run={currentDetail}
+              selectedRunId={selectedRunId}
+              onOpenRun={(runId) => void selectRun(runId)}
+              nodeLabel={(nodeId) =>
+                workflow?.nodes.find((node) => node.id === nodeId)?.name ?? nodeId
+              }
+              onPage={(offset) => {
+                compositionPageGeneration.current += 1;
+                setCompositionOffset(offset);
+              }}
+            />
             {currentDetail.status === 'waiting_gate' && currentNode?.kind === 'human' && (
               <section className="workflow-human-task" aria-label="Human task">
                 {currentDetail.humanTaskDueAt &&

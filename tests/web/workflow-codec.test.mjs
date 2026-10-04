@@ -14,8 +14,17 @@ const isolatedSource = source.replace(
 const js = ts.transpileModule(isolatedSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const { fromWorkflow, toWorkflow, validateWorkflow, reorderWorkflowStages, insertWorkflowStage, workflowStageOrder, canAddPresentationBinding, blankWorkflow, fresh } =
-  await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
+const {
+  fromWorkflow,
+  toWorkflow,
+  validateWorkflow,
+  reorderWorkflowStages,
+  insertWorkflowStage,
+  workflowStageOrder,
+  canAddPresentationBinding,
+  blankWorkflow,
+  fresh,
+} = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
 
 test('workflow codec uses the browser-compatible ID seam rather than requiring randomUUID', () => {
   assert.match(
@@ -26,17 +35,29 @@ test('workflow codec uses the browser-compatible ID seam rather than requiring r
 });
 
 test('stage view follows the entry and primary edges when storage order differs', () => {
-  const graph = fromWorkflow({ id: 'ordered', name: 'Ordered', entryNode: 'start', nodes: [
-    { id: 'end', kind: 'human', name: 'End', prompt: 'Review' },
-    { id: 'alternate', kind: 'human', name: 'Alternate', prompt: 'Review' },
-    { id: 'start', kind: 'agent', name: 'Start', prompt: 'Begin' },
-  ], edges: [
-    { id: 'primary', from: 'start', to: 'end', outcome: 'success' },
-    { id: 'other', from: 'start', to: 'alternate', outcome: 'failed' },
-  ] });
+  const graph = fromWorkflow({
+    id: 'ordered',
+    name: 'Ordered',
+    entryNode: 'start',
+    nodes: [
+      { id: 'end', kind: 'human', name: 'End', prompt: 'Review' },
+      { id: 'alternate', kind: 'human', name: 'Alternate', prompt: 'Review' },
+      { id: 'start', kind: 'agent', name: 'Start', prompt: 'Begin' },
+    ],
+    edges: [
+      { id: 'primary', from: 'start', to: 'end', outcome: 'success' },
+      { id: 'other', from: 'start', to: 'alternate', outcome: 'failed' },
+    ],
+  });
   const ordered = workflowStageOrder(graph);
-  assert.deepEqual(ordered.mainPath.map((node) => node.id), ['start', 'end']);
-  assert.deepEqual(ordered.otherRoutes.map((node) => node.id), ['alternate']);
+  assert.deepEqual(
+    ordered.mainPath.map((node) => node.id),
+    ['start', 'end'],
+  );
+  assert.deepEqual(
+    ordered.otherRoutes.map((node) => node.id),
+    ['alternate'],
+  );
 });
 
 test('workflow editor codec round-trips canonical graph nodes without leaking editor-only shapes', () => {
@@ -94,19 +115,37 @@ test('workflow editor codec round-trips canonical graph nodes without leaking ed
 
 test('workflow wait codec preserves generic event pins and legacy ticket filters on edit round trips', () => {
   const genericWait = {
-    event: 'inventory.reconciled', eventRevision: 3, scope: 'resource',
+    event: 'inventory.reconciled',
+    eventRevision: 3,
+    scope: 'resource',
     resourceRef: { kind: 'inventory.item', id: 'SKU-42' },
     correlation: { key: 'requestId', from: 'runInput.requestId' },
     if: [{ path: 'result.status', operator: 'equals', value: 'accepted' }],
-    timeoutSeconds: 7200, timeoutOutcome: 'expired',
+    timeoutSeconds: 7200,
+    timeoutOutcome: 'expired',
   };
   const legacyWait = {
-    event: 'ticket_updated', ticketSource: 'related_ticket', relationKind: 'fulfills', status: 'Published',
+    event: 'ticket_updated',
+    ticketSource: 'related_ticket',
+    relationKind: 'fulfills',
+    status: 'Published',
   };
-  const workflow = { id: 'wait-codec', name: 'Wait codec', nodes: [
-    { id: 'inventory', kind: 'wait', name: 'Inventory callback', prompt: 'Wait', waitFor: genericWait },
-    { id: 'legacy', kind: 'wait', name: 'Ticket update', prompt: 'Wait', waitFor: legacyWait },
-  ], edges: [{ id: 'next', from: 'inventory', to: 'legacy', outcome: 'accepted' }], entryNode: 'inventory' };
+  const workflow = {
+    id: 'wait-codec',
+    name: 'Wait codec',
+    nodes: [
+      {
+        id: 'inventory',
+        kind: 'wait',
+        name: 'Inventory callback',
+        prompt: 'Wait',
+        waitFor: genericWait,
+      },
+      { id: 'legacy', kind: 'wait', name: 'Ticket update', prompt: 'Wait', waitFor: legacyWait },
+    ],
+    edges: [{ id: 'next', from: 'inventory', to: 'legacy', outcome: 'accepted' }],
+    entryNode: 'inventory',
+  };
 
   const graph = fromWorkflow(workflow);
   assert.deepEqual(graph.nodes[0].waitFor, genericWait);
@@ -117,18 +156,257 @@ test('workflow wait codec preserves generic event pins and legacy ticket filters
   assert.deepEqual(saved.nodes[1].waitFor, legacyWait);
 });
 
+test('fresh waits stay unbound and existing waits preserve every selected field', () => {
+  assert.equal(fresh('wait').waitFor, undefined);
+  const graph = fromWorkflow({
+    id: 'explicit-wait',
+    name: 'Explicit wait',
+    nodes: [{ id: 'wait', kind: 'wait', name: 'Wait', prompt: '' }],
+    edges: [],
+  });
+  assert.equal(graph.nodes[0].waitFor, undefined);
+  graph.nodes[0].name = 'Edited metadata';
+  assert.equal(toWorkflow(graph).nodes[0].waitFor, undefined);
+});
+
+test('composition node kinds and exact mappings survive unrelated edits', () => {
+  const nodes = [
+    {
+      id: 'child',
+      kind: 'child',
+      name: 'Assess vendor',
+      advance: 'automatic',
+      workflow: { id: 'vendor-assessment', version: 3 },
+      workflowDigest: 'child-workflow-digest',
+      inputSchemaDigest: 'child-input-digest',
+      resultSchemaDigest: 'child-result-digest',
+      inputBindings: { amount: { from: { kind: 'run_input', path: ['quote', 'amount'] } } },
+      outputSchema: {
+        type: 'object',
+        properties: { accepted: { type: 'boolean' } },
+        required: ['accepted'],
+        additionalProperties: false,
+      },
+      outputBindings: { accepted: { from: ['accepted'], to: ['accepted'] } },
+      compensations: [
+        {
+          id: 'undo-reservation',
+          trigger: 'failure',
+          workflow: { id: 'release-reservation', version: 2 },
+          inputBindings: {
+            reservationId: { from: { kind: 'run_input', path: ['reservationId'] } },
+          },
+        },
+      ],
+    },
+    {
+      id: 'parallel',
+      kind: 'parallel',
+      name: 'Compare',
+      advance: 'automatic',
+      join: 'first_success',
+      branches: [
+        {
+          id: 'review-a',
+          workflow: { id: 'document-review', version: 2 },
+          workflowDigest: 'review-a-digest',
+          inputSchemaDigest: 'review-a-input',
+          resultSchemaDigest: 'review-a-result',
+          inputBindings: {},
+          outputBindings: { score: { from: ['score'] } },
+        },
+        {
+          id: 'review-b',
+          workflow: { id: 'document-review', version: 2 },
+          inputBindings: {},
+          outputBindings: { score: { from: ['score'] } },
+        },
+      ],
+      outputSchema: {
+        type: 'object',
+        properties: { score: { type: 'number' } },
+        additionalProperties: false,
+      },
+      maxConcurrent: 2,
+      deadlineMs: 90000,
+    },
+    {
+      id: 'map',
+      kind: 'map',
+      name: 'Extract documents',
+      advance: 'automatic',
+      workflow: { id: 'document-parser', version: 5 },
+      itemsBinding: { from: { kind: 'run_input', path: ['documents'] } },
+      inputBindings: { locale: { literal: 'pt-BR' } },
+      itemField: 'document',
+      indexField: 'position',
+      outputSchema: {
+        type: 'array',
+        items: { type: 'object', properties: { id: { type: 'string' } } },
+      },
+      outputBindings: { id: { from: ['document', 'id'], to: ['id'] } },
+      maxItems: 20,
+      maxConcurrent: 4,
+      deadlineMs: 300000,
+      failurePolicy: 'collect_errors',
+    },
+  ];
+  const terminalBindings = {
+    accept: {
+      accepted: { from: { kind: 'human_response', nodeId: 'review', path: ['approved'] } },
+    },
+  };
+  const graph = fromWorkflow({
+    id: 'composed',
+    organizationId: 'org-1',
+    teamId: 'team-1',
+    projectId: 'project-1',
+    name: 'Composed',
+    nodes,
+    edges: [],
+    entryNode: 'child',
+    resultSchema: { type: 'object', properties: { accepted: { type: 'boolean' } } },
+    resultBindingsByTerminal: terminalBindings,
+  });
+  assert.deepEqual(
+    graph.nodes.map(({ type }) => type),
+    ['child', 'parallel', 'map'],
+  );
+  graph.nodes[0].name = 'Edited metadata';
+  const saved = toWorkflow(graph);
+  assert.equal(saved.organizationId, 'org-1');
+  assert.equal(saved.teamId, 'team-1');
+  assert.equal(saved.projectId, 'project-1');
+  assert.deepEqual(saved.nodes[0].workflow, nodes[0].workflow);
+  assert.deepEqual(saved.nodes[0].inputBindings, nodes[0].inputBindings);
+  assert.equal(saved.nodes[0].workflowDigest, nodes[0].workflowDigest);
+  assert.equal(saved.nodes[0].inputSchemaDigest, nodes[0].inputSchemaDigest);
+  assert.equal(saved.nodes[0].resultSchemaDigest, nodes[0].resultSchemaDigest);
+  assert.deepEqual(saved.nodes[0].compensations, nodes[0].compensations);
+  assert.deepEqual(saved.nodes[1].branches, nodes[1].branches);
+  assert.deepEqual(saved.nodes[2].itemsBinding, nodes[2].itemsBinding);
+  assert.equal(saved.nodes[2].failurePolicy, 'collect_errors');
+  assert.deepEqual(saved.resultBindingsByTerminal, terminalBindings);
+});
+
+test('composition nodes publish without an unrelated objective and omit an empty prompt', () => {
+  const definitions = [
+    {
+      id: 'child',
+      kind: 'child',
+      workflow: { id: 'document-review', version: 1 },
+      inputBindings: {},
+      outputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      outputBindings: {},
+    },
+    {
+      id: 'parallel',
+      kind: 'parallel',
+      join: 'all',
+      branches: [
+        {
+          id: 'review',
+          workflow: { id: 'document-review', version: 1 },
+          inputBindings: {},
+          outputBindings: {},
+        },
+      ],
+      outputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
+      id: 'map',
+      kind: 'map',
+      workflow: { id: 'document-review', version: 1 },
+      itemsBinding: { from: { kind: 'run_input', path: ['documents'] } },
+      inputBindings: {},
+      itemField: 'document',
+      outputSchema: {
+        type: 'array',
+        items: { type: 'object', properties: {}, additionalProperties: false },
+      },
+      outputBindings: {},
+      maxItems: 10,
+      maxConcurrent: 2,
+      failurePolicy: 'fail_fast',
+    },
+  ];
+
+  for (const definition of definitions) {
+    const graph = fromWorkflow({
+      id: `${definition.id}-without-objective`,
+      name: `${definition.id} without objective`,
+      entryNode: definition.id,
+      maxRevisions: 2,
+      nodes: [{ ...definition, name: definition.id }],
+      edges: [],
+    });
+
+    assert.equal(graph.nodes[0].prompt, '');
+    assert.deepEqual(validateWorkflow(graph), []);
+
+    const published = toWorkflow(graph);
+    assert.equal(published.nodes[0].kind, definition.kind);
+    assert.equal(Object.hasOwn(published.nodes[0], 'prompt'), false);
+  }
+});
+
+test('workflow owner scope survives authoring round trips without inventing a project', () => {
+  const organizationTemplate = fromWorkflow({
+    id: 'org-template',
+    name: 'Organization template',
+    organizationId: 'org-1',
+    teamId: 'team-1',
+    nodes: [],
+    edges: [],
+    entryNode: '',
+    maxRevisions: 3,
+  });
+  const saved = toWorkflow(organizationTemplate);
+  assert.equal(saved.organizationId, 'org-1');
+  assert.equal(saved.teamId, 'team-1');
+  assert.equal(Object.hasOwn(saved, 'projectId'), false);
+});
+
 test('fresh generic actions have no tutorial prompt and legacy action prompts survive round trips', () => {
   const action = fresh('action');
   assert.equal(action.prompt, '');
-  const legacy = { id: 'legacy-action', name: 'Legacy action', nodes: [{ id: 'action', kind: 'action', name: 'Action', prompt: 'Configured legacy context.', operation: 'inspect_changes', input: {} }], edges: [], entryNode: 'action' };
+  const legacy = {
+    id: 'legacy-action',
+    name: 'Legacy action',
+    nodes: [
+      {
+        id: 'action',
+        kind: 'action',
+        name: 'Action',
+        prompt: 'Configured legacy context.',
+        operation: 'inspect_changes',
+        input: {},
+      },
+    ],
+    edges: [],
+    entryNode: 'action',
+  };
   const roundTrip = toWorkflow(fromWorkflow(legacy));
   assert.equal(roundTrip.nodes[0].prompt, 'Configured legacy context.');
 });
 
 test('registered action model pins survive codec round trips even when unavailable locally', () => {
   const workflow = {
-    id: 'agent-activity-model', name: 'Agent activity model', entryNode: 'action', maxRevisions: 2,
-    nodes: [{ id: 'action', kind: 'action', name: 'Summarize', activity: { id: 'data.summarize', revision: 3 }, activityDescriptorDigest: 'a'.repeat(64), model: 'provider/model-retired', bindings: {} }],
+    id: 'agent-activity-model',
+    name: 'Agent activity model',
+    entryNode: 'action',
+    maxRevisions: 2,
+    nodes: [
+      {
+        id: 'action',
+        kind: 'action',
+        name: 'Summarize',
+        activity: { id: 'data.summarize', revision: 3 },
+        activityDescriptorDigest: 'a'.repeat(64),
+        model: 'provider/model-retired',
+        bindings: {},
+      },
+    ],
     edges: [],
   };
   const roundTrip = toWorkflow(fromWorkflow(workflow));
@@ -139,28 +417,94 @@ test('registered action model pins survive codec round trips even when unavailab
 test('registered agent activity permission choices survive publication, including denied and unavailable values', () => {
   for (const permissions of ['read', 'none', 'read-write', 'full', 'workspace-admin']) {
     const source = {
-      id: 'agent-activity-permission', name: 'Agent activity permission', entryNode: 'action', maxRevisions: 2,
-      nodes: [{ id: 'action', kind: 'action', name: 'Summarize', activity: { id: 'agent.summarize', revision: 3 },
-        activityDescriptorDigest: 'a'.repeat(64), permissions }],
+      id: 'agent-activity-permission',
+      name: 'Agent activity permission',
+      entryNode: 'action',
+      maxRevisions: 2,
+      nodes: [
+        {
+          id: 'action',
+          kind: 'action',
+          name: 'Summarize',
+          activity: { id: 'agent.summarize', revision: 3 },
+          activityDescriptorDigest: 'a'.repeat(64),
+          permissions,
+        },
+      ],
       edges: [],
     };
     assert.equal(toWorkflow(fromWorkflow(source)).nodes[0].permissions, permissions);
   }
-  const unrelated = { id: 'unrelated', name: 'No tools', entryNode: 'action', maxRevisions: 2,
-    nodes: [{ id: 'action', kind: 'action', name: 'Compute', activity: { id: 'data.multiply', revision: 1 }, permissions: 'full' }], edges: [] };
-  assert.equal(toWorkflow(fromWorkflow(unrelated)).nodes[0].permissions, 'full', 'codec preserves stored policy when descriptor is unavailable or not loaded; runtime remains authoritative');
-  const nonActivityAction = { id: 'legacy', name: 'Legacy', entryNode: 'action', maxRevisions: 2,
-    nodes: [{ id: 'action', kind: 'action', name: 'Legacy action', operation: 'inspect_changes', permissions: 'full' }], edges: [] };
+  const unrelated = {
+    id: 'unrelated',
+    name: 'No tools',
+    entryNode: 'action',
+    maxRevisions: 2,
+    nodes: [
+      {
+        id: 'action',
+        kind: 'action',
+        name: 'Compute',
+        activity: { id: 'data.multiply', revision: 1 },
+        permissions: 'full',
+      },
+    ],
+    edges: [],
+  };
+  assert.equal(
+    toWorkflow(fromWorkflow(unrelated)).nodes[0].permissions,
+    'full',
+    'codec preserves stored policy when descriptor is unavailable or not loaded; runtime remains authoritative',
+  );
+  const nonActivityAction = {
+    id: 'legacy',
+    name: 'Legacy',
+    entryNode: 'action',
+    maxRevisions: 2,
+    nodes: [
+      {
+        id: 'action',
+        kind: 'action',
+        name: 'Legacy action',
+        operation: 'inspect_changes',
+        permissions: 'full',
+      },
+    ],
+    edges: [],
+  };
   assert.equal(toWorkflow(fromWorkflow(nonActivityAction)).nodes[0].permissions, undefined);
 });
 
 test('workflow run schemas and result bindings survive editor round trips', () => {
   const source = {
-    id: 'typed-run', name: 'Typed run', entryNode: 'input', maxRevisions: 2,
-    runInputSchema: { type: 'object', properties: { amount: { type: 'number' } }, required: ['amount'], additionalProperties: false },
-    resultSchema: { type: 'object', properties: { total: { type: 'number' } }, required: ['total'], additionalProperties: false },
-    resultBindings: { total: { from: { kind: 'activity_output', nodeId: 'sum', path: ['amount'] } } },
-    nodes: [{ id: 'input', kind: 'action', name: 'Sum', activity: { id: 'data.multiply', revision: 1 }, bindings: {} }],
+    id: 'typed-run',
+    name: 'Typed run',
+    entryNode: 'input',
+    maxRevisions: 2,
+    runInputSchema: {
+      type: 'object',
+      properties: { amount: { type: 'number' } },
+      required: ['amount'],
+      additionalProperties: false,
+    },
+    resultSchema: {
+      type: 'object',
+      properties: { total: { type: 'number' } },
+      required: ['total'],
+      additionalProperties: false,
+    },
+    resultBindings: {
+      total: { from: { kind: 'activity_output', nodeId: 'sum', path: ['amount'] } },
+    },
+    nodes: [
+      {
+        id: 'input',
+        kind: 'action',
+        name: 'Sum',
+        activity: { id: 'data.multiply', revision: 1 },
+        bindings: {},
+      },
+    ],
     edges: [],
   };
   const roundTrip = toWorkflow(fromWorkflow(source));
@@ -177,62 +521,144 @@ test('blank workflow starts without an agent node and can add any explicit first
 });
 
 test('decision labels survive draft codec round trips and invalid metadata is rejected', () => {
-  const draft = fromWorkflow({ id: 'configured-review', name: 'Configured review', nodes: [
-    { id: 'review', kind: 'human', name: 'Review result', prompt: 'Review the submitted result.',
-      decisionLabels: { approved: 'Record estimate', changes_requested: 'Recalculate' } },
-  ], edges: [] });
-  assert.deepEqual(toWorkflow(draft).nodes[0].decisionLabels,
-    { approved: 'Record estimate', changes_requested: 'Recalculate' });
+  const draft = fromWorkflow({
+    id: 'configured-review',
+    name: 'Configured review',
+    nodes: [
+      {
+        id: 'review',
+        kind: 'human',
+        name: 'Review result',
+        prompt: 'Review the submitted result.',
+        decisionLabels: { approved: 'Record estimate', changes_requested: 'Recalculate' },
+      },
+    ],
+    edges: [],
+  });
+  assert.deepEqual(toWorkflow(draft).nodes[0].decisionLabels, {
+    approved: 'Record estimate',
+    changes_requested: 'Recalculate',
+  });
   assert.deepEqual(validateWorkflow(draft), []);
   draft.nodes[0].decisionLabels = { publish: 'Publish' };
   assert.match(validateWorkflow(draft).join(' '), /supported human outcomes/);
 });
 
 test('legacy gate editor conversion emits labels-only data without the internal trust marker', () => {
-  const graph = fromWorkflow({ id: 'legacy-editor', name: 'Legacy editor', nodes: [{
-    id: 'review', kind: 'human', name: 'Review', prompt: 'Review',
-    legacyHumanTask: true,
-    humanTask: { outcomes: [
-      { id: 'approved', label: 'Accept estimate', effect: 'approve_activity' },
-      { id: 'changes_requested', label: 'Revise estimate' },
-    ] },
-    decisionLabels: { approved: 'Accept estimate', changes_requested: 'Revise estimate' },
-  }] });
+  const graph = fromWorkflow({
+    id: 'legacy-editor',
+    name: 'Legacy editor',
+    nodes: [
+      {
+        id: 'review',
+        kind: 'human',
+        name: 'Review',
+        prompt: 'Review',
+        legacyHumanTask: true,
+        humanTask: {
+          outcomes: [
+            { id: 'approved', label: 'Accept estimate', effect: 'approve_activity' },
+            { id: 'changes_requested', label: 'Revise estimate' },
+          ],
+        },
+        decisionLabels: { approved: 'Accept estimate', changes_requested: 'Revise estimate' },
+      },
+    ],
+  });
   const [wire] = toWorkflow(graph).nodes;
   assert.equal(wire.legacyHumanTask, undefined);
   assert.equal(wire.humanTask, undefined);
-  assert.deepEqual(wire.decisionLabels, { approved: 'Accept estimate', changes_requested: 'Revise estimate' });
-  graph.nodes[0] = { ...graph.nodes[0], legacyHumanTask: undefined, humanTask: {
-    outcomes: [{ id: 'approve', label: 'Approve' }, { id: 'decline', label: 'Decline' }],
-  } };
-  assert.deepEqual(toWorkflow(graph).nodes[0].humanTask?.outcomes.map(({ id }) => id), ['approve', 'decline']);
+  assert.deepEqual(wire.decisionLabels, {
+    approved: 'Accept estimate',
+    changes_requested: 'Revise estimate',
+  });
+  graph.nodes[0] = {
+    ...graph.nodes[0],
+    legacyHumanTask: undefined,
+    humanTask: {
+      outcomes: [
+        { id: 'approve', label: 'Approve' },
+        { id: 'decline', label: 'Decline' },
+      ],
+    },
+  };
+  assert.deepEqual(
+    toWorkflow(graph).nodes[0].humanTask?.outcomes.map(({ id }) => id),
+    ['approve', 'decline'],
+  );
 });
 
 test('configured human task form and explicit effect policy survive codec round trips', () => {
-  const task = { outcomes: [
-    { id: 'authorize_purchase', label: 'Authorize purchase', effect: 'approve_activity' },
-    { id: 'request_revision', label: 'Request a revised quote' },
-  ], form: { fields: [
-    { id: 'total', label: 'Approved total', type: 'number', required: true, minimum: 1, maximum: 100000 },
-    { id: 'deliveryDate', label: 'Delivery date', type: 'date' },
-  ] }, reviewerPolicy: { permission: 'project.write', userIds: ['finance-reviewer'] }, dueAfterSeconds: 3600 };
-  const graph = fromWorkflow({ id: 'purchase', name: 'Purchase review', nodes: [
-    { id: 'review', kind: 'human', name: 'Review quote', humanTask: task },
-    { id: 'send', kind: 'action', name: 'Submit purchase', activity: { id: 'procurement.submit', revision: 4 } },
-  ], edges: [{ id: 'authorize', from: 'review', to: 'send', outcome: 'authorize_purchase' }] });
+  const task = {
+    outcomes: [
+      { id: 'authorize_purchase', label: 'Authorize purchase', effect: 'approve_activity' },
+      { id: 'request_revision', label: 'Request a revised quote' },
+    ],
+    form: {
+      fields: [
+        {
+          id: 'total',
+          label: 'Approved total',
+          type: 'number',
+          required: true,
+          minimum: 1,
+          maximum: 100000,
+        },
+        { id: 'deliveryDate', label: 'Delivery date', type: 'date' },
+      ],
+    },
+    reviewerPolicy: { permission: 'project.write', userIds: ['finance-reviewer'] },
+    dueAfterSeconds: 3600,
+  };
+  const graph = fromWorkflow({
+    id: 'purchase',
+    name: 'Purchase review',
+    nodes: [
+      { id: 'review', kind: 'human', name: 'Review quote', humanTask: task },
+      {
+        id: 'send',
+        kind: 'action',
+        name: 'Submit purchase',
+        activity: { id: 'procurement.submit', revision: 4 },
+      },
+    ],
+    edges: [{ id: 'authorize', from: 'review', to: 'send', outcome: 'authorize_purchase' }],
+  });
   assert.deepEqual(toWorkflow(graph).nodes[0].humanTask, task);
   assert.deepEqual(validateWorkflow(graph), []);
   graph.nodes[0].humanTask.outcomes[0].label = 'Publish';
-  assert.equal(toWorkflow(graph).nodes[0].humanTask.outcomes[0].effect, 'approve_activity', 'labels cannot create or remove explicit authority');
-  assert.match(validateWorkflow({ ...graph, edges: [{ id: 'invalid', from: 'review', to: 'send', outcome: 'accept' }] }).join(' '), /not configured/i);
+  assert.equal(
+    toWorkflow(graph).nodes[0].humanTask.outcomes[0].effect,
+    'approve_activity',
+    'labels cannot create or remove explicit authority',
+  );
+  assert.match(
+    validateWorkflow({
+      ...graph,
+      edges: [{ id: 'invalid', from: 'review', to: 'send', outcome: 'accept' }],
+    }).join(' '),
+    /not configured/i,
+  );
 });
 
 test('an empty create-ticket project uses the run project when encoded', () => {
-  const editor = fromWorkflow({ id: 'run-project-create', name: 'Run project create', nodes: [
-    { id: 'create', kind: 'action', name: 'Create work', operation: 'create_ticket', input: {
-      projectId: '', title: 'Work in the run project',
-    } },
-  ], edges: [] });
+  const editor = fromWorkflow({
+    id: 'run-project-create',
+    name: 'Run project create',
+    nodes: [
+      {
+        id: 'create',
+        kind: 'action',
+        name: 'Create work',
+        operation: 'create_ticket',
+        input: {
+          projectId: '',
+          title: 'Work in the run project',
+        },
+      },
+    ],
+    edges: [],
+  });
   const encoded = toWorkflow(editor);
   assert.equal('projectId' in encoded.nodes[0].input, false);
   assert.deepEqual(validateWorkflow(editor), []);
@@ -268,6 +694,43 @@ test('workflow editor validation catches unreachable nodes and invalid numeric b
     triggers: [],
   });
   assert.match(validateWorkflow(editor).join(' '), /valid number/);
+});
+
+test('boolean branch values preserve explicit false and leave a cleared value unbound', () => {
+  const editor = fromWorkflow({
+    id: 'boolean-branch',
+    name: 'Boolean branch',
+    entryNode: 'branch',
+    nodes: [
+      {
+        id: 'branch',
+        kind: 'branch',
+        name: 'Verified',
+        condition: {
+          source: 'context',
+          field: 'verified',
+          equals: false,
+          trueOutcome: 'yes',
+          falseOutcome: 'no',
+        },
+      },
+      { id: 'yes', kind: 'human', name: 'Yes', prompt: 'Review' },
+      { id: 'no', kind: 'human', name: 'No', prompt: 'Review' },
+    ],
+    edges: [
+      { id: 'yes-edge', from: 'branch', to: 'yes', outcome: 'yes' },
+      { id: 'no-edge', from: 'branch', to: 'no', outcome: 'no' },
+    ],
+  });
+  assert.equal(editor.nodes[0].condition?.value, 'false');
+  assert.equal(toWorkflow(editor).nodes[0].condition?.equals, false);
+  assert.deepEqual(validateWorkflow(editor), []);
+
+  editor.nodes[0].condition.value = '';
+  const cleared = toWorkflow(editor).nodes[0].condition;
+  assert.equal(cleared?.equals, undefined);
+  assert.equal(Object.hasOwn(JSON.parse(JSON.stringify(cleared)), 'equals'), false);
+  assert.match(validateWorkflow(editor).join(' '), /choose true or false/);
 });
 
 test('reordering stages changes the primary delivery path without losing revision routes', () => {
@@ -334,19 +797,61 @@ test('inserting a stage splices it into the primary route and preserves alternat
 
 test('workflow editor preserves an exact capability profile through graph round trips', () => {
   const profile = { id: 'editorial', version: 3 };
-  const graph = fromWorkflow({ id: 'article', name: 'Article', capabilityProfile: profile, nodes: [{ id: 'review', type: 'approval', name: 'Review' }] });
+  const graph = fromWorkflow({
+    id: 'article',
+    name: 'Article',
+    capabilityProfile: profile,
+    nodes: [{ id: 'review', type: 'approval', name: 'Review' }],
+  });
   assert.deepEqual(toWorkflow(graph).capabilityProfile, profile);
 });
 
 test('agent investigation settings survive an editor round trip', () => {
-  const wire = {id: 'inspect', name: 'Inspect', nodes: [{id: 'inspect', kind: 'agent', name: 'Inspect', prompt: 'Inspect', maxRounds: 12, finalizationRounds: 2, reasoningEffort: 'medium', summaryHeadings: ['Evidence', 'Unknowns']}], edges: []};
+  const wire = {
+    id: 'inspect',
+    name: 'Inspect',
+    nodes: [
+      {
+        id: 'inspect',
+        kind: 'agent',
+        name: 'Inspect',
+        prompt: 'Inspect',
+        maxRounds: 12,
+        finalizationRounds: 2,
+        reasoningEffort: 'medium',
+        summaryHeadings: ['Evidence', 'Unknowns'],
+      },
+    ],
+    edges: [],
+  };
   const roundTrip = toWorkflow(fromWorkflow(wire));
-  for (const key of ['maxRounds', 'finalizationRounds', 'reasoningEffort', 'summaryHeadings']) assert.deepEqual(roundTrip.nodes[0][key], wire.nodes[0][key]);
+  for (const key of ['maxRounds', 'finalizationRounds', 'reasoningEffort', 'summaryHeadings'])
+    assert.deepEqual(roundTrip.nodes[0][key], wire.nodes[0][key]);
 });
 
 test('outcome-specific requirements survive editor publication without dropping policies', () => {
-  const policy = {publish: {fields: ['audience', 'selfCheck'], minReferences: 1, requireInvestigationAssessment: true, requireClaimEvidence: true}};
-  const wire = {id: 'editorial', name: 'Editorial', nodes: [{id: 'draft', kind: 'agent', name: 'Draft', prompt: 'Inspect', submissionRequirements: policy}], edges: []};
+  const policy = {
+    publish: {
+      fields: ['audience', 'selfCheck'],
+      minReferences: 1,
+      requireInvestigationAssessment: true,
+      requireClaimEvidence: true,
+    },
+  };
+  const wire = {
+    id: 'editorial',
+    name: 'Editorial',
+    nodes: [
+      {
+        id: 'draft',
+        kind: 'agent',
+        name: 'Draft',
+        prompt: 'Inspect',
+        submissionRequirements: policy,
+      },
+    ],
+    edges: [],
+  };
   assert.deepEqual(toWorkflow(fromWorkflow(wire)).nodes[0].submissionRequirements, policy);
 });
 
@@ -356,30 +861,34 @@ test('optional presentation bindings round-trip across unrelated workflow config
       id: 'calculation',
       name: 'Calculation',
       version: 4,
-      nodes: [{
-        id: 'calculate',
-        kind: 'agent',
-        name: 'Calculate',
-        prompt: 'Calculate a result.',
-        submissionRequirements: { complete: { fields: ['total'], minReferences: 0 } },
-        presentationBindings: [
-          { source: 'summary', label: 'Outcome' },
-          { source: 'detail', field: 'total', label: 'Total', primary: true },
-        ],
-      }],
+      nodes: [
+        {
+          id: 'calculate',
+          kind: 'agent',
+          name: 'Calculate',
+          prompt: 'Calculate a result.',
+          submissionRequirements: { complete: { fields: ['total'], minReferences: 0 } },
+          presentationBindings: [
+            { source: 'summary', label: 'Outcome' },
+            { source: 'detail', field: 'total', label: 'Total', primary: true },
+          ],
+        },
+      ],
       edges: [],
     },
     {
       id: 'publishing',
       name: 'Publishing',
-      nodes: [{
-        id: 'publish',
-        kind: 'agent',
-        name: 'Prepare publication',
-        prompt: 'Prepare a publication package.',
-        submissionRequirements: { ready: { fields: ['audience'], minReferences: 0 } },
-        presentationBindings: [{ source: 'artifact', label: 'Publication files', primary: true }],
-      }],
+      nodes: [
+        {
+          id: 'publish',
+          kind: 'agent',
+          name: 'Prepare publication',
+          prompt: 'Prepare a publication package.',
+          submissionRequirements: { ready: { fields: ['audience'], minReferences: 0 } },
+          presentationBindings: [{ source: 'artifact', label: 'Publication files', primary: true }],
+        },
+      ],
       edges: [],
     },
   ];
@@ -392,7 +901,12 @@ test('optional presentation bindings round-trip across unrelated workflow config
 });
 
 test('legacy workflow definitions remain valid without presentation bindings', () => {
-  const wire = { id: 'legacy', name: 'Legacy', nodes: [{ id: 'work', kind: 'agent', name: 'Work', prompt: 'Work.' }], edges: [] };
+  const wire = {
+    id: 'legacy',
+    name: 'Legacy',
+    nodes: [{ id: 'work', kind: 'agent', name: 'Work', prompt: 'Work.' }],
+    edges: [],
+  };
   const encoded = toWorkflow(fromWorkflow(wire));
   assert.equal('presentationBindings' in encoded.nodes[0], false);
   assert.deepEqual(validateWorkflow(fromWorkflow(wire)), []);
@@ -402,18 +916,20 @@ test('editor validation rejects undeclared detail fields and duplicate material 
   const graph = fromWorkflow({
     id: 'invalid-bindings',
     name: 'Invalid bindings',
-    nodes: [{
-      id: 'prepare',
-      kind: 'agent',
-      name: 'Prepare',
-      prompt: 'Prepare output.',
-      submissionRequirements: { ready: { fields: ['result'], minReferences: 0 } },
-      presentationBindings: [
-        { source: 'summary' },
-        { source: 'summary', primary: true },
-        { source: 'detail', field: 'typo' },
-      ],
-    }],
+    nodes: [
+      {
+        id: 'prepare',
+        kind: 'agent',
+        name: 'Prepare',
+        prompt: 'Prepare output.',
+        submissionRequirements: { ready: { fields: ['result'], minReferences: 0 } },
+        presentationBindings: [
+          { source: 'summary' },
+          { source: 'summary', primary: true },
+          { source: 'detail', field: 'typo' },
+        ],
+      },
+    ],
     edges: [],
   });
   const errors = validateWorkflow(graph).join(' ');
@@ -424,12 +940,21 @@ test('editor validation rejects undeclared detail fields and duplicate material 
 test('material binding authoring stays available until all distinct sources are used', () => {
   assert.equal(canAddPresentationBinding([{ source: 'summary' }], []), true);
   assert.equal(canAddPresentationBinding([{ source: 'artifact' }], []), true);
-  assert.equal(canAddPresentationBinding([{ source: 'summary' }, { source: 'artifact' }], []), false);
+  assert.equal(
+    canAddPresentationBinding([{ source: 'summary' }, { source: 'artifact' }], []),
+    false,
+  );
   assert.equal(
     canAddPresentationBinding([{ source: 'summary' }, { source: 'artifact' }], ['result']),
     true,
   );
-  assert.equal(canAddPresentationBinding(Array.from({ length: 12 }, () => ({ source: 'summary' })), ['result']), false);
+  assert.equal(
+    canAddPresentationBinding(
+      Array.from({ length: 12 }, () => ({ source: 'summary' })),
+      ['result'],
+    ),
+    false,
+  );
 });
 
 test('editor validation rejects non-agent bindings and unsupported human outcomes', () => {
