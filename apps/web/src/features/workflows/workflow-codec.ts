@@ -632,7 +632,7 @@ export function backendNode(node: GraphNode): WorkflowStep {
     kind: type === 'approval' ? 'human' : type,
     prompt: node.prompt,
   };
-  if (type === 'branch' && !node.prompt) delete result.prompt;
+  if (['branch', 'child', 'parallel', 'map'].includes(type) && !node.prompt) delete result.prompt;
   // Round-trip a persisted legacy gate as its historical labels-only shape.
   // The daemon's persisted decoder restores its compatibility projection;
   // callers cannot publish the internal authorization marker themselves.
@@ -860,7 +860,7 @@ export function validateWorkflow(workflow: GraphWorkflow): string[] {
   }
   for (const node of workflow.nodes) {
     if (!node.name.trim()) continue;
-    if (!['branch', 'action'].includes(node.type) && !node.prompt.trim())
+    if (!['branch', 'action', 'child', 'parallel', 'map'].includes(node.type) && !node.prompt.trim())
       errors.push(`${node.name}: objective is required.`);
     if (node.type === 'branch') {
       const condition = node.condition;

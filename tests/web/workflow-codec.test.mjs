@@ -289,6 +289,67 @@ test('composition node kinds and exact mappings survive unrelated edits', () => 
   assert.deepEqual(saved.resultBindingsByTerminal, terminalBindings);
 });
 
+test('composition nodes publish without an unrelated objective and omit an empty prompt', () => {
+  const definitions = [
+    {
+      id: 'child',
+      kind: 'child',
+      workflow: { id: 'document-review', version: 1 },
+      inputBindings: {},
+      outputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      outputBindings: {},
+    },
+    {
+      id: 'parallel',
+      kind: 'parallel',
+      join: 'all',
+      branches: [
+        {
+          id: 'review',
+          workflow: { id: 'document-review', version: 1 },
+          inputBindings: {},
+          outputBindings: {},
+        },
+      ],
+      outputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
+      id: 'map',
+      kind: 'map',
+      workflow: { id: 'document-review', version: 1 },
+      itemsBinding: { from: { kind: 'run_input', path: ['documents'] } },
+      inputBindings: {},
+      itemField: 'document',
+      outputSchema: {
+        type: 'array',
+        items: { type: 'object', properties: {}, additionalProperties: false },
+      },
+      outputBindings: {},
+      maxItems: 10,
+      maxConcurrent: 2,
+      failurePolicy: 'fail_fast',
+    },
+  ];
+
+  for (const definition of definitions) {
+    const graph = fromWorkflow({
+      id: `${definition.id}-without-objective`,
+      name: `${definition.id} without objective`,
+      entryNode: definition.id,
+      maxRevisions: 2,
+      nodes: [{ ...definition, name: definition.id }],
+      edges: [],
+    });
+
+    assert.equal(graph.nodes[0].prompt, '');
+    assert.deepEqual(validateWorkflow(graph), []);
+
+    const published = toWorkflow(graph);
+    assert.equal(published.nodes[0].kind, definition.kind);
+    assert.equal(Object.hasOwn(published.nodes[0], 'prompt'), false);
+  }
+});
+
 test('workflow owner scope survives authoring round trips without inventing a project', () => {
   const organizationTemplate = fromWorkflow({
     id: 'org-template',
