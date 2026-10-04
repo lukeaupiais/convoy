@@ -86,9 +86,15 @@ export function BoardStudio({
   onOpenWorkflow,
   runtimeError,
 }: Props) {
-  const boards = boardData(state).filter((value) => value.projectIds.includes(projectId));
+  const boards = useMemo(
+    () => boardData(state).filter((value) => value.projectIds.includes(projectId)),
+    [state.boards, projectId],
+  );
   const templates = templateData(state);
-  const available = boards.length ? boards : [{ ...starter, projectIds: [projectId] }];
+  const available = useMemo(
+    () => (boards.length ? boards : [{ ...starter, projectIds: [projectId] }]),
+    [boards, projectId],
+  );
   const [boardId, setBoardId] = useState(available[0].id);
   const board = available.find((b) => b.id === boardId) ?? available[0];
   const [boardQuery, setBoardQuery] = useState('');
