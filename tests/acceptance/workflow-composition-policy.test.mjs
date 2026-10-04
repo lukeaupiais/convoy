@@ -11,6 +11,7 @@ const defaults = {
   maxConcurrentChildren: 8,
   maxDeadlineMs: 604_800_000,
   maxActiveDescendantRuns: 32,
+  maxActiveDescendantsPerRoot: 8,
 };
 
 function deferred() {
