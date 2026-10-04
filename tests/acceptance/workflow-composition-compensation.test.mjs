@@ -83,7 +83,7 @@ function actionNode(id, activityId, bindings = {}) {
   return { id, name: id, kind: 'action', activity: { id: activityId, revision: 1 }, bindings };
 }
 
-async function fixture(t, workflowActivities) {
+async function fixture(t, workflowActivities, clock) {
   const directory = await mkdtemp(join(tmpdir(), 'convoy-workflow-compensation-'));
   const client = 'workflow-composition-compensation-acceptance';
   const options = {
@@ -93,6 +93,7 @@ async function fixture(t, workflowActivities) {
     generate: async function* () { assert.fail('Compensation acceptance must not invoke a provider.'); },
     runners: { execute: async () => assert.fail('Integration compensation must not acquire a runner.'), close: async () => {} },
     workflowActivities,
+    ...(clock ? { clock } : {}),
   };
   let runtime = await createRuntime(options);
   const beforeClose = [];
@@ -484,6 +485,98 @@ test('a tightened current root budget blocks compensation dispatch after the for
   assert.equal(recoveredSlot.childRunCreated, false, 'restart does not admit compensation under the still-reduced ceiling');
   assert.equal(recovered.workflowRuns[workflowRunId].compositionBudget.reservedDescendantRuns, 2,
     'restart does not shrink the canonical descendant reservation count');
+});
+
+test('compensation deadline tightening is relative to its own admission and exact cleanup never replays it', async t => {
+  let currentTime = Date.now();
+  const forwardInput = object({ recordId: string(80) }, ['recordId']);
+  const outputSchema = object({ receiptId: string(160), recordId: string(80) }, ['receiptId', 'recordId']);
+  const forward = durableActivity('records.fail-before-release', forwardInput, outputSchema);
+  const compensation = durableActivity('records.release-with-lost-ack', forwardInput, outputSchema);
+  let forwardCalls = 0;
+  let compensationCalls = 0;
+  const receipts = new Map();
+  const f = await fixture(t, [
+    { descriptor: forward, implementation: {
+      async prepare(input, identity) { return { requestKey: identity.idempotencyKey, ...input }; },
+      async dispatch(_context, input) {
+        forwardCalls += 1;
+        currentTime += 500;
+        return { state: 'failed', message: 'The forward operation was not applied.' };
+      },
+      async confirm() { return { state: 'failed' }; }, async reconcile() { return { state: 'not_applied' }; },
+    } },
+    { descriptor: compensation, implementation: {
+      async prepare(input, identity) { return { requestKey: identity.idempotencyKey, ...input }; },
+      async dispatch(_context, input, intent) {
+        compensationCalls += 1;
+        receipts.set(intent.requestKey, { receiptId: `release:${input.recordId}`, recordId: input.recordId });
+        throw new Error('The release applied, but the acknowledgement was lost.');
+      },
+      async confirm() { return { state: 'waiting' }; },
+      async reconcile(_context, _input, intent, request) {
+        const receipt = receipts.get(intent.requestKey);
+        return request?.requestedResolution === 'applied' && receipt
+          ? { state: 'applied', output: structuredClone(receipt) }
+          : { state: 'unknown' };
+      },
+    } },
+  ], () => currentTime);
+  const forwardWorkflow = await f.save(activityWorkflow({ id: 'deadline-forward-child', projectId: f.project.id,
+    activityId: forward.ref.id, inputSchema: forwardInput, outputSchema, input: { recordId: 'lot-55' } }));
+  const compensationWorkflow = await f.save(activityWorkflow({ id: 'deadline-compensation-child', projectId: f.project.id,
+    activityId: compensation.ref.id, inputSchema: forwardInput, outputSchema, input: { recordId: 'lot-55' } }));
+  await f.act('setWorkflowCompositionPolicy', {
+    organizationId: f.organization.id, baseRevision: 0,
+    limits: { ...compositionDefaults, maxDeadlineMs: 60_000 },
+  });
+  const parent = await f.save({
+    id: 'deadline-compensation-parent', name: 'Tighten the admitted compensation deadline', projectId: f.project.id,
+    runInputSchema: forwardInput,
+    nodes: [{ id: 'forward', name: 'Forward operation', kind: 'child',
+      workflow: { id: forwardWorkflow.id, version: forwardWorkflow.version },
+      inputBindings: { recordId: { from: { kind: 'run_input', path: ['recordId'] } } },
+      outputSchema, outputBindings: { receiptId: { from: ['receiptId'] }, recordId: { from: ['recordId'] } },
+      compensations: [{ id: 'release-after-failure', trigger: 'failure',
+        workflow: { id: compensationWorkflow.id, version: compensationWorkflow.version },
+        inputBindings: { recordId: { from: { kind: 'run_input', path: ['recordId'] } } } }],
+    }], edges: [],
+  });
+  const { workflowRunId } = await f.run(parent, { recordId: 'lot-55' });
+  const compensationSlot = await waitFor(async () => (await f.readState()).workflowRuns[workflowRunId].compositionAttempts[0].compensations[0],
+    slot => slot.childRunCreated, 'the declared compensation child was not admitted');
+  const compensationRun = await waitFor(() => f.readRun(compensationSlot.runId),
+    run => run.attempt?.status === 'uncertain', 'compensation did not retain the real lost acknowledgement');
+  assert.equal(forwardCalls, 1);
+  assert.equal(compensationCalls, 1);
+  const beforeReduction = (await f.readState()).workflowRuns[workflowRunId].compositionAttempts[0].compensations[0];
+  assert.ok(beforeReduction.startedAt, 'the compensation reservation records its own admission time');
+  const compensationInstance = beforeReduction.instance;
+  const compensationEffectKey = compensationRun.attempt.effectKey;
+  const compositionStart = (await f.readState()).workflowRuns[workflowRunId].compositionAttempts[0].startedAt;
+  assert.ok(Date.parse(beforeReduction.startedAt) > Date.parse(compositionStart),
+    'the compensation starts after, and has a distinct clock origin from, the forward composition');
+
+  currentTime += 2_000;
+  await f.act('setWorkflowCompositionPolicy', {
+    organizationId: f.organization.id, baseRevision: 1,
+    limits: { ...compositionDefaults, maxDeadlineMs: 1_000 },
+  });
+  const afterReduction = (await f.readState()).workflowRuns[workflowRunId].compositionAttempts[0].compensations[0];
+  assert.equal(Date.parse(afterReduction.deadlineAt), Date.parse(beforeReduction.startedAt) + 1_000,
+    'current policy tightens this compensation from its own start, not the older parent start');
+  assert.ok(Date.parse(afterReduction.deadlineAt) < currentTime);
+
+  await f.act('claimWorkflowRun', { workflowRunId: compensationRun.id });
+  await f.act('reconcileWorkflowRun', { workflowRunId: compensationRun.id, instance: compensationInstance,
+    effectKey: compensationEffectKey, resolution: 'applied' });
+  const settled = await waitFor(async () => (await f.readState()).workflowRuns[workflowRunId].compositionAttempts[0].compensations[0],
+    slot => ['completed', 'failed'].includes(slot.status), 'expired compensation did not settle its exact receipt');
+  assert.equal(settled.runId, compensationRun.id);
+  assert.equal(settled.instance, compensationInstance);
+  assert.equal((await f.readRun(workflowRunId)).status, 'failed', 'compensation cannot rewrite the original forward failure');
+  assert.equal(forwardCalls, 1);
+  assert.equal(compensationCalls, 1, 'late policy cleanup cannot redispatch the compensation effect');
 });
 
 test('a compensation cannot pin a child workflow owned by another project', async t => {

@@ -1909,3 +1909,202 @@ test('a human-approved agent child waits above current active capacity, then run
     'Reviewed after capacity became available');
   assert.equal((await f.readRun(agentRoot.workflowRunId)).status, 'completed');
 });
+
+test('a reduced current deadline blocks queued child admission but permits exact cleanup of existing unknown work', async (t) => {
+  let currentTime = Date.now();
+  const receipts = new Map();
+  const dispatches = [];
+  const registration = durableMapRegistration(receipts, dispatches);
+  const f = await fixture(t, { workflowActivities: [registration], runtimeOptions: { clock: () => currentTime } });
+  const child = durableMapChildWorkflow(f.projectA.id, registration.descriptor.ref.id);
+  const publishedChild = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: child });
+  const parent = mapWorkflow(f.projectA.id, publishedChild.id);
+  parent.nodes[0].maxConcurrent = 1;
+  parent.nodes[0].deadlineMs = 60_000;
+  const publishedParent = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: parent });
+  await f.act('setWorkflowCompositionPolicy', {
+    organizationId: f.organization.id, baseRevision: 0,
+    limits: { ...defaults, maxDeadlineMs: 60_000, maxConcurrentChildren: 2, maxActiveDescendantRuns: 4 },
+  });
+
+  const started = await f.act('startWorkflowRun', {
+    projectId: f.projectA.id, workflowId: publishedParent.id, workflowVersion: publishedParent.version,
+    runInput: { items: ['accepted-before-deadline', 'must-remain-queued'] },
+  });
+  const parentBeforeReduction = await waitFor(() => f.readRun(started.workflowRunId),
+    run => run.compositions?.[0]?.slots?.some(slot => slot.status === 'uncertain'),
+    'the first durable descendant did not retain its applied-but-unacknowledged receipt');
+  const [unknownSlot, queuedSlot] = parentBeforeReduction.compositions[0].slots;
+  assert.equal(unknownSlot.status, 'uncertain');
+  assert.equal(queuedSlot.status, 'queued');
+  assert.equal(queuedSlot.childRunCreated, false);
+  assert.equal(dispatches.length, 1);
+  const unknownRun = await f.readRun(unknownSlot.runId);
+  assert.equal(unknownRun.attempt.status, 'uncertain');
+  const originalDeadlineAt = parentBeforeReduction.compositions[0].deadlineAt;
+  const compositionStartedAt = (await f.readState()).workflowRuns[started.workflowRunId].compositionAttempts[0].startedAt;
+  assert.ok(originalDeadlineAt);
+
+  currentTime += 2_000;
+  await f.act('setWorkflowCompositionPolicy', {
+    organizationId: f.organization.id, baseRevision: 1,
+    limits: { ...defaults, maxDeadlineMs: 1_000, maxConcurrentChildren: 2, maxActiveDescendantRuns: 4 },
+  });
+  const held = await f.readRun(started.workflowRunId);
+  const expectedTightenedDeadline = Date.parse(compositionStartedAt) + 1_000;
+  assert.equal(Date.parse(held.compositions[0].deadlineAt), expectedTightenedDeadline,
+    `the effective deadline tightens from its original start (${held.compositions[0].deadlineAt}; started ${compositionStartedAt}; prior ${originalDeadlineAt})`);
+  assert.equal(held.compositions[0].slots[0].runId, unknownSlot.runId);
+  assert.equal(held.compositions[0].slots[1].runId, queuedSlot.runId);
+  assert.equal(held.compositions[0].slots[1].status, 'cancelled', 'expiry drains the undispatched reservation without creating its child');
+  assert.equal((await f.readState()).workflowRuns[queuedSlot.runId], undefined,
+    'a policy reduction prevents creation of the reserved queued child');
+  assert.equal(dispatches.length, 1);
+
+  await f.act('claimWorkflowRun', { workflowRunId: unknownRun.id });
+  await f.act('reconcileWorkflowRun', {
+    workflowRunId: unknownRun.id, instance: unknownRun.instance,
+    effectKey: unknownRun.attempt.effectKey, resolution: 'applied',
+  });
+  const expired = await waitFor(() => f.readRun(started.workflowRunId),
+    run => ['failed', 'completed'].includes(run.status),
+    'expired map did not settle after its exact unknown receipt was reconciled');
+  assert.equal(expired.status, 'failed', 'late cleanup cannot invent a successful map completion');
+  assert.equal(expired.compositions[0].slots[0].runId, unknownSlot.runId);
+  assert.equal(expired.compositions[0].slots[1].runId, queuedSlot.runId);
+  assert.equal(expired.compositions[0].slots[1].status, 'cancelled');
+  assert.equal(expired.compositions[0].slots[1].childRunCreated, false);
+  assert.equal((await f.readState()).workflowRuns[queuedSlot.runId], undefined);
+  assert.equal(receipts.size, 1);
+  assert.equal(dispatches.length, 1, 'exact reconciliation cleans existing work without a replay or late child dispatch');
+});
+
+test('cancelling a composition parent does not release capacity while its attached provider turn is still busy', async (t) => {
+  const providerEntered = deferred();
+  const releaseProvider = deferred();
+  const providerFinished = deferred();
+  let providerCalls = 0;
+  let providerEntryTimer;
+  const f = await fixture(t, {
+    runtimeOptions: {
+      provider: { id: 'composition-legacy', name: 'Composition legacy provider', capabilities: [] },
+      credentialBroker: { resolve: async () => ({ value: 'fixture-credential' }) },
+      providerAdapters: createProviderAdapterRegistry({ 'composition-busy': () => ({
+        protocol: 'openai-compatible', capabilities: ['streaming', 'tool-calls'],
+        inspectConnection: async () => ({ available: true }),
+        discoverModels: async () => [{ id: 'busy-model', name: 'Busy fixture model', input: ['text'] }],
+        async *generate({ signal }) {
+          providerCalls += 1;
+          const call = providerCalls;
+          try {
+            if (call === 1) {
+              providerEntered.resolve();
+              await releaseProvider.promise;
+              if (signal.aborted) return;
+            }
+            yield {
+              type: 'result',
+              message: {
+                role: 'assistant',
+                content: [{ type: 'toolCall', id: `busy-submit-${call}`, name: 'submit_step', arguments: {
+                  summary: `Accepted report ${call}`, outcome: 'success',
+                  details: { summary: `Accepted report ${call}` }, artifacts: [], references: [],
+                } }],
+                stopReason: 'stop', timestamp: Date.now(),
+              },
+            };
+          } finally {
+            if (call === 1) providerFinished.resolve();
+          }
+        },
+      }) }),
+      deployment: { id: 'composition-busy-provider', displayName: 'Composition busy provider',
+        issuer: 'https://composition.test', publicOrigin: 'https://composition.test',
+        capabilities: ['organizations', 'provider-connections'], authenticationMethods: ['local-bootstrap'] },
+    },
+  });
+  try {
+    const connection = await f.act('createProviderConnection', {
+      organizationId: f.organization.id, providerId: 'composition-busy', displayName: 'Busy provider',
+      owner: { kind: 'organization', organizationId: f.organization.id }, credentialRef: { kind: 'none' },
+    });
+    const probe = await f.act('probeProviderConnection', {
+      organizationId: f.organization.id, connectionId: connection.id, expectedRevision: connection.revision,
+    });
+    const route = await f.act('createModelRoute', {
+      organizationId: f.organization.id, name: 'composition-busy-route', purposes: ['coding'],
+      candidates: [{ connectionId: connection.id, offeringId: probe.offerings[0].id }], policy: { fallback: 'never' },
+    });
+    const runInputSchema = { type: 'object', properties: { recordId: { type: 'string', maxLength: 80 } },
+      required: ['recordId'], additionalProperties: false };
+    const resultSchema = { type: 'object', properties: { summary: { type: 'string', maxLength: 4000 } },
+      required: ['summary'], additionalProperties: false };
+    const child = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: {
+      id: 'busy-provider-composition-child', name: 'Busy provider child', projectId: f.projectA.id,
+      runInputSchema, resultSchema,
+      resultBindingsByTerminal: { assess: { summary: { from: { kind: 'agent_submission', nodeId: 'assess', path: ['summary'] } } } },
+      nodes: [{ id: 'assess', kind: 'agent', name: 'Assess record', model: route.id, permissions: 'none',
+        prompt: 'Assess the record and submit a concise summary.', maxRounds: 2,
+        submissionRequirements: { success: { fields: ['summary'], minReferences: 0 } } }], edges: [],
+    } });
+    const parent = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: {
+      id: 'busy-provider-composition-parent', name: 'Busy provider parent', projectId: f.projectA.id, runInputSchema,
+      nodes: [{ id: 'child', kind: 'child', name: 'Run assessment', workflow: { id: child.id, version: child.version },
+        inputBindings: { recordId: { from: { kind: 'run_input', path: ['recordId'] } } },
+        outputSchema: resultSchema, outputBindings: { summary: { from: ['summary'] } } }], edges: [],
+    } });
+    await f.act('setWorkflowCompositionPolicy', {
+      organizationId: f.organization.id, baseRevision: 0,
+      limits: { ...defaults, maxActiveDescendantRuns: 1 },
+    });
+
+    const first = await f.act('startWorkflowRun', { projectId: f.projectA.id, workflowId: parent.id,
+      workflowVersion: parent.version, runInput: { recordId: 'busy-first' } });
+    try {
+      await Promise.race([providerEntered.promise, new Promise((_, reject) => {
+        providerEntryTimer = setTimeout(() => reject(new Error('first provider turn did not enter')), 5_000);
+      })]);
+    } finally {
+      clearTimeout(providerEntryTimer);
+    }
+    const firstParent = await f.readRun(first.workflowRunId);
+    const firstChildId = firstParent.compositions[0].slots[0].runId;
+    const firstChild = await f.readRun(firstChildId);
+    assert.ok(firstChild.sessionId, 'registered agent activation owns one real attached session');
+    const session = (await f.snapshot()).sessions.find(value => value.id === firstChild.sessionId);
+    assert.ok(session, 'the attached provider session is visible in the existing session read model');
+    assert.equal(providerCalls, 1);
+
+    const second = await f.act('startWorkflowRun', { projectId: f.projectA.id, workflowId: parent.id,
+      workflowVersion: parent.version, runInput: { recordId: 'busy-second' } });
+    let secondParent = await f.readRun(second.workflowRunId);
+    const secondSlot = secondParent.compositions[0].slots[0];
+    assert.equal(secondSlot.status, 'queued', 'an unfinished attached provider turn holds the organization descendant slot');
+    assert.equal(secondSlot.childRunCreated, false);
+
+    await f.act('claimWorkflowRun', { workflowRunId: first.workflowRunId });
+    await f.act('cancelWorkflowRun', { workflowRunId: first.workflowRunId });
+    assert.equal((await f.readRun(first.workflowRunId)).status, 'cancelled');
+    secondParent = await f.readRun(second.workflowRunId);
+    assert.equal(secondParent.compositions[0].slots[0].runId, secondSlot.runId);
+    assert.equal(secondParent.compositions[0].slots[0].status, 'queued');
+    assert.equal((await f.readState()).workflowRuns[secondSlot.runId], undefined,
+      'cancelling the root cannot make capacity available before the still-running session work exits');
+    assert.equal(providerCalls, 1, 'the queued sibling has not entered the provider while the first turn is busy');
+
+    releaseProvider.resolve();
+    await providerFinished.promise;
+    const secondActive = await waitFor(() => f.readRun(second.workflowRunId),
+      run => run.compositions[0].slots[0].childRunCreated,
+      'capacity did not become available after the attached provider turn actually exited');
+    const secondChildId = secondActive.compositions[0].slots[0].runId;
+    const secondChild = await waitFor(() => f.readRun(secondChildId),
+      run => ['completed', 'failed', 'cancelled'].includes(run.status),
+      'the next child did not settle after the first provider job was cleaned up');
+    assert.equal(secondChild.status, 'completed', JSON.stringify(secondChild));
+    assert.equal(providerCalls, 2, 'only after cleanup does the second attached child invoke the provider');
+    assert.equal((await f.readRun(firstChildId)).status, 'cancelled');
+  } finally {
+    releaseProvider.resolve();
+  }
+});
