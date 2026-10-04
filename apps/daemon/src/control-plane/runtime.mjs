@@ -1,8 +1,8 @@
 import { createVerificationCoordinator } from './verification-runtime.mjs';
 import { createGuidancePreparation } from './workspace-guidance.mjs';
-import { workAutomationCapabilities } from '../modules/work/index.mjs';
+import { workAutomationCapabilities, workWorkflowEventDescriptors } from '../modules/work/index.mjs';
 import { digest } from '../../../../packages/runner/src/index.mjs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   normalizeWorkflow,
   ensureAgentSessions,
@@ -18,6 +18,8 @@ import {
   createActivityCatalog,
   builtinActivityDescriptors,
   legacyActivityRef,
+  activityDigest,
+  workflowEventPath,
 } from '../modules/workflows/index.mjs';
 import { createWork } from '../modules/work/index.mjs';
 import {
@@ -107,6 +109,11 @@ const orchestrationCommands = [
   'runTicket',
   'start',
   'startWorkflowRun',
+  'submitWorkflowEvent',
+  'retryWorkflowEventDecision',
+  'saveWorkflowSchedule',
+  'saveWorkflowWebhookBinding',
+  'revokeWorkflowWebhookBinding',
   'stop',
   'selectActiveContext',
   'createOrganization',
@@ -170,6 +177,8 @@ export async function createRuntime({
     authenticationMethods: ['local-bootstrap'],
   },
   workflowActivities = [],
+  workflowEvents = [],
+  clock = () => Date.now(),
 }) {
   if (!persistence?.store || !persistence?.contextFiles || !persistence?.commandLogs)
     throw new Error('Runtime persistence ports are required.');
@@ -180,10 +189,19 @@ export async function createRuntime({
     readLegacyConversation = async () => null,
   } = persistence;
   const state = store.data;
+  const eventNow = () => new Date(clock()).toISOString();
   const activityCatalog = createActivityCatalog([
     ...builtinActivityDescriptors,
     ...workflowActivities.map((registration) => registration?.descriptor),
   ]);
+  const workflowEventDescriptors = [
+    ...workWorkflowEventDescriptors,
+    { id: 'workflow.schedule_fired', revision: 1, label: 'Schedule fired', source: { owner: 'workflows' },
+      tenantScope: 'project', payload: [{ path: 'scheduleId', type: 'string', required: true },
+        { path: 'scheduledFor', type: 'string', required: true }, { path: 'coveredThrough', type: 'string' }],
+      correlationPaths: ['scheduleId'], maxPayloadBytes: 4096, aliases: [] },
+    ...workflowEvents.map(registration => registration?.descriptor ?? registration),
+  ];
   const jobs = new Map();
   const listeners = new Set();
   const publish = (change) => {
@@ -242,6 +260,19 @@ export async function createRuntime({
   const workExecution = createWorkExecution({ state, jobs });
   const workflowReferences = createWorkflowReferences(state);
   let workflowEffects;
+  async function processWorkflowEventDecisions() {
+    if (!workflows) return;
+    for (const row of workflows.pendingEventDecisions({ limit: 100 })) {
+      try {
+        const decision = workflows.validateEventDecision(row.triggerKey);
+        await identity.assertPrincipalActive(decision.principal);
+        await requireProjectPermission(decision.projectId, 'project.execute', decision.principal);
+        await workflows.ensureRunForDecision(row.triggerKey);
+      } catch (error) {
+        await workflows.failEventDecision(row.triggerKey, error);
+      }
+    }
+  }
   const work = createWork({
     state,
     save: () => store.save(),
@@ -264,10 +295,26 @@ export async function createRuntime({
   });
   const catalog = work.catalog;
   initializeAutomations(state);
+  const automationEventCapabilityMap = new Map();
+  for (const descriptor of workflowEventDescriptors) {
+    const fields = descriptor.payload.map(field => field.path);
+    const scope = descriptor.tenantScope;
+    for (const id of [descriptor.id, ...(descriptor.aliases ?? [])]) {
+      const legacy = workAutomationCapabilities.events.find(value => value.id === id);
+      const workAlias = descriptor.source?.owner === 'work' && id !== descriptor.id && Boolean(legacy);
+      const existing = automationEventCapabilityMap.get(id);
+      if (existing && existing.revision > descriptor.revision) continue;
+      automationEventCapabilityMap.set(id, { id, descriptorId: descriptor.id, revision: descriptor.revision, label: descriptor.label,
+        scope: workAlias ? legacy.scope : scope, fields: [...new Set([...(workAlias ? legacy.fields : []), ...fields])],
+        payload: structuredClone(descriptor.payload), manual: Boolean(descriptor.manual) });
+    }
+  }
+  const automationEventCapabilities = [...automationEventCapabilityMap.values()];
   const automations = createAutomations({
-    capabilities: workAutomationCapabilities,
+    capabilities: { ...workAutomationCapabilities, events: automationEventCapabilities },
     state,
     save: () => store.save(),
+    eventDescriptors: workflowEventDescriptors,
     authorizeRule: (projectId, principal) =>
       requireProjectPermission(projectId, 'project.execute', principal),
   });
@@ -1076,13 +1123,13 @@ export async function createRuntime({
     workReplyConfirmation: (command, projectId) => work.catalog.workflowReplyConfirmation(command, projectId),
     makeSession,
     pinInstructions,
-    normalizeWorkflow,
     event,
     save: () => store.save(),
     now,
     getEngine: () => engine,
     requireText: text,
-    automations,
+    workEventOutbox: work.catalog.workflowEvents,
+    processEventDecisions: processWorkflowEventDecisions,
     authorizeStart: async (rule, session) => {
       automations.validate(rule);
       await requireProjectPermission(rule.projectId, 'project.execute', rule.principal);
@@ -1325,7 +1372,10 @@ export async function createRuntime({
           await identity.assertPrincipalActive(principal);
           await requireProjectPermission(s.projectId, 'project.execute', principal);
           s.executionPrincipal = structuredClone(principal);
-          s.placement ??= structuredClone(project?.placement ?? { mode: 'none' });
+          // Do not turn an unavailable "none" policy into a durable pin on a
+          // workflow run. A later authorized project/ticket placement may let
+          // this same waiting run acquire the resource. Placement.prepare
+          // persists concrete configured policies and acquired grants.
           s.executionProfile ??= project?.executionProfile ?? 'inherit';
           if (runnerRequired) {
             const placed = await placement.prepare(s, requiredTools, controller.signal);
@@ -1600,6 +1650,8 @@ export async function createRuntime({
         .catch(() => {})
         .then(async () => {
           await pollTicketImports();
+          await workflows.processDue(eventNow(), { limit: 100 });
+          await processWorkflowEventDecisions();
           await dispatch();
         })
         .catch(() => {});
@@ -1779,6 +1831,10 @@ export async function createRuntime({
     activityCatalog,
     activityAvailable: (ref) => workflowEffects.hasActivity(ref),
     prepareActivityIntent: (...args) => workflowEffects.prepareActivityIntent(...args),
+    eventDescriptors: workflowEventDescriptors,
+    validateEventWait: input => work.validateWorkflowWait(input),
+    matchEventWaitSource: input => work.matchesWorkflowWait(input),
+    now: eventNow,
   });
   configuration = createSessionConfiguration({
     engine,
@@ -1793,6 +1849,7 @@ export async function createRuntime({
   });
   workflows.recoverRuns();
   recoverSessions({ state, ensureAgentSessions, migrateRun, steering, event });
+  await processWorkflowEventDecisions();
   await store.save();
   const sessionCommands = createSessionCommandRegistry([
     conversationModule,
@@ -1809,6 +1866,34 @@ export async function createRuntime({
       sessionActions: sessionCommands.actions(),
     },
   );
+  async function tickWorkflowEvents() {
+    const result = queue.catch(() => {}).then(async () => {
+      const due = await workflows.processDue(eventNow(), { limit: 100 });
+      await processWorkflowEventDecisions();
+      await workflowEffects.drainImportFacts();
+      await dispatch();
+      return due;
+    });
+    queue = result;
+    return result;
+  }
+  async function receiveWorkflowWebhook(bindingId, payload, authenticatedPrincipal) {
+    const result = queue.catch(() => {}).then(async () => {
+      const binding = workflows.webhookBinding(bindingId);
+      if (!binding) throw new Error('Workflow webhook binding is unavailable.');
+      await identity.assertPrincipalActive(authenticatedPrincipal, { organizationId: binding.organizationId });
+      if (authenticatedPrincipal?.kind !== 'service-principal' || authenticatedPrincipal.servicePrincipalId !== binding.servicePrincipalId)
+        throw new Error('Workflow webhook credential does not match its binding.');
+      await requireProjectPermission(binding.projectId, 'project.execute', authenticatedPrincipal);
+      const accepted = await workflows.acceptBoundWebhook(binding, payload, authenticatedPrincipal);
+      await processWorkflowEventDecisions();
+      await workflows.deliverPendingWaitEvents();
+      await dispatch();
+      return { eventId: accepted.event.id, duplicate: accepted.duplicate };
+    });
+    queue = result;
+    return result;
+  }
   snapshot = createSnapshotQuery({
     guidanceView: workspaceGuidance.view,
     state,
@@ -2040,6 +2125,73 @@ export async function createRuntime({
       command = { ...command, organizationId: selected.organizationId };
     }
     const { action } = command;
+    if (action === 'submitWorkflowEvent') {
+      const selected = contextFor(command.client, actor);
+      const projectId = command.projectId ?? selected?.projectId;
+      if (!selected?.projectId || selected.projectId !== projectId) throw new Error('Select the event project in the active context.');
+      await identity.assertPrincipalActive(actor);
+      await requireProjectPermission(projectId, 'project.execute', actor);
+      const descriptor = workflows.eventJournal.descriptor(command.descriptorRevision === undefined
+        ? command.descriptorId : { id: command.descriptorId, revision: command.descriptorRevision });
+      if (!descriptor?.manual) throw new Error('This workflow event does not allow manual submission.');
+      if ((descriptor.tenantScope === 'resource') !== (command.resourceRef !== undefined))
+        throw new Error('Manual event resource identity must match the registered event scope.');
+      if (!['user', 'workload'].includes(actor.kind)) throw new Error('This principal cannot submit a manual workflow event.');
+      const key = text(command.idempotencyKey, 160);
+      if (!/^[\w.-]+$/.test(key)) throw new Error('Invalid event idempotency key.');
+      const project = state.projects.find(value => value.id === projectId);
+      const correlationPath = descriptor.correlationPaths[0];
+      const correlationValue = correlationPath && workflowEventPath(command.payload, correlationPath);
+      const legacySourceId = `manual.${principalKey(actor)}.${descriptor.id}`;
+      const boundedSourceId = /^[\w.:-]{1,120}$/.test(legacySourceId) ? legacySourceId : `manual.${createHash('sha256')
+        .update(JSON.stringify([principalKey(actor), descriptor.id])).digest('hex')}`;
+      const accepted = await workflows.acceptEvent({ descriptor: { id: descriptor.id, revision: descriptor.revision },
+        source: { id: boundedSourceId, eventId: key },
+        organizationId: project.organizationId, projectId, origin: { kind: actor.kind, id: actor.kind === 'user' ? actor.userId : actor.workloadIdentityId },
+        ...(descriptor.tenantScope === 'resource' ? { resourceRef: command.resourceRef } : {}),
+        payload: command.payload, ...(correlationValue !== undefined ? { correlation: { key: correlationPath, value: String(correlationValue) } } : {}) });
+      await processWorkflowEventDecisions();
+      await workflows.deliverPendingWaitEvents();
+      return { eventId: accepted.event.id, duplicate: accepted.duplicate };
+    }
+    if (action === 'retryWorkflowEventDecision') {
+      const key = text(command.decisionKey, 500);
+      const decision = workflows.eventDecision(key);
+      if (!decision?.projectId) throw new Error('Workflow event decision is not available.');
+      await identity.assertPrincipalActive(actor);
+      await requireProjectPermission(decision.projectId, 'project.execute', actor);
+      await workflows.retryEventDecision(key);
+      await processWorkflowEventDecisions();
+      return { workflowRunId: decision.runId, status: workflows.eventDecision(key)?.status };
+    }
+    if (action === 'saveWorkflowSchedule') {
+      const project = state.projects.find(value => value.id === command.projectId);
+      if (!project) throw new Error('Workflow schedule project is unavailable.');
+      await identity.assertPrincipalActive(actor);
+      await requireProjectPermission(project.id, 'project.execute', actor);
+      const workflow = workflowForProject(state, command.workflowId, command.workflowVersion, project.id, { raw: true });
+      const schedule = await workflows.saveSchedule({ ...command, organizationId: project.organizationId, principal: structuredClone(actor) });
+      return { scheduleId: schedule.id, revision: schedule.revision };
+    }
+    if (action === 'saveWorkflowWebhookBinding') {
+      const project = state.projects.find(value => value.id === command.projectId);
+      if (!project) throw new Error('Workflow webhook project is unavailable.');
+      await identity.assertPrincipalActive(actor);
+      await requireProjectPermission(project.id, 'project.execute', actor);
+      const servicePrincipal = { kind: 'service-principal', servicePrincipalId: command.servicePrincipalId };
+      await identity.assertPrincipalActive(servicePrincipal, { organizationId: project.organizationId });
+      await requireProjectPermission(project.id, 'project.execute', servicePrincipal);
+      const binding = await workflows.saveWebhookBinding({ ...command, organizationId: project.organizationId });
+      return { bindingId: binding.id, revision: binding.revision };
+    }
+    if (action === 'revokeWorkflowWebhookBinding') {
+      const binding = workflows.webhookBinding(command.id);
+      if (!binding || binding.revision !== command.revision) throw new Error('Workflow webhook binding changed. Reload before revoking.');
+      await identity.assertPrincipalActive(actor);
+      await requireProjectPermission(binding.projectId, 'project.execute', actor);
+      await workflows.revokeWebhookBinding(binding.id);
+      return;
+    }
     if (action === 'startWorkflowRun') {
       await requireProjectPermission(command.projectId, 'project.execute', actor);
       const project = state.projects.find((candidate) => candidate.id === command.projectId);
@@ -2777,6 +2929,8 @@ export async function createRuntime({
     throw new Error('Unknown runtime command.');
   }
   return {
+    tickWorkflowEvents,
+    receiveWorkflowWebhook,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

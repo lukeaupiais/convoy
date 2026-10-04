@@ -578,6 +578,11 @@ export type RuntimeCommandInputMap = {
   decideWorkflowRun: { workflowRunId: string; instance: string; decision: 'approve' | 'requestChanges'; feedback?: string; activityReservationId?: string; activityReservationDigest?: string };
   continueWorkflowRun: { workflowRunId: string; instance: string };
   cancelWorkflowRun: { workflowRunId: string };
+  submitWorkflowEvent: { descriptorId: string; descriptorRevision?: number; idempotencyKey: string; payload: Record<string, unknown>; projectId?: string; resourceRef?: { kind: string; id: string } };
+  retryWorkflowEventDecision: { decisionKey: string };
+  saveWorkflowSchedule: { id?: string; revision?: number; name: string; projectId: string; workflowId: string; workflowVersion: number; runInput?: Record<string, unknown>; schedule: Record<string, unknown>; missedFirePolicy: 'skip' | 'coalesce_once' | { catchUp: { maxFirings: number } }; enabled: boolean };
+  saveWorkflowWebhookBinding: { id?: string; revision?: number; name: string; descriptorId: string; descriptorRevision: number; projectId: string; servicePrincipalId: string; eventIdPath: string; fieldMap: { targetPath: string; sourcePath: string }[]; enabled: boolean };
+  revokeWorkflowWebhookBinding: { id: string; revision: number };
   stop: SessionTarget;
   stopCommand: SessionTarget & { commandId: string };
   stopTerminal: SessionTarget & { terminalId: string };

@@ -19,12 +19,36 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
   if (!kinds.has(node.kind)) throw new Error(`${node.name}: choose agent, human, check, action, branch or wait.`);
   if (node.kind === 'wait') {
     const waitFor = node.waitFor;
-    if (!waitFor || !['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(waitFor.event) ||
-        !['active_ticket', 'related_ticket'].includes(waitFor.ticketSource ?? 'active_ticket') ||
+    if (!waitFor || typeof waitFor.event !== 'string' || !/^[A-Za-z][\w.-]{1,100}$/.test(waitFor.event) ||
+        waitFor.ticketSource !== undefined && !['active_ticket', 'related_ticket'].includes(waitFor.ticketSource) ||
         waitFor.relationKind !== undefined && !safeId(waitFor.relationKind) ||
-        waitFor.status !== undefined && (typeof waitFor.status !== 'string' || !waitFor.status.trim() || waitFor.status.length > 80))
-      throw new Error(`${node.name}: choose a supported ticket event to wait for.`);
-    node.waitFor = { event: waitFor.event, ticketSource: waitFor.ticketSource ?? 'active_ticket', ...(waitFor.relationKind ? { relationKind: waitFor.relationKind } : {}), ...(waitFor.status ? { status: waitFor.status } : {}) };
+        waitFor.status !== undefined && (typeof waitFor.status !== 'string' || !waitFor.status.trim() || waitFor.status.length > 80) ||
+        waitFor.scope !== undefined && !['organization', 'project', 'resource'].includes(waitFor.scope) ||
+        waitFor.resourceRef !== undefined && (!waitFor.resourceRef || typeof waitFor.resourceRef !== 'object' || Array.isArray(waitFor.resourceRef) ||
+          Object.getPrototypeOf(waitFor.resourceRef) !== Object.prototype || Object.keys(waitFor.resourceRef).length !== 2 ||
+          Object.keys(waitFor.resourceRef).some(key => !['kind', 'id'].includes(key)) ||
+          typeof waitFor.resourceRef.kind !== 'string' || !waitFor.resourceRef.kind.trim() || waitFor.resourceRef.kind.length > 80 || /[\u0000-\u001f\u007f]/.test(waitFor.resourceRef.kind) ||
+          typeof waitFor.resourceRef.id !== 'string' || !waitFor.resourceRef.id.trim() || waitFor.resourceRef.id.length > 160 || /[\u0000-\u001f\u007f]/.test(waitFor.resourceRef.id)) ||
+        waitFor.eventRevision !== undefined && (!Number.isInteger(waitFor.eventRevision) || waitFor.eventRevision < 1) ||
+        waitFor.timeoutSeconds !== undefined && (!Number.isInteger(waitFor.timeoutSeconds) || waitFor.timeoutSeconds < 1 || waitFor.timeoutSeconds > 31_536_000) ||
+        waitFor.timeoutOutcome !== undefined && !safeId(waitFor.timeoutOutcome) ||
+        waitFor.correlation !== undefined && (!waitFor.correlation || typeof waitFor.correlation.key !== 'string' ||
+          !/^[A-Za-z][\w.-]{0,100}$/.test(waitFor.correlation.key) || typeof waitFor.correlation.from !== 'string' ||
+          !/^(activeTicketId|runInput\.[A-Za-z][\w.-]{0,100}|output\.[\w-]{1,80}\.[A-Za-z][\w.-]{0,100})$/.test(waitFor.correlation.from)) ||
+        waitFor.if !== undefined && (!Array.isArray(waitFor.if) || waitFor.if.length > 20 || waitFor.if.some(condition =>
+          !condition || typeof condition.path !== 'string' || !/^[A-Za-z][\w.-]{0,100}$/.test(condition.path) ||
+          !['exists', 'equals', 'notEquals', 'greaterThan', 'lessThan'].includes(condition.operator) ||
+          condition.operator !== 'exists' && !['string', 'number', 'boolean'].includes(typeof condition.value))))
+      throw new Error(`${node.name}: configure a registered event wait with bounded correlation, predicates and timeout.`);
+    node.waitFor = { event: waitFor.event, ...(waitFor.ticketSource ? { ticketSource: waitFor.ticketSource } : {}),
+      ...(waitFor.eventRevision ? { eventRevision: waitFor.eventRevision } : {}),
+      ...(waitFor.scope ? { scope: waitFor.scope } : {}),
+      ...(waitFor.resourceRef ? { resourceRef: structuredClone(waitFor.resourceRef) } : {}),
+      ...(waitFor.relationKind ? { relationKind: waitFor.relationKind } : {}), ...(waitFor.status ? { status: waitFor.status } : {}),
+      ...(waitFor.correlation ? { correlation: structuredClone(waitFor.correlation) } : {}),
+      ...(waitFor.if ? { if: structuredClone(waitFor.if) } : {}),
+      ...(waitFor.timeoutSeconds ? { timeoutSeconds: waitFor.timeoutSeconds } : {}),
+      ...(waitFor.timeoutOutcome ? { timeoutOutcome: waitFor.timeoutOutcome } : {}) };
   }
   if (node.kind === 'action') {
     // Actions are declared by their exact operation/input, not an implicit
@@ -306,6 +330,7 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       owner.attempt = { instance: s.flow.instance, nodeId: node.id, status: s.flow.status === 'waiting_gate' || s.flow.status === 'waiting_event' ? 'waiting' : 'ready', startedAt: new Date().toISOString(),
         ...(reservation ? { reservationId: reservation.id, activityRef: structuredClone(reservation.activityRef), intent: structuredClone(reservation.intent), intentDigest: reservation.intentDigest, inputDigest: reservation.inputDigest, idempotencyKey: reservation.idempotencyKey } : {}) };
     }
+    if (node.kind === 'wait') getWorkflowOwner()?.registerWait(s, node, s.flow.instance);
     event(s, 'step_activated', { runId: s.flow.id, nodeId: node.id, stepId: node.id, instance: s.flow.instance, name: node.name, outcome });
   }
   function transition(s, outcome) {
@@ -456,10 +481,11 @@ export function createWorkflowEngine({ state, save, event, inspectArtifact = asy
       requireInstance(s, instance);
       if (s.flow.status !== 'waiting_event' || current(s).kind !== 'wait') return false;
       const node = current(s);
-      if (node.waitFor.event !== fact.event) return false;
-      s.flow.actionResult = { event: fact.event, ticketId: fact.ticketId, ...(fact.messageId ? { messageId: fact.messageId } : {}) };
-      event(s, 'workflow_event_received', { runId: s.flow.id, nodeId: node.id, instance, ...s.flow.actionResult });
-      transition(s, 'success');
+      if (fact.event !== 'timeout' && node.waitFor.event !== fact.event) return false;
+      s.flow.actionResult = { event: fact.event, ...(fact.eventId ? { eventId: fact.eventId } : {}),
+        ...(fact.ticketId ? { ticketId: fact.ticketId } : {}), ...(fact.messageId ? { messageId: fact.messageId } : {}) };
+      event(s, fact.event === 'timeout' ? 'workflow_wait_timed_out' : 'workflow_event_received', { runId: s.flow.id, nodeId: node.id, instance, ...s.flow.actionResult });
+      transition(s, fact.outcome ?? 'success');
       await save();
       return true;
     },

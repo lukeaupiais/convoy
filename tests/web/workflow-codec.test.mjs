@@ -92,6 +92,31 @@ test('workflow editor codec round-trips canonical graph nodes without leaking ed
   assert.deepEqual(validateWorkflow(editor), []);
 });
 
+test('workflow wait codec preserves generic event pins and legacy ticket filters on edit round trips', () => {
+  const genericWait = {
+    event: 'inventory.reconciled', eventRevision: 3, scope: 'resource',
+    resourceRef: { kind: 'inventory.item', id: 'SKU-42' },
+    correlation: { key: 'requestId', from: 'runInput.requestId' },
+    if: [{ path: 'result.status', operator: 'equals', value: 'accepted' }],
+    timeoutSeconds: 7200, timeoutOutcome: 'expired',
+  };
+  const legacyWait = {
+    event: 'ticket_updated', ticketSource: 'related_ticket', relationKind: 'fulfills', status: 'Published',
+  };
+  const workflow = { id: 'wait-codec', name: 'Wait codec', nodes: [
+    { id: 'inventory', kind: 'wait', name: 'Inventory callback', prompt: 'Wait', waitFor: genericWait },
+    { id: 'legacy', kind: 'wait', name: 'Ticket update', prompt: 'Wait', waitFor: legacyWait },
+  ], edges: [{ id: 'next', from: 'inventory', to: 'legacy', outcome: 'accepted' }], entryNode: 'inventory' };
+
+  const graph = fromWorkflow(workflow);
+  assert.deepEqual(graph.nodes[0].waitFor, genericWait);
+  assert.deepEqual(graph.nodes[1].waitFor, legacyWait);
+  graph.nodes[0].name = 'Edited unrelated metadata';
+  const saved = toWorkflow(graph);
+  assert.deepEqual(saved.nodes[0].waitFor, genericWait);
+  assert.deepEqual(saved.nodes[1].waitFor, legacyWait);
+});
+
 test('fresh generic actions have no tutorial prompt and legacy action prompts survive round trips', () => {
   const action = fresh('action');
   assert.equal(action.prompt, '');

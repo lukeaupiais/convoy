@@ -4,7 +4,9 @@ export function submissionContract(workflow, node) {
   const edges = (workflow?.edges ?? []).filter(edge => edge.from === node.id);
   const open = edges.some(edge => ['*', 'default'].includes(edge.outcome));
   const terminal = !edges.some(edge => !['failed', 'changes_requested'].includes(edge.outcome));
-  const outcomes = [...new Set([...edges.map(edge => edge.outcome), ...(terminal ? ['success', 'approved'] : [])])];
+  const timeout = node.kind === 'wait' && node.waitFor?.timeoutSeconds
+    ? [node.waitFor.timeoutOutcome ?? 'timeout'] : [];
+  const outcomes = [...new Set([...edges.map(edge => edge.outcome), ...timeout, ...(terminal ? ['success', 'approved'] : [])])];
   return { outcomes: open ? null : outcomes, explicitOutcome: !open && !outcomes.includes('success'), artifact: node.artifact ?? null, requirements: node.submissionRequirements ?? null };
 }
 export function submissionToolSchema(base, contract) {

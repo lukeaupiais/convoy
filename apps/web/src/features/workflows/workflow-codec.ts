@@ -1,5 +1,5 @@
 import type { WorkflowDefinition, WorkflowStep } from '../../shared/api/runtime';
-import type { WorkflowActivityBinding, WorkflowActivityRef, WorkflowJsonSchema } from '../../shared/api/runtime';
+import type { WorkflowActivityBinding, WorkflowActivityRef, WorkflowJsonSchema, WorkflowWaitFor } from '../../shared/api/runtime';
 import { newId } from '../../shared/lib/browser';
 
 export type NodeKind = 'agent' | 'check' | 'approval' | 'action' | 'branch' | 'wait';
@@ -47,12 +47,7 @@ export type GraphNode = {
   activityDescriptorDigest?: string;
   bindings?: Record<string, WorkflowActivityBinding>;
   condition?: Condition;
-  waitFor?: {
-    event: 'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated';
-    ticketSource: 'active_ticket' | 'related_ticket';
-    relationKind?: string;
-    status?: string;
-  };
+  waitFor?: WorkflowWaitFor;
   session?: { mode: SessionMode; name?: string; target?: string };
   permissions?: string;
   maxRounds?: number;
@@ -477,18 +472,14 @@ export function safeNode(raw: unknown, index: number): GraphNode {
         : undefined,
     waitFor:
       type === 'wait'
-        ? {
-            event: ['ticket_message_received', 'ticket_source_updated', 'ticket_updated'].includes(
-              String(rawWait?.event),
-            )
-              ? (rawWait?.event as
-                  'ticket_message_received' | 'ticket_source_updated' | 'ticket_updated')
-              : 'ticket_message_received',
-            ticketSource:
-              rawWait?.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket',
-            ...(rawWait?.relationKind ? { relationKind: String(rawWait.relationKind) } : {}),
-            ...(rawWait?.status ? { status: String(rawWait.status) } : {}),
-          }
+        ? rawWait && typeof rawWait.event === 'string'
+          ? {
+              ...(structuredClone(rawWait) as unknown as WorkflowWaitFor),
+              ...(rawWait.event === 'ticket_message_received' || rawWait.event === 'ticket_source_updated' || rawWait.event === 'ticket_updated'
+                ? { ticketSource: rawWait.ticketSource === 'related_ticket' ? 'related_ticket' : 'active_ticket' }
+                : {}),
+            }
+          : { event: 'ticket_message_received', ticketSource: 'active_ticket' }
         : undefined,
     outcomes,
   };
