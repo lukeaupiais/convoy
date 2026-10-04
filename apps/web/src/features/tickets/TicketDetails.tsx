@@ -13,7 +13,7 @@ import { Select } from '../../shared/ui/Select';
 import { ExecutionProfileEditor, PlacementEditor } from '../projects';
 import { WorkflowArtifactContent as MarkdownDocument } from '../workflows';
 import { WorkflowActivityHistory, WorkflowRunInteraction } from '../workflows';
-import { ticketReplyDestination, ticketWorkflowActions } from './workflow-actions';
+import { ticketWorkflowActions } from './workflow-actions';
 import {
   clearSubmittedTicketReplyDraft,
   forgetTicketReplyRequestId,
@@ -508,9 +508,6 @@ export function TicketDetails({
                   session={session}
                   working={workflowWorking || !runtimeAvailable}
                   onRecovery={onRun}
-                  resolveReplyDestination={(connectionId) =>
-                    ticketReplyDestination(state, ticket, connectionId)
-                  }
                   actions={ticketWorkflowActions(
                     session,
                     (action, input) => void actWorkflow(action, input),

@@ -167,10 +167,6 @@ export function PlacementEditor({
         </button>
       </div>
       {message && <p role="status">{message}</p>}
-      <p className="muted">
-        Only eligible runners with free capacity can receive work. Uncertain remote attempts require
-        reconciliation; existing worktrees are never moved automatically.
-      </p>
     </div>
   );
 }

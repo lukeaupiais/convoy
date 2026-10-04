@@ -65,3 +65,9 @@ Pending or failed delivery pauses the action; Continue checks delivery without
 posting again. An uncertain send requires reply and effect reconciliation before
 advancement. Sending does not imply an external status change: declare that as a
 separate action after delivery.
+
+Human nodes may configure plain text labels for the existing `approved` and
+`changes_requested` outcomes. The labels are part of the published workflow
+revision and run snapshot; they affect presentation only. Missing labels use
+“Approve” and “Request changes”. They do not add outcomes, select routes, or
+grant authority.

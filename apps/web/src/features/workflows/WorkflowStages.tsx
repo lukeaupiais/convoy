@@ -52,13 +52,6 @@ export function WorkflowStages({
 
   return (
     <div className="workflow-stage-editor">
-      {otherRoutes.length > 0 && (
-        <p className="workflow-stage-route-note">
-          The main route is shown first. {otherRoutes.length} stage
-          {otherRoutes.length === 1 ? '' : 's'} belong to alternate routes. Use Advanced graph to
-          change connections or reorder this flow.
-        </p>
-      )}
       <ol className="workflow-stage-list" aria-label="Workflow flow">
         {orderedNodes.map((node, index) => {
           const primary = outcomesFor(node)[0];

@@ -26,3 +26,9 @@ It verifies no send before approval, stale approvals, exact body, delayed delive
 connection loss after posting, explicit reconciliation, restart, and a single
 send/status mutation. Focused Workflow tests cover missing drafts and invalid
 configuration. AFIO's particular labels and routing live in its project inputs.
+
+Human decision button labels are configured on the human node for the canonical
+`approved` and `changes_requested` outcomes. A workflow that wants an approval
+button to say “Approve & send” must configure that label explicitly. The label
+does not send a reply or change approval authority; the configured graph and
+captured-material checks continue to govern those effects.

@@ -478,13 +478,6 @@
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
-.workflow-interaction-footer .workflow-consequence {
-  flex: 1 1 100%;
-  margin: 0 0 2px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
 .workflow-feedback {
   display: flex;
   align-items: start;
@@ -565,14 +558,6 @@
 .workflow-interaction-slot {
   display: grid;
   gap: 10px;
-}
-.workflow-consequence {
-  margin: 0;
-  padding: 8px;
-  border-left: 2px solid var(--line-strong);
-  background: var(--surface);
-  overflow-wrap: anywhere;
-  font-size: 12px;
 }
 .workflow-inspector-open {
   justify-self: start;
