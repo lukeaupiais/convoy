@@ -376,6 +376,89 @@ function firstSuccessWorkflow(projectId, childWorkflowId, successorActivityId) {
   };
 }
 
+function nestedMapWorkflows(projectId, leafWorkflowId, rootSuffix) {
+  const schema = {
+    type: 'object',
+    properties: {
+      item: { type: 'string', maxLength: 80 },
+      position: { type: 'integer', minimum: 0, maximum: 3 },
+    },
+    required: ['item', 'position'],
+    additionalProperties: false,
+  };
+  const inner = {
+    id: `nested-map-${rootSuffix}`,
+    name: `Nested map ${rootSuffix}`,
+    projectId,
+    runInputSchema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: { type: 'string', maxLength: 80 },
+          minItems: 2,
+          maxItems: 2,
+        },
+      },
+      required: ['items'],
+      additionalProperties: false,
+    },
+    resultSchema: schema,
+    resultBindings: {
+      item: { from: { kind: 'activity_output', nodeId: 'map-leaves', path: ['0', 'item'] } },
+      position: {
+        from: { kind: 'activity_output', nodeId: 'map-leaves', path: ['0', 'position'] },
+      },
+    },
+    nodes: [
+      {
+        id: 'map-leaves',
+        name: 'Map leaves',
+        kind: 'map',
+        itemsBinding: { from: { kind: 'run_input', path: ['items'] } },
+        itemField: 'item',
+        indexField: 'position',
+        workflow: { id: leafWorkflowId, version: 1 },
+        inputBindings: {},
+        outputSchema: {
+          type: 'array',
+          items: schema,
+        },
+        outputBindings: {
+          item: { from: ['item'] },
+          position: { from: ['position'] },
+        },
+        maxItems: 2,
+        maxConcurrent: 2,
+        deadlineMs: 60_000,
+        failurePolicy: 'fail_fast',
+      },
+    ],
+    edges: [],
+  };
+  const root = {
+    id: `nested-root-${rootSuffix}`,
+    name: `Nested root ${rootSuffix}`,
+    projectId,
+    nodes: [
+      {
+        id: 'coordinate',
+        name: 'Coordinate nested workflow',
+        kind: 'child',
+        workflow: { id: inner.id, version: 1 },
+        inputBindings: { items: { literal: [`${rootSuffix}-leaf-1`, `${rootSuffix}-leaf-2`] } },
+        outputSchema: schema,
+        outputBindings: {
+          item: { from: ['item'] },
+          position: { from: ['position'] },
+        },
+      },
+    ],
+    edges: [],
+  };
+  return { inner, root };
+}
+
 test('composition ceilings are scoped independently to an organization and its projects', async (t) => {
   const f = await fixture(t);
   const organizationLimits = { ...defaults, maxActiveDescendantRuns: 2 };
@@ -743,6 +826,125 @@ test('per-root active-descendant ceilings allow unrelated roots while limiting e
   assert.equal((await f.snapshot()).sessions.length, 0);
 });
 
+test('nested coordinators consume descendant budget but do not deadlock per-root leaf capacity', async (t) => {
+  for (const rootLimit of [1, 2]) {
+    const receipts = new Map();
+    const dispatches = [];
+    const registration = durableMapRegistration(receipts, dispatches);
+    const f = await fixture(t, { workflowActivities: [registration] });
+    await f.act('selectActiveContext', {
+      context: { organizationId: f.organization.id, projectId: f.projectA.id },
+    });
+    const leaf = durableMapChildWorkflow(f.projectA.id, registration.descriptor.ref.id);
+    await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: leaf });
+    const { inner, root } = nestedMapWorkflows(f.projectA.id, leaf.id, `cap-${rootLimit}`);
+    await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: inner });
+    const publishedRoot = await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: root });
+    await f.act('setWorkflowCompositionPolicy', {
+      organizationId: f.organization.id,
+      baseRevision: 0,
+      limits: {
+        ...defaults,
+        maxActiveDescendantRuns: 4,
+        maxActiveDescendantsPerRoot: rootLimit,
+        maxConcurrentChildren: 4,
+      },
+    });
+    const { workflowRunId } = await f.act('startWorkflowRun', {
+      projectId: f.projectA.id,
+      workflowId: publishedRoot.id,
+      workflowVersion: publishedRoot.version,
+    });
+    await waitFor(
+      async () => {
+        const rootRun = await f.readRun(workflowRunId);
+        const coordinatorId = rootRun.compositions.find((value) => value.nodeId === 'coordinate')
+          ?.slots[0]?.runId;
+        const coordinator = coordinatorId ? await f.readRun(coordinatorId) : undefined;
+        return { dispatches: dispatches.length, root: rootRun, coordinator };
+      },
+      (value) => value.dispatches >= rootLimit,
+      `root cap ${rootLimit} did not admit its available nested leaves`,
+    );
+    assert.equal(
+      dispatches.length,
+      rootLimit,
+      `root cap ${rootLimit} must not overbook unknown nested leaves`,
+    );
+    const topRun = await f.readRun(workflowRunId);
+    const outerComposition = topRun.compositions.find((value) => value.nodeId === 'coordinate');
+    const coordinatorId = outerComposition.slots[0].runId;
+    const coordinator = await f.readRun(coordinatorId);
+    const nestedComposition = coordinator.compositions.find(
+      (value) => value.nodeId === 'map-leaves',
+    );
+    assert.equal(outerComposition.slots[0].status, 'started');
+    assert.equal(
+      nestedComposition.slots.filter((slot) => slot.status === 'uncertain').length,
+      rootLimit,
+    );
+    assert.equal(
+      nestedComposition.slots.filter((slot) => slot.status === 'queued').length,
+      2 - rootLimit,
+    );
+    assert.equal(
+      dispatches.length,
+      rootLimit,
+      'a waiting composite coordinator must not double-count against active leaf capacity',
+    );
+    assert.equal(new Set(nestedComposition.slots.map((slot) => slot.runId)).size, 2);
+
+    for (let index = 0; index < rootLimit; index += 1) {
+      const slot = nestedComposition.slots[index];
+      const childRun = await f.readRun(slot.runId);
+      await f.act('claimWorkflowRun', { workflowRunId: childRun.id });
+      await f.act('reconcileWorkflowRun', {
+        workflowRunId: childRun.id,
+        instance: childRun.instance,
+        effectKey: childRun.attempt.effectKey,
+        resolution: 'applied',
+      });
+      if (rootLimit === 1 && index === 0) {
+        await waitFor(
+          () => Promise.resolve(dispatches.length),
+          (length) => length === 2,
+          'a queued nested leaf did not proceed after unknown receipt reconciliation',
+        );
+        const refreshedCoordinator = await f.readRun(coordinatorId);
+        const refreshedNested = refreshedCoordinator.compositions.find(
+          (value) => value.nodeId === 'map-leaves',
+        );
+        assert.equal(refreshedNested.slots[0].status, 'completed');
+        assert.equal(refreshedNested.slots[1].status, 'uncertain');
+        const secondLeaf = await f.readRun(refreshedNested.slots[1].runId);
+        await f.act('claimWorkflowRun', { workflowRunId: secondLeaf.id });
+        await f.act('reconcileWorkflowRun', {
+          workflowRunId: secondLeaf.id,
+          instance: secondLeaf.instance,
+          effectKey: secondLeaf.attempt.effectKey,
+          resolution: 'applied',
+        });
+      }
+    }
+    if (rootLimit === 2) {
+      assert.equal(dispatches.length, 2, 'active leaves cannot exceed the per-root ceiling');
+    }
+    const settled = await waitFor(
+      () => f.readRun(workflowRunId),
+      (run) => run.status === 'completed',
+      `root cap ${rootLimit} did not complete after nested exact receipts settled`,
+    );
+    assert.equal(settled.status, 'completed');
+    assert.equal(dispatches.length, 2);
+    assert.deepEqual(dispatches.map((entry) => entry.input.item).sort(), [
+      `cap-${rootLimit}-leaf-1`,
+      `cap-${rootLimit}-leaf-2`,
+    ]);
+    assert.equal(new Set(dispatches.map((entry) => entry.requestKey)).size, 2);
+    assert.equal((await f.snapshot()).sessions.length, 0);
+  }
+});
+
 test('a map-local concurrency ceiling holds queued work through restart until the exact unknown child receipt is reconciled', async (t) => {
   const receipts = new Map();
   const dispatches = [];
@@ -977,7 +1179,16 @@ test('reducing active-descendant policy below current unknown usage holds admiss
     (value) => value.status === 'completed',
     'the parent did not complete after each exact receipt settled',
   );
-  assert.equal(completed.status, 'completed');
+  const completedState = (await f.readState()).workflowRuns[workflowRunId];
+  assert.equal(
+    completed.status,
+    'completed',
+    JSON.stringify({
+      flow: completedState.flow,
+      attempt: completedState.attempt,
+      compositions: completedState.compositionAttempts,
+    }),
+  );
   assert.deepEqual(
     dispatches.map((value) => value.input.item),
     ['uncertain-1', 'uncertain-2', 'queued-3'],
@@ -1183,8 +1394,18 @@ test('first-success pins one winner but waits for a dispatched loser receipt bef
   });
   const completed = await waitFor(
     () => f.readRun(workflowRunId),
-    (run) => run.status === 'completed',
+    (run) => ['completed', 'failed', 'cancelled'].includes(run.status),
     'first-success parent did not advance after exact loser reconciliation',
+  );
+  const completedState = (await f.readState()).workflowRuns[workflowRunId];
+  assert.equal(
+    completed.status,
+    'completed',
+    JSON.stringify({
+      flow: completedState.flow,
+      attempt: completedState.attempt,
+      compositions: completedState.compositionAttempts,
+    }),
   );
   assert.equal(
     completed.compositions.find((value) => value.nodeId === 'race').winnerSlotId,
@@ -1374,5 +1595,105 @@ test('revoking the stored root principal before the approval gate prevents every
     [],
   );
   assert.equal(dispatches.length, 0);
+  assert.equal((await f.snapshot()).sessions.length, 0);
+});
+
+test('revoking the root principal after a descendant write prevents the revoked actor from reconciling or starting queued work', async (t) => {
+  const receipts = new Map();
+  const dispatches = [];
+  const registration = durableMapRegistration(receipts, dispatches);
+  const f = await fixture(t, { workflowActivities: [registration] });
+  await f.act('selectActiveContext', {
+    context: { organizationId: f.organization.id, projectId: f.projectA.id },
+  });
+  const workload = await f.act('createWorkloadIdentity', {
+    organizationId: f.organization.id,
+    displayName: 'Composition effect executor',
+  });
+  const principal = { kind: 'workload', workloadIdentityId: workload.id };
+  await f.act('createMembership', {
+    organizationId: f.organization.id,
+    principal,
+    scope: { kind: 'organization', organizationId: f.organization.id },
+    roles: ['member'],
+  });
+  await f.act('createMembership', {
+    organizationId: f.organization.id,
+    principal,
+    scope: { kind: 'project', projectId: f.projectA.id },
+    roles: ['contributor'],
+  });
+  const child = durableMapChildWorkflow(f.projectA.id, registration.descriptor.ref.id);
+  await f.act('saveWorkflow', { projectId: f.projectA.id, workflow: child });
+  const parent = mapWorkflow(f.projectA.id, child.id);
+  parent.nodes[0].maxConcurrent = 1;
+  const publishedParent = await f.act('saveWorkflow', {
+    projectId: f.projectA.id,
+    workflow: parent,
+  });
+  await f.act(
+    'selectActiveContext',
+    { context: { organizationId: f.organization.id, projectId: f.projectA.id } },
+    principal,
+  );
+  const { workflowRunId } = await f.act(
+    'startWorkflowRun',
+    {
+      projectId: f.projectA.id,
+      workflowId: publishedParent.id,
+      workflowVersion: publishedParent.version,
+      runInput: { items: ['already-uncertain', 'must-stay-queued'] },
+    },
+    principal,
+  );
+  await waitFor(
+    () => Promise.resolve(dispatches.length),
+    (length) => length === 1,
+    'the first descendant did not reach the external effect boundary',
+  );
+  const beforeRevocation = await f.readRun(workflowRunId);
+  const slots = beforeRevocation.compositions.find((value) => value.nodeId === 'map-items').slots;
+  assert.deepEqual(
+    slots.map((slot) => slot.status),
+    ['uncertain', 'queued'],
+  );
+  const childBeforeRevocation = await f.readRun(slots[0].runId);
+
+  await f.act('revokeWorkloadIdentity', {
+    organizationId: f.organization.id,
+    workloadIdentityId: workload.id,
+    expectedRevision: workload.revision,
+  });
+  await assert.rejects(
+    f.act('claimWorkflowRun', { workflowRunId: slots[0].runId }, principal),
+    /revoked|not active|authorized/i,
+  );
+  await assert.rejects(
+    f.act(
+      'reconcileWorkflowRun',
+      {
+        workflowRunId: slots[0].runId,
+        instance: childBeforeRevocation.instance,
+        effectKey: childBeforeRevocation.attempt.effectKey,
+        resolution: 'applied',
+      },
+      principal,
+    ),
+    /revoked|not active|authorized/i,
+  );
+  await f.act('claimWorkflowRun', { workflowRunId });
+  await assert.rejects(
+    f.act('continueWorkflowRun', { workflowRunId, instance: beforeRevocation.instance }),
+    /revoked|not active|authorized/i,
+    'a different controller cannot advance a composition owned by the revoked execution principal',
+  );
+  const afterRevocation = await f.readRun(workflowRunId);
+  assert.equal(afterRevocation.compositions[0].slots[0].runId, slots[0].runId);
+  assert.equal(afterRevocation.compositions[0].slots[1].runId, slots[1].runId);
+  assert.equal(
+    dispatches.length,
+    1,
+    'the revoked identity cannot dispatch queued work or replay its effect',
+  );
   assert.equal((await f.snapshot()).sessions.length, 0);
 });
