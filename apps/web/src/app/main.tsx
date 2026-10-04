@@ -74,7 +74,19 @@ function App() {
       document.removeEventListener('focusout', update);
     };
   }, []);
-  const { state: liveRuntime, error: runtimeError } = useRuntime();
+  const [page, setPageState] = useState(() =>
+    parseWikiLocation(window.location.hash) ? 'Wiki' : 'Project board',
+  );
+  const [selected, setSelected] = useState<number | null>(null);
+  const [detailTicketId, setDetailTicketId] = useState<number>();
+  const { state: liveRuntime, error: runtimeError } = useRuntime(
+    page === 'Project board' ? detailTicketId : undefined,
+    page === 'Project board' && detailTicketId === undefined,
+  );
+  const selectedExecutionId = liveRuntime?.tickets.find((ticket) => ticket.id === selected)?.executionSessionId;
+  useEffect(() => {
+    setDetailTicketId(selected !== null && selectedExecutionId ? selected : undefined);
+  }, [selected, selectedExecutionId]);
   const [browserDrafts] = useState<Task[]>(() => read('convoy.tasks.v1', []));
   const [projectId, setProjectId] = useState('');
   const project =
@@ -104,9 +116,6 @@ function App() {
     liveRuntime?.projects.find((p) => p.id === id)?.name ?? 'Project';
   const [saving, setSaving] = useState(false);
   const createRequest = useRef('');
-  const [page, setPageState] = useState(() =>
-    parseWikiLocation(window.location.hash) ? 'Wiki' : 'Project board',
-  );
   function setPage(value: string) {
     if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return;
     if (value !== 'Wiki' && parseWikiLocation(window.location.hash))
@@ -158,7 +167,6 @@ function App() {
     setWorkflowRunId(runId);
     navigate('Workflows');
   }
-  const [selected, setSelected] = useState<number | null>(null);
   const [newTask, setNewTask] = useState<Status | null>(null);
   const [newTaskDestination, setNewTaskDestination] = useState('');
   const [newTaskPlacement, setNewTaskPlacement] = useState<{

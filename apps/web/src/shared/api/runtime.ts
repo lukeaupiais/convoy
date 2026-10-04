@@ -46,7 +46,7 @@ export async function command<Action extends RuntimeAction>(
   return result;
 }
 
-export function useRuntime(taskId?: number) {
+export function useRuntime(taskId?: number, overview = false) {
   const [state, setState] = useState<RuntimeState | null>(null);
   const [error, setError] = useState('');
 
@@ -56,7 +56,7 @@ export function useRuntime(taskId?: number) {
     const poll = async () => {
       const generation = contextGeneration;
       try {
-        const value = await api<RuntimeState>(`/api/runtime${taskId ? `/${taskId}` : ''}`);
+        const value = await api<RuntimeState>(`/api/runtime${taskId ? `/${taskId}` : overview ? '?view=overview' : ''}`);
         if (live && generation === contextGeneration) {
           setState(value);
           setError('');
@@ -80,7 +80,7 @@ export function useRuntime(taskId?: number) {
       clearTimeout(timer);
       window.removeEventListener('convoy-context-changed', contextChanged);
     };
-  }, [taskId]);
+  }, [taskId, overview]);
 
   return { state, error };
 }

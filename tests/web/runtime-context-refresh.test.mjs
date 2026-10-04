@@ -8,14 +8,18 @@ test('context selection clears old state and discards an in-flight snapshot from
   const cleanups = [];
   const pending = [];
   const callbacks = [];
+  const paths = [];
   const originals = Object.fromEntries(['fetch', 'window', 'setTimeout', 'clearTimeout'].map(key => [key, globalThis[key]]));
   t.after(() => { cleanups.forEach(cleanup => cleanup()); Object.assign(globalThis, originals); delete globalThis.__runtimeHookFixture; });
   globalThis.window = new EventTarget();
   globalThis.setTimeout = callback => { callbacks.push(callback); return callbacks.length; };
   globalThis.clearTimeout = () => {};
-  globalThis.fetch = (path, options) => options?.method === 'POST'
-    ? Promise.resolve({ ok: true, json: async () => ({ result: {} }) })
-    : new Promise(resolve => pending.push(resolve));
+  globalThis.fetch = (path, options) => {
+    paths.push(path);
+    return options?.method === 'POST'
+      ? Promise.resolve({ ok: true, json: async () => ({ result: {} }) })
+      : new Promise(resolve => pending.push(resolve));
+  };
   globalThis.__runtimeHookFixture = {
     useState(initial) { const index = values.push(initial) - 1; return [initial, value => { values[index] = value; }]; },
     useEffect(effect) { cleanups.push(effect()); },
@@ -25,7 +29,8 @@ test('context selection clears old state and discards an in-flight snapshot from
     .replace("import { newId } from '../lib/browser';", "const newId = () => 'test-client';");
   const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   const { useRuntime, command } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
-  useRuntime();
+  useRuntime(undefined, true);
+  assert.equal(paths[0], '/api/runtime?view=overview');
   await command('selectActiveContext', { context: { organizationId: 'editorial' } });
   pending.shift()({ ok: true, json: async () => ({ activeContext: { organizationId: 'previous' } }) });
   await new Promise(resolve => setImmediate(resolve));
@@ -34,4 +39,6 @@ test('context selection clears old state and discards an in-flight snapshot from
   pending.shift()({ ok: true, json: async () => ({ activeContext: { organizationId: 'editorial' } }) });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(values[0].activeContext.organizationId, 'editorial');
+  useRuntime(7, true);
+  assert.equal(paths.at(-1), '/api/runtime/7');
 });
