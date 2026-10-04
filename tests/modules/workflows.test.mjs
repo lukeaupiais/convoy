@@ -260,6 +260,19 @@ test('reply actions require a declared draft and a human approval route', () => 
   assert.throws(() => normalizeWorkflow({ ...workflow, nodes: [draft, review, { ...send, input: { ...send.input, body: 'Unreviewed text' } }] }), /submitted detail field/);
 });
 
+test('create_ticket can inherit its governed project while rejecting an invalid explicit project', () => {
+  const workflow = normalizeWorkflow({ id: 'governed-create', name: 'Create in run project', nodes: [
+    { id: 'create', name: 'Create', kind: 'action', operation: 'create_ticket', input: { title: 'Estimate' } },
+  ] }, { publishing: true });
+  assert.equal(workflow.nodes[0].input.title, 'Estimate');
+  assert.equal(Object.hasOwn(workflow.nodes[0].input, 'projectId'), false);
+  for (const projectId of ['', 42, null]) {
+    assert.throws(() => normalizeWorkflow({ id: 'invalid-governed-create', name: 'Invalid create', nodes: [
+      { id: 'create', name: 'Create', kind: 'action', operation: 'create_ticket', input: { title: 'Estimate', projectId } },
+    ] }, { publishing: true }), /create_ticket/);
+  }
+});
+
 test('human decision labels normalize, pin with a run, and reject invalid metadata', async () => {
   const workflow = normalizeWorkflow({ id: 'decision-labels', name: 'Decision labels', nodes: [
     { id: 'review', name: 'Review', kind: 'human', decisionLabels: { approved: 'Approve & send', changes_requested: 'Revise estimate' } },

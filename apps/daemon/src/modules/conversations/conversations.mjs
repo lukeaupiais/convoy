@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { requiredText as text } from '../../shared/validation.mjs';
 
-export function createConversations({ state, catalog, save, event, makeSession, busy, start, pinInstructions, validateBinding, authorizeStart, initializeWorkspace = () => {}, ticketCommand = command => catalog.command(command) }) {
+export function createConversations({ state, catalog, save, event, makeSession, busy, start, pinInstructions, validateBinding, authorizeStart, initializeWorkspace = () => {}, ticketCommand = command => catalog.command(command), archiveWorkflowRun = () => {} }) {
   state.conversations ??= [];
   state.conversationRequests ??= {};
   for (const s of Object.values(state.sessions)) {
@@ -49,7 +49,7 @@ export function createConversations({ state, catalog, save, event, makeSession, 
   }
   return {
     conversation, current, create, sessionFor,
-    bindForWorkflow(s, id) { idle(s); return bind(s, ticket(id)); },
+    bindForWorkflow(s, id) { return bind(s, ticket(id)); },
     adopt(s) {
       if (s.conversationId) return current(s);
       const t = ticket(s.id); s.activeTicketId = t.id; s.projectId = t.projectId; t.executionSessionId = s.id;
@@ -66,7 +66,7 @@ export function createConversations({ state, catalog, save, event, makeSession, 
         // Assignment ownership is independent of board placement and ticket status.
         t.revision++;
         s.activeTicketId = null;
-        if (s.flow) { s.pastRuns ??= []; s.pastRuns.push({ ...s.flow, ticketId: t.id, workflow: s.workflow }); }
+        if (s.flow) archiveWorkflowRun(s, { ticketId: t.id });
         s.flow = null; s.workflow = null; s.step = 0; delete s.boardPhase;
         pinInstructions(s); event(s, 'ticket_released', { ticketId: t.id }); await save(); return t;
       }

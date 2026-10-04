@@ -523,7 +523,9 @@ export function backendNode(node: GraphNode): WorkflowStep {
   }
   if (type === 'action') {
     result.operation = operation ?? 'inspect_changes';
-    result.input = input ?? {};
+    const actionInput = { ...(input ?? {}) };
+    if (operation === 'create_ticket' && actionInput.projectId === '') delete actionInput.projectId;
+    result.input = actionInput;
   }
   if (type === 'wait')
     result.waitFor = waitFor ?? { event: 'ticket_message_received', ticketSource: 'active_ticket' };

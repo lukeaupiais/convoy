@@ -569,6 +569,14 @@ export type RuntimeCommandInputMap = {
   };
   start: SessionTarget & RequestIdentity & { text: string; model: string };
   startWorkflow: SessionTarget;
+  startWorkflowRun: { projectId: string; workflowId: string; workflowVersion: number; activeTicketId?: number };
+  getWorkflowRun: { workflowRunId: string };
+  reconcileWorkflowRun: { workflowRunId: string; instance: string; effectKey: string; resolution: 'applied' | 'not_applied'; result?: Record<string, unknown> };
+  claimWorkflowRun: { workflowRunId: string; label?: string };
+  releaseWorkflowRun: { workflowRunId: string };
+  decideWorkflowRun: { workflowRunId: string; instance: string; decision: 'approve' | 'requestChanges'; feedback?: string };
+  continueWorkflowRun: { workflowRunId: string; instance: string };
+  cancelWorkflowRun: { workflowRunId: string };
   stop: SessionTarget;
   stopCommand: SessionTarget & { commandId: string };
   stopTerminal: SessionTarget & { terminalId: string };

@@ -22,6 +22,12 @@ It is the transaction/orchestration layer, not a home for every rule.
 - `work-execution.mjs` and `workflow-references.mjs` expose narrow cross-owner
   queries instead of allowing Work to traverse another module's storage.
 
+Workflow run start/control/read commands are authorized here against the
+persisted project and run principal, then delegated to Workflows. Run ownership,
+legacy session adoption, lease lifecycle, attempts, and read DTO policy stay in
+the Workflows module; client snapshots expose a bounded page and exact run
+lookup uses `getWorkflowRun`.
+
 Extract cohesive policy back into its owning module. Keep mutation ordering,
 cross-module transactions, and fail-closed uncertainty handling here.
 
