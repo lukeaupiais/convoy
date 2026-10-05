@@ -49,34 +49,38 @@ export function ToolGroup({
   working: boolean;
   act: (action: RuntimeAction, input: object) => Promise<void>;
 }) {
-  const live = tools.some(
-    (t) =>
-      ['queued', 'running', 'approval', 'approved'].includes(t.status) ||
-      session.commands?.some(
-        (c) =>
-          c.callId === t.callId &&
-          c.agentSessionId === t.agentSessionId &&
-          ['running', 'stopping'].includes(c.state),
-      ),
-  );
-  const failed = tools.some((t) => ['failed', 'denied', 'stopped'].includes(t.status));
-  const [expanded, setExpanded] = useState<boolean | undefined>(undefined);
-  const open = live || (expanded ?? failed);
+  const needsAttention = (t: ToolActivity) => {
+    const execution = session.commands?.find(
+      (c) => c.callId === t.callId && c.agentSessionId === t.agentSessionId,
+    );
+    return (
+      (t.approvalId === session.pending?.id && !!session.pending) ||
+      ['queued', 'running', 'approval', 'approved', 'failed', 'denied', 'stopped'].includes(
+        t.status,
+      ) ||
+      (!!execution &&
+        (['running', 'stopping', 'lost'].includes(execution.state) ||
+          (execution.state === 'exited' && (execution.code !== 0 || !!execution.reason))))
+    );
+  };
+  const completed = tools.filter((t) => !needsAttention(t));
+  const [expanded, setExpanded] = useState(false);
   return (
-    <section className={`tool-group${live ? ' is-live' : ''}`} aria-label="Agent activity">
-      {!live && (
+    <section className="tool-group" aria-label="Agent activity">
+      {!!completed.length && (
         <button
           type="button"
           className="tool-group-toggle"
-          aria-expanded={open}
-          onClick={() => setExpanded(!open)}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
         >
-          <ChevronRight size={14} className={open ? 'expanded' : ''} />
-          {toolGroupLabel(tools)}
+          <ChevronRight size={14} className={expanded ? 'expanded' : ''} />
+          {toolGroupLabel(completed)}
         </button>
       )}
-      {open &&
-        tools.map((t) => (
+      {tools
+        .filter((t) => expanded || needsAttention(t))
+        .map((t) => (
           <ToolCard key={t.key} activity={t} session={session} working={working} act={act} />
         ))}
     </section>

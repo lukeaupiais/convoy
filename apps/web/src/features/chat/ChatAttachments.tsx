@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AtSign, FileText, Paperclip, X } from 'lucide-react';
 import { command, type ContextFile } from '../../shared/api/runtime';
+import { useDetailsPopover } from '../../shared/ui/useDetailsPopover';
 import { WorkflowArtifactContent } from '../workflows';
 
 const url = (sessionId: string, file: ContextFile) =>
@@ -176,6 +177,7 @@ export function AttachmentComposer({
 }) {
   const input = useRef<HTMLInputElement>(null);
   const lock = useRef(false);
+  const menu = useDetailsPopover();
   const [busy, setBusy] = useState(false);
   const [reference, setReference] = useState(false);
   const [path, setPath] = useState('');
@@ -306,25 +308,42 @@ export function AttachmentComposer({
               e.target.value = '';
             }}
           />
-          <button
-            type="button"
-            aria-label="Attach files or images"
-            title="Attach files or images"
-            disabled={disabled || busy || files.length >= 4}
-            onClick={() => input.current?.click()}
-          >
-            <Paperclip size={17} />
-          </button>
-          <button
-            type="button"
-            aria-label="Reference workspace file"
-            title={workspace ? 'Reference a workspace file' : 'Assign a workspace first'}
-            disabled={disabled || busy || !workspace || files.length >= 4}
-            onClick={() => setReference(!reference)}
-            aria-expanded={reference}
-          >
-            <AtSign size={17} />
-          </button>
+          <details className="composer-popover attachment-menu" ref={menu}>
+            <summary
+              aria-label="Attach context"
+              title="Attach context"
+              aria-disabled={disabled || busy || files.length >= 4}
+              onClick={(e) => {
+                if (disabled || busy || files.length >= 4) e.preventDefault();
+              }}
+            >
+              <Paperclip size={17} />
+            </summary>
+            <div className="composer-popover-panel">
+              <button
+                type="button"
+                disabled={disabled || busy || files.length >= 4}
+                onClick={() => {
+                  if (menu.current) menu.current.open = false;
+                  input.current?.click();
+                }}
+              >
+                <Paperclip size={16} /> Files or images
+              </button>
+              {workspace && (
+                <button
+                  type="button"
+                  disabled={disabled || busy || files.length >= 4}
+                  onClick={() => {
+                    if (menu.current) menu.current.open = false;
+                    setReference(true);
+                  }}
+                >
+                  <AtSign size={16} /> Workspace file
+                </button>
+              )}
+            </div>
+          </details>
           {busy && <span role="status">Adding context…</span>}
           {dragging && <span>Drop files to attach</span>}
         </div>,

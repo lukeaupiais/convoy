@@ -177,65 +177,14 @@ body {
   outline-color: var(--accent);
 }
 
-/* Tickets and runtime */
-.detail.task-detail.ticket-detail,
-.new-task.dialog {
-  background: var(--surface);
-  border: 1px solid #81958f;
-  border-radius: 0;
-  box-shadow:
-    0 24px 70px #102d3150,
-    inset 0 1px #fff;
-}
+/* Shared modal mechanics; each feature owns its dialog presentation. */
 .modal-backdrop,
 .select-scrim {
-  background: #0c282c85;
-  backdrop-filter: blur(3px);
+  background: #080f18b8;
+  backdrop-filter: none;
 }
-.ticket-detail .detail-top {
-  border-bottom: 1px solid #b7c1b7;
-  padding-bottom: 13px;
-}
-.ticket-edit-form .ticket-title-field textarea {
-  background: #fffdf0;
-  border-color: #1f3332;
-  font-family: inherit;
-  font-size: 16px;
-  font-weight: 700;
-  color: #17393d;
-}
-.ticket-property-grid {
-  background: #eeeadb;
-  border: 1px solid #b3bdb2;
-  padding: 17px;
-  border-radius: 0;
-}
-.ticket-edit-form .ticket-property-grid :is(input, select),
-.ticket-detail .ticket-description-field textarea {
-  background: var(--surface);
-  border-color: #a5b2aa;
-  color: var(--ink);
-}
-.app
-  :is(
-    .ticket-edit-form label,
-    .ticket-extra-fields summary,
-    .ticket-detail .runtime-details > summary,
-    .detail-top .task-id,
-    .monitor-reason,
-    .monitor-location
-  ) {
+.app :is(.monitor-reason, .monitor-location) {
   color: #526d69;
-}
-.ticket-detail .inspector-tabs {
-  border-color: #aebbb2;
-}
-.ticket-detail .inspector-tabs button {
-  color: #58726e;
-}
-.ticket-detail .inspector-tabs button.selected {
-  color: #a13f25;
-  border-color: #c85532;
 }
 .app .terminal-preview {
   background: #153438;
@@ -299,13 +248,6 @@ body {
 @media (max-width: 800px) {
 }
 @media (max-width: 600px) {
-  .ticket-edit-form .ticket-title-field textarea {
-    font-size: 24px;
-  }
-  .ticket-property-grid {
-    padding: 12px;
-    gap: 12px;
-  }
 }
 .nav-collapsed > main {
   margin-left: 58px;
