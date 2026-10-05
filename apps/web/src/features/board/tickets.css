@@ -7,8 +7,8 @@
   border: 0;
   padding: 4px;
   min-height: 160px;
-  border-radius: 10px;
-  background: #eef1eb80;
+  border-radius: 0;
+  background: transparent;
 }
 .board-studio .custom-column > header {
   padding: 0 6px;
@@ -16,14 +16,14 @@
 }
 .board-studio .custom-column > header h2 {
   font-size: 13px;
-  color: #44534a;
+  color: inherit;
 }
 .board-studio .custom-card {
   padding: 0;
   gap: 0;
   border: 1px solid #dfe5dc;
-  border-radius: 9px;
-  background: #fff;
+  border-radius: 0;
+  background: var(--surface);
   box-shadow: 0 1px 2px #23352606;
   transition:
     border-color 0.15s,
@@ -41,7 +41,7 @@
 .board-studio .custom-card-open {
   padding: 14px 14px 10px;
   gap: 10px;
-  border-radius: 9px;
+  border-radius: 0;
 }
 .board-studio .custom-card strong {
   font-size: 14px;
@@ -87,7 +87,7 @@
   border: 1px solid #e5e8e1;
   background: #f5f6f2;
   color: #687565;
-  border-radius: 5px;
+  border-radius: 0;
   padding: 2px 6px;
   font-size: 10px;
   overflow-wrap: anywhere;

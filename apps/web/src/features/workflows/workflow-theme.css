@@ -1,12 +1,12 @@
-/* Workflow graph: office-diagram utility rather than modern canvas chrome. */
+/* Early workstation canvas: squared frames and a sparse pixel grid. */
 .workflow-studio .workflow-studio-heading {
-  background: #d5d2c7;
-  border-bottom: 2px solid #555e59;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
 }
 .workflow-studio .workflow-canvas-viewport {
-  background-color: #d1d0c4;
-  background-image: radial-gradient(#66756e80 1px, transparent 1px);
-  background-size: 8px 8px;
+  background-color: #203347;
+  background-image: radial-gradient(#8eaca858 1px, transparent 1px);
+  background-size: 12px 12px;
 }
 .workflow-studio
   :is(
@@ -20,15 +20,15 @@
     .live-evidence,
     .node-inspector
   ) {
-  background: #e8e5d7;
-  border: 1px solid #202928;
+  background: var(--surface);
+  border: 1px solid #b8c5bd;
+  border-radius: 0;
   box-shadow:
-    inset 1px 1px #fff,
-    inset -1px -1px #777,
-    1px 1px #4d5a56;
+    var(--raised),
+    1px 1px #72878350;
 }
 .workflow-studio .graph-node-head {
-  background: #123d62;
+  background: #365264;
   color: #fff;
 }
 .workflow-studio .graph-node-head :is(strong, em, svg) {
@@ -43,4 +43,13 @@
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.workflow-workspace-nav {
+  border-color: var(--line);
+}
+.workflow-workspace-nav button[aria-pressed='true'] {
+  color: #604795;
+  background: #eee8f8;
+  border-color: #d6c8eb;
 }

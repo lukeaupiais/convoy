@@ -17,8 +17,8 @@ import { command } from '../../shared/api/runtime';
 import type { Board, BoardColumn as Column, RuntimeState, Ticket, WorkflowReference } from '../../shared/api/runtime';
 import './studio.css';
 import './board-overrides.css';
-import './board-theme.css';
 import './tickets.css';
+import './board-theme.css';
 
 type Props = {
   state: RuntimeState;
@@ -44,7 +44,7 @@ const starter: Board = {
   revision: 0,
   swimlanes: { mode: 'none' },
   filters: {},
-  cardFields: ['project', 'priority', 'agent'],
+  cardFields: ['priority', 'agent'],
   grouping: { mode: 'local' },
   density: 'comfortable',
   tickets: [],
@@ -691,7 +691,7 @@ export function BoardStudio({
             <fieldset className="card-field-picker">
               <legend>Card fields</legend>
               <div className="card-field-options">
-                {['title', 'project', 'priority', 'agent', 'label'].map((field) => (
+                {['title', 'priority', 'agent'].map((field) => (
                   <label key={field}>
                     <input
                       type="checkbox"
@@ -822,7 +822,7 @@ export function BoardStudio({
             <div className="board-list-row" key={t.id}>
               <button onClick={() => onSelectTicket(t.id)}>
                 <span>CVY-{t.id}</span>
-                <strong>{t.title}</strong>
+                <strong title={t.title}>{t.title}</strong>
                 {t.externalPublish && <span aria-label="External creation needs review">⚠</span>}
               </button>
               {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
@@ -861,6 +861,7 @@ export function BoardStudio({
                   return (
                     <section
                       className="custom-column"
+                      style={{ '--column-color': column.color && CSS.supports('color', column.color) ? column.color : '#87d5cb' } as CSSProperties}
                       key={column.id}
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={(e) => {
@@ -870,7 +871,7 @@ export function BoardStudio({
                       }}
                     >
                       <header>
-                        <span className="column-swatch" style={{ background: column.color }} />
+                        <span className="column-swatch" style={{ background: 'var(--column-color)' }} />
                         <h2>{column.name}</h2>
                         <BoardAutomationInspector
                           key={`${board.id}:${column.id}`}
@@ -918,11 +919,11 @@ export function BoardStudio({
                                   </span>
                                 )}
                               </span>
-                              <strong>{t.title}</strong>
+                              <strong title={t.title}>{t.title}</strong>
                               <span className="ticket-card-tags">
                                 {board.cardFields
                                   .filter(
-                                    (f) => !['title', 'priority', 'agent', 'project'].includes(f),
+                                    (f) => !['title', 'priority', 'agent', 'project', 'label'].includes(f),
                                   )
                                   .map((f) => {
                                     const value = valueFor(
@@ -939,9 +940,6 @@ export function BoardStudio({
                                   })}
                               </span>
                               <span className="ticket-card-footer">
-                                {board.cardFields.includes('project') && (
-                                  <span className="ticket-project">{projectName(t.projectId)}</span>
-                                )}
                                 {board.cardFields.includes('agent') && (
                                   <span className="ticket-assignee" title={t.agent || 'Unassigned'}>
                                     <UserRound size={12} />
@@ -951,20 +949,6 @@ export function BoardStudio({
                               </span>
                             </button>
                             {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
-                            <Select
-                              className="card-move"
-                              aria-label={`Move CVY-${t.id}`}
-                              disabled={Boolean(sourceOwnsBoardField(board, t))}
-                              title={sourceOwnsBoardField(board, t) ? 'Change this status in the external source, then sync.' : undefined}
-                              value={columnFor(board, t)}
-                              onChange={(e) => void move(t, e.target.value)}
-                            >
-                              {board.columns.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.name}
-                                </option>
-                              ))}
-                            </Select>
                           </article>
                         ))}
                       </div>
