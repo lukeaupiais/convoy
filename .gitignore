@@ -18,9 +18,12 @@ output/
 *.pem
 *.p12
 *.pfx
+# Internal research and working notes belong only in /research/.
 /research/
-/AGENTS.md
+# Retain the legacy exclusion so old tooling cannot publish notes.
 /docs/research/
+# Local agent guidance and domain working context.
+/AGENTS.md
 /CONTEXT.md
 
 /.automation-backups/

@@ -1,7 +1,0 @@
-# PR6 public definition editing correction
-
-Root full-suite red proof at 4928f3868459af4b5149c4bf01dae6db0b7eb2cc: tests/acceptance/ticket-execution.test.mjs:295 reads a published workflow from the public snapshot, edits its capability profile and republishes. The owner-derived legacyHumanTask marker appears in the definition DTO and is correctly rejected at publication, preventing an existing legitimate edit. Full result: 667 tests, 655 pass, 11 prerequisite skips, one failure; pr6-4928f38-parent-full.log.
-
-Restore an authoring-safe public definition shape. Trusted normalization may retain synthetic task metadata internally for execution compatibility, but published-definition read and command responses must round-trip existing labels-only human nodes without asking callers to submit internal authorization markers. Do not weaken the publication guard against any caller-supplied legacyHumanTask marker. Do not rewrite stored old workflow bytes or active run pins. Preserve configured humanTask metadata, exact legacy labels, and all unrelated event/activity/result fields.
-
-Keep the original profile pin/grant/restart acceptance test unchanged. Add meaningful public-command coverage for reading and editing a legacy definition, editing the publication response again, configured forms round-trip, and forged-marker rejection. Verify the editor still distinguishes legacy gate behavior and preserves old reply material. Run required architecture/build and focused checks, then root full suite and immutable correction reviews before publication.
