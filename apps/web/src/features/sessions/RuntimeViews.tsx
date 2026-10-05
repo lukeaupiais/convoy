@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { command, owns, useRuntime, type RuntimeAction } from '../../shared/api/runtime';
 import type { RuntimeState, Session } from '../../shared/api/runtime';
 import './runtime.css';
 import './session-monitor.css';
 import { liveModel, sessionProjectId, sessionStatus } from './sessionMonitor';
 import { SessionCapabilities } from '../library';
-import { WorkflowActivityHistory, WorkflowRunDetails, WorkflowRunInteraction, requiredGateActivityTarget, workflowHumanTaskActions } from '../workflows';
+import {
+  WorkflowActivityHistory,
+  WorkflowRunDetails,
+  WorkflowRunInteraction,
+  requiredGateActivityTarget,
+  workflowHumanTaskActions,
+} from '../workflows';
 
 export function SessionControls({
   session: s,
   state,
   inlineChat = false,
+  interactionOnly = false,
+  settingsOnly = false,
+  advancedContent,
   showWorkflowInteraction = true,
   runtimeAvailable = true,
   openRecovery = false,
@@ -20,6 +29,9 @@ export function SessionControls({
   session: Session;
   state: RuntimeState;
   inlineChat?: boolean;
+  interactionOnly?: boolean;
+  settingsOnly?: boolean;
+  advancedContent?: ReactNode;
   showWorkflowInteraction?: boolean;
   runtimeAvailable?: boolean;
   openRecovery?: boolean;
@@ -33,14 +45,52 @@ export function SessionControls({
   const [answer, setAnswer] = useState('');
   const busy = ['running', 'waiting_approval', 'waiting_question'].includes(s.status);
   const owned = owns(s);
+  const compact = interactionOnly || settingsOnly;
+  const canAct = owned || compact;
   const activeNodeId = s.flow?.nodeId;
   const approvalTargetNodeId = requiredGateActivityTarget(s, state.workflowActivities);
-  const preparedActivityReservation = s.flow && state.workflowRuns?.find(run => run.id === s.flow?.id)?.activityReservations?.find(value =>
-    value.gateNodeId === s.flow?.nodeId && value.gateInstance === s.flow?.instance && value.targetNodeId === approvalTargetNodeId && !value.consumedAt);
+  const preparedActivityReservation =
+    s.flow &&
+    state.workflowRuns
+      ?.find((run) => run.id === s.flow?.id)
+      ?.activityReservations?.find(
+        (value) =>
+          value.gateNodeId === s.flow?.nodeId &&
+          value.gateInstance === s.flow?.instance &&
+          value.targetNodeId === approvalTargetNodeId &&
+          !value.consumedAt,
+      );
+  async function ensureControl() {
+    if (compact && !owned) await command('claim', { sessionId: s.id, label: 'Web chat' });
+  }
+  async function withControl<T>(action: () => Promise<T>) {
+    await ensureControl();
+    return action();
+  }
+  const humanActions = workflowHumanTaskActions(s);
+  const controlledHumanActions = {
+    ...humanActions,
+    submitHumanResponse: humanActions.submitHumanResponse
+      ? (values: Record<string, unknown>) =>
+          withControl(() => humanActions.submitHumanResponse!(values))
+      : undefined,
+    captureHumanDocument: humanActions.captureHumanDocument
+      ? (file: File) => withControl(() => humanActions.captureHumanDocument!(file))
+      : undefined,
+    prepareHumanReview: humanActions.prepareHumanReview
+      ? (input: Parameters<NonNullable<typeof humanActions.prepareHumanReview>>[0]) =>
+          withControl(() => humanActions.prepareHumanReview!(input))
+      : undefined,
+    decideHumanOutcome: humanActions.decideHumanOutcome
+      ? (input: Parameters<NonNullable<typeof humanActions.decideHumanOutcome>>[0]) =>
+          withControl(() => humanActions.decideHumanOutcome!(input))
+      : undefined,
+  };
   async function act(action: RuntimeAction, extra = {}) {
     setWorking(true);
     setError('');
     try {
+      await ensureControl();
       await command(action, { sessionId: s.id, ...extra });
     } catch (e) {
       setError((e as Error).message);
@@ -55,8 +105,7 @@ export function SessionControls({
       : '';
   const pendingEffect = state.workflowEffects?.find(
     (effect) =>
-      effect.effectKey === effectKey &&
-      ['pending', 'uncertain', 'blocked'].includes(effect.status),
+      effect.effectKey === effectKey && ['pending', 'uncertain', 'blocked'].includes(effect.status),
   );
   const triggerFailures = (state.automationDecisions ?? []).filter(
     (decision) =>
@@ -68,7 +117,7 @@ export function SessionControls({
     if (
       !pendingEffect ||
       !s.flow ||
-      !owned ||
+      !canAct ||
       !window.confirm(
         resolution === 'applied' && pendingEffect.operation === 'create_ticket'
           ? 'Confirm that the effect was applied and select the existing created ticket.'
@@ -96,306 +145,77 @@ export function SessionControls({
     });
     if (resolution === 'applied') setRecoveryTicketId('');
   }
-  return (
-    <div className="session-controls">
-      <div className="runtime-toolbar">
-        <span className={`run-status ${s.status}`}>{s.status.replaceAll('_', ' ')}</span>
-        <span className="muted">
-          {s.lease && s.lease.expiresAt > Date.now()
-            ? `Control: ${s.lease.label}`
-            : 'No controller'}
-        </span>
-        <button
-          className="secondary"
-          disabled={working || !runtimeAvailable}
-          onClick={() => act(owned ? 'release' : 'claim', { label: 'Web chat' })}
+  const configuration = (
+    <div className={`session-configuration${settingsOnly ? '' : ' runtime-toolbar'}`}>
+      <label>
+        Runner
+        <select
+          aria-label="Session runner"
+          value={runnerId}
+          disabled={busy || !!s.workspace}
+          onChange={(e) => setRunnerId(e.target.value)}
         >
-          {owned ? 'Release control' : 'Claim control'}
-        </button>
-        {busy && (
-          <button
-            className="secondary"
-            disabled={!owned || working || !runtimeAvailable}
-            onClick={() => act('stop')}
-          >
-            Stop run
-          </button>
-        )}
-      </div>
-      {error && (
-        <p role="alert" className="chat-error">
-          {error}
-        </p>
-      )}
-      {s.queueReason && <p role="status">Queued: {s.queueReason}</p>}
-      {s.assignment && (
-        <p className="muted">
-          Execution: {state.runners.find((r) => r.id === s.assignment!.runnerId)?.name} ·{' '}
-          {state.environments?.find((e) => e.id === s.assignment!.environmentId)?.name} ·{' '}
-          {s.assignment.state}
-        </p>
-      )}
-      {s.assignment?.state === 'uncertain' && (
-        <details className="approval-card" open={openRecovery}>
-          <summary>Remote outcome needs reconciliation</summary>
-          <p>{s.assignment.message}</p>
-          <p>
-            Inspect the original environment and confirm that no previous process is still running
-            before clearing this hold. This does not reroute or retry the work.
-          </p>
-          <button
-            className="secondary"
-            disabled={!owned || working || busy || !runtimeAvailable}
-            onClick={() => {
-              if (
-                window.confirm(
-                  'Have you verified on the original environment that the previous work has stopped and inspected its outcome?',
-                )
-              )
-                void act('reconcileAssignment', {
-                  token: s.assignment!.token,
-                  confirmStopped: true,
-                });
-            }}
-          >
-            Confirm previous execution stopped
-          </button>
-        </details>
-      )}
-      {(pendingEffect || triggerFailures.length > 0) && (
-        <details className="runtime-details workflow-recovery" open={openRecovery}>
-          <summary>Workflow recovery required</summary>
-          {pendingEffect && (
-            pendingEffect.status === 'blocked' ? (
-              <div className="approval-card" role="status">
-                <strong>Blocked workflow effect · {pendingEffect.operation}</strong>
-                <p>{pendingEffect.message ?? 'A previous ticket reply must be reconciled before this workflow can continue.'}</p>
-                {pendingEffect.blockingReplyRequestId && (
-                  <p>Blocking reply request · {pendingEffect.blockingReplyRequestId}</p>
-                )}
-                <p>Reconcile the existing reply in the ticket Messages, then return here and continue the workflow. This reply was not sent by this attempt.</p>
-                {onOpenTicketMessages && (
-                  <button className="secondary" onClick={onOpenTicketMessages}>
-                    Open ticket Messages
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="approval-card">
-                <strong>Uncertain workflow effect · {pendingEffect.operation}</strong>
-                <p>
-                  {pendingEffect.message ??
-                    'The daemon could not confirm whether this effect completed. Choose the observed outcome before continuing.'}
-                </p>
-                {pendingEffect.operation === 'create_ticket' && (
-                  <label>
-                    Existing created ticket
-                    <select
-                      aria-label="Existing ticket result"
-                      value={recoveryTicketId}
-                      onChange={(e) => setRecoveryTicketId(e.target.value)}
-                    >
-                      <option value="">Select existing ticket…</option>
-                      {state.tickets.map((ticket) => (
-                        <option key={ticket.id} value={ticket.id}>
-                          CVY-{ticket.id} · {ticket.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <div className="runtime-toolbar">
-                  <button
-                    className="primary"
-                    disabled={
-                      !owned ||
-                      working ||
-                      !runtimeAvailable ||
-                      (pendingEffect.operation === 'create_ticket' && !recoveryTicketId)
-                    }
-                    onClick={() => void reconcileEffect('applied')}
-                  >
-                    Confirm applied
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={!owned || working || !runtimeAvailable}
-                    onClick={() => void reconcileEffect('not_applied')}
-                  >
-                    Confirm not applied
-                  </button>
-                </div>
-              </div>
-            )
-          )}
-          {triggerFailures.map((failure) => (
-            <div className="approval-card" key={failure.triggerKey}>
-              <strong>
-                {failure.status === 'blocked_active' ? 'Held automation' : 'Failed automation'} · v
-                {failure.workflowVersion}
-              </strong>
-              <p>
-                {failure.message ??
-                  (failure.status === 'blocked_active'
-                    ? 'Another run was active.'
-                    : 'Could not start.')}
-              </p>
-              <small>{failure.triggerKey}</small>
-              <button
-                className="secondary"
-                disabled={!owned || working || busy || !runtimeAvailable}
-                onClick={() => {
-                  if (window.confirm('Retry this automation using its pinned workflow version?'))
-                    void act('retryAutomationDecision', {
-                      taskId: failure.ticketId,
-                      triggerKey: failure.triggerKey,
-                    });
-                }}
-              >
-                Retry
-              </button>
-            </div>
+          <option value="">Use ticket / project placement</option>
+          {state.runners.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name} · {r.kind}
+            </option>
           ))}
-        </details>
-      )}{' '}
-      {!inlineChat && !s.flow && s.pendingQuestion && (
-        <div className="approval-card">
-          <strong>Agent question</strong>
-          <p>{s.pendingQuestion.question}</p>
-          <label>
-            Your answer
-            <textarea value={answer} onChange={(e) => setAnswer(e.target.value)} />
-          </label>
-          <button
-            className="primary"
-            disabled={!owned || working || !answer.trim()}
-            onClick={() => act('answerQuestion', { questionId: s.pendingQuestion!.id, answer })}
-          >
-            Send answer
-          </button>
-        </div>
-      )}
-      {showWorkflowInteraction && s.flow ? (
-        <WorkflowRunInteraction
-          session={s}
-          activityReservation={preparedActivityReservation}
-          working={working || !owned || !runtimeAvailable}
-          onOpenWorkflowRun={onOpenWorkflowRun}
-          actions={{
-            ...workflowHumanTaskActions(s),
-            requiresActivityReservation: !!approvalTargetNodeId,
-            canPrepareActivityApproval: owned && runtimeAvailable,
-            canShowPreparedActivityApproval: owned && runtimeAvailable,
-            approvalControlKey: owned ? s.lease?.id : undefined,
-            approvalContextKey: JSON.stringify([state.currentUser?.id, state.activeContext?.id, state.activeContext?.projectId, state.activeContext?.principal]),
-            prepareActivityApproval: approvalTargetNodeId ? async () => (await command('prepareWorkflowActivity', {
-              workflowRunId: s.flow!.id, gateInstance: s.flow!.instance, targetNodeId: approvalTargetNodeId,
-            })).result : undefined,
-            approveGate: (reservation) => void act('approveGate', { instance: s.flow!.instance,
-              ...(reservation ? { activityReservationId: reservation.id, activityReservationDigest: reservation.digest } : {}) }),
-            requestChanges: (revisionFeedback) =>
-              void act('requestChanges', {
-                instance: s.flow!.instance,
-                feedback: revisionFeedback,
-              }),
-            continueRun: () => void act('continueWorkflow', { instance: s.flow!.instance }),
-            pause: () => void act('pauseWorkflow'),
-            cancel: () => void act('cancelWorkflow'),
-            answerQuestion: (questionId, value) =>
-              void act('answerQuestion', { questionId, answer: value }),
-            decideTool: (approvalId, allow) =>
-              void act('decide', { approvalId, decision: allow ? 'allow_once' : 'deny' }),
-            allowAlwaysTool: (approvalId) =>
-              void act('decide', { approvalId, decision: 'allow_always' }),
-            refreshDiff: () => void act('diff'),
-            rework: () => void act('reviseSubmission', { instance: s.flow!.instance }),
-            startRun: () => void act('startWorkflow'),
-          }}
-        />
-      ) : showWorkflowInteraction && s.workflow ? (
-        <div className="runtime-details">
-          <strong>
-            {s.workflow.name} · {s.workflow.steps[s.step]?.name ?? 'Ready'}
-          </strong>
-          <p>{s.workflow.steps[s.step]?.prompt}</p>
-          <button
-            className="primary"
-            disabled={!owned || working || busy || !runtimeAvailable}
-            onClick={() => act('startWorkflow')}
-          >
-            Start workflow
-          </button>
-        </div>
-      ) : null}
-      {showWorkflowInteraction && s.flow && <WorkflowActivityHistory session={s} />}
-      {showWorkflowInteraction && s.flow && (
-        <details className="runtime-details" open={openRecovery}>
-          <summary>Execution details</summary>
-          {s.flow.instance &&
-            ['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status) && (
-              <button
-                className="primary"
-                disabled={!owned || working || !runtimeAvailable}
-                onClick={() => void act('continueWorkflow', { instance: s.flow!.instance })}
-              >
-                Continue workflow
-              </button>
-            )}
-          <WorkflowRunDetails
-            session={s}
-            working={working || !owned || !runtimeAvailable}
-            onRefreshDiff={() => void act('diff')}
-          />
-        </details>
-      )}
-      <SessionCapabilities state={state} session={s} />
+        </select>
+      </label>
+      <label>
+        Workflow
+        <select
+          aria-label="Session workflow"
+          disabled={settingsOnly && !!s.flow && !['completed', 'cancelled'].includes(s.flow.status)}
+          value={workflow}
+          onChange={(e) => setWorkflow(e.target.value)}
+        >
+          <option value="">No workflow</option>
+          {[...new Map(state.workflows.map((w) => [w.id, w])).values()].map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name} v{w.version}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        className="secondary"
+        disabled={
+          !canAct ||
+          busy ||
+          working ||
+          !runtimeAvailable ||
+          (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
+        }
+        title={
+          settingsOnly && s.flow && !['completed', 'cancelled'].includes(s.flow.status)
+            ? 'Configuration is locked while this workflow is active'
+            : undefined
+        }
+        onClick={() => act('configure', { runnerId, workflow })}
+      >
+        {settingsOnly ? 'Apply' : 'Apply configuration'}
+      </button>
+    </div>
+  );
+  const inspection = (
+    <>
+      <SessionCapabilities
+        state={state}
+        session={s}
+        acquireControl={compact ? ensureControl : undefined}
+      />
       <details className="runtime-details">
-        <summary>Workspace, workflow & effective instructions</summary>
+        <summary>
+          {settingsOnly ? 'Effective instructions' : 'Workspace, workflow & effective instructions'}
+        </summary>
         <p>
           {s.workspace
             ? `${s.workspace.path} · ${s.workspace.branch}`
             : 'Text-only until you provision a task worktree.'}
         </p>
-        <div className="runtime-toolbar">
-          <select
-            aria-label="Session runner"
-            value={runnerId}
-            disabled={busy || !!s.workspace}
-            onChange={(e) => setRunnerId(e.target.value)}
-          >
-            <option value="">Use ticket / project placement</option>
-            {state.runners.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name} · {r.kind}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Session workflow"
-            value={workflow}
-            onChange={(e) => setWorkflow(e.target.value)}
-          >
-            <option value="">No workflow</option>
-            {[...new Map(state.workflows.map((w) => [w.id, w])).values()].map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name} v{w.version}
-              </option>
-            ))}
-          </select>
-          <button
-            className="secondary"
-            disabled={
-              !owned ||
-              busy ||
-              working ||
-              !runtimeAvailable ||
-              (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
-            }
-            onClick={() => act('configure', { runnerId, workflow })}
-          >
-            Apply configuration
-          </button>
-        </div>
+        {!settingsOnly && configuration}
         <p>
           Publishing instructions does not silently change a run. Apply a fresh snapshot here.
           Layers: organization → user → project → skills → environment → task.
@@ -448,7 +268,7 @@ export function SessionControls({
           <summary>Review changes & verification evidence</summary>
           <button
             className="secondary"
-            disabled={!owned || busy || working || !runtimeAvailable}
+            disabled={!canAct || busy || working || !runtimeAvailable}
             onClick={() => act('diff')}
           >
             Refresh diff
@@ -475,6 +295,309 @@ export function SessionControls({
           ))}
         </details>
       )}
+    </>
+  );
+  return (
+    <div className="session-controls">
+      {!compact && (
+        <div className="runtime-toolbar">
+          {!compact && (
+            <span className={`run-status ${s.status}`}>{s.status.replaceAll('_', ' ')}</span>
+          )}
+          {!compact && (
+            <span className="muted">
+              {s.lease && s.lease.expiresAt > Date.now()
+                ? `Control: ${s.lease.label}`
+                : 'No controller'}
+            </span>
+          )}
+          <button
+            className="secondary"
+            disabled={working || !runtimeAvailable}
+            onClick={() => act(owned ? 'release' : 'claim', { label: 'Web chat' })}
+          >
+            {owned ? 'Release control' : 'Claim control'}
+          </button>
+          {busy && (
+            <button
+              className="secondary"
+              disabled={!canAct || working || !runtimeAvailable}
+              onClick={() => act('stop')}
+            >
+              Stop run
+            </button>
+          )}
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="chat-error">
+          {error}
+        </p>
+      )}
+      {s.queueReason && <p role="status">Queued: {s.queueReason}</p>}
+      {!compact && s.assignment && (
+        <p className="muted">
+          Execution: {state.runners.find((r) => r.id === s.assignment!.runnerId)?.name} ·{' '}
+          {state.environments?.find((e) => e.id === s.assignment!.environmentId)?.name} ·{' '}
+          {s.assignment.state}
+        </p>
+      )}
+      {s.assignment?.state === 'uncertain' && (
+        <details className="approval-card" open={openRecovery}>
+          <summary>Remote outcome needs reconciliation</summary>
+          <p>{s.assignment.message}</p>
+          <p>
+            Inspect the original environment and confirm that no previous process is still running
+            before clearing this hold. This does not reroute or retry the work.
+          </p>
+          <button
+            className="secondary"
+            disabled={!canAct || working || busy || !runtimeAvailable}
+            onClick={() => {
+              if (
+                window.confirm(
+                  'Have you verified on the original environment that the previous work has stopped and inspected its outcome?',
+                )
+              )
+                void act('reconcileAssignment', {
+                  token: s.assignment!.token,
+                  confirmStopped: true,
+                });
+            }}
+          >
+            Confirm previous execution stopped
+          </button>
+        </details>
+      )}
+      {(pendingEffect || triggerFailures.length > 0) && (
+        <details className="runtime-details workflow-recovery" open={openRecovery}>
+          <summary>Workflow recovery required</summary>
+          {pendingEffect &&
+            (pendingEffect.status === 'blocked' ? (
+              <div className="approval-card" role="status">
+                <strong>Blocked workflow effect · {pendingEffect.operation}</strong>
+                <p>
+                  {pendingEffect.message ??
+                    'A previous ticket reply must be reconciled before this workflow can continue.'}
+                </p>
+                {pendingEffect.blockingReplyRequestId && (
+                  <p>Blocking reply request · {pendingEffect.blockingReplyRequestId}</p>
+                )}
+                <p>
+                  Reconcile the existing reply in the ticket Messages, then return here and continue
+                  the workflow. This reply was not sent by this attempt.
+                </p>
+                {onOpenTicketMessages && (
+                  <button className="secondary" onClick={onOpenTicketMessages}>
+                    Open ticket Messages
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="approval-card">
+                <strong>Uncertain workflow effect · {pendingEffect.operation}</strong>
+                <p>
+                  {pendingEffect.message ??
+                    'The daemon could not confirm whether this effect completed. Choose the observed outcome before continuing.'}
+                </p>
+                {pendingEffect.operation === 'create_ticket' && (
+                  <label>
+                    Existing created ticket
+                    <select
+                      aria-label="Existing ticket result"
+                      value={recoveryTicketId}
+                      onChange={(e) => setRecoveryTicketId(e.target.value)}
+                    >
+                      <option value="">Select existing ticket…</option>
+                      {state.tickets.map((ticket) => (
+                        <option key={ticket.id} value={ticket.id}>
+                          CVY-{ticket.id} · {ticket.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <div className="runtime-toolbar">
+                  <button
+                    className="primary"
+                    disabled={
+                      !canAct ||
+                      working ||
+                      !runtimeAvailable ||
+                      (pendingEffect.operation === 'create_ticket' && !recoveryTicketId)
+                    }
+                    onClick={() => void reconcileEffect('applied')}
+                  >
+                    Confirm applied
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={!canAct || working || !runtimeAvailable}
+                    onClick={() => void reconcileEffect('not_applied')}
+                  >
+                    Confirm not applied
+                  </button>
+                </div>
+              </div>
+            ))}
+          {triggerFailures.map((failure) => (
+            <div className="approval-card" key={failure.triggerKey}>
+              <strong>
+                {failure.status === 'blocked_active' ? 'Held automation' : 'Failed automation'} · v
+                {failure.workflowVersion}
+              </strong>
+              <p>
+                {failure.message ??
+                  (failure.status === 'blocked_active'
+                    ? 'Another run was active.'
+                    : 'Could not start.')}
+              </p>
+              <small>{failure.triggerKey}</small>
+              <button
+                className="secondary"
+                disabled={!canAct || working || busy || !runtimeAvailable}
+                onClick={() => {
+                  if (window.confirm('Retry this automation using its pinned workflow version?'))
+                    void act('retryAutomationDecision', {
+                      taskId: failure.ticketId,
+                      triggerKey: failure.triggerKey,
+                    });
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          ))}
+        </details>
+      )}{' '}
+      {!inlineChat && !s.flow && s.pendingQuestion && (
+        <div className="approval-card">
+          <strong>Agent question</strong>
+          <p>{s.pendingQuestion.question}</p>
+          <label>
+            Your answer
+            <textarea value={answer} onChange={(e) => setAnswer(e.target.value)} />
+          </label>
+          <button
+            className="primary"
+            disabled={!canAct || working || !answer.trim()}
+            onClick={() => act('answerQuestion', { questionId: s.pendingQuestion!.id, answer })}
+          >
+            Send answer
+          </button>
+        </div>
+      )}
+      {showWorkflowInteraction && s.flow ? (
+        <WorkflowRunInteraction
+          session={s}
+          activityReservation={preparedActivityReservation}
+          working={working || !canAct || !runtimeAvailable}
+          onOpenWorkflowRun={onOpenWorkflowRun}
+          actions={{
+            ...controlledHumanActions,
+            requiresActivityReservation: !!approvalTargetNodeId,
+            canPrepareActivityApproval: canAct && runtimeAvailable,
+            canShowPreparedActivityApproval: owned && runtimeAvailable,
+            approvalControlKey: owned ? s.lease?.id : undefined,
+            approvalContextKey: JSON.stringify([
+              state.currentUser?.id,
+              state.activeContext?.id,
+              state.activeContext?.projectId,
+              state.activeContext?.principal,
+            ]),
+            prepareActivityApproval: approvalTargetNodeId
+              ? async () =>
+                  withControl(
+                    async () =>
+                      (
+                        await command('prepareWorkflowActivity', {
+                          workflowRunId: s.flow!.id,
+                          gateInstance: s.flow!.instance,
+                          targetNodeId: approvalTargetNodeId,
+                        })
+                      ).result,
+                  )
+              : undefined,
+            approveGate: (reservation) =>
+              void act('approveGate', {
+                instance: s.flow!.instance,
+                ...(reservation
+                  ? {
+                      activityReservationId: reservation.id,
+                      activityReservationDigest: reservation.digest,
+                    }
+                  : {}),
+              }),
+            requestChanges: (revisionFeedback) =>
+              void act('requestChanges', {
+                instance: s.flow!.instance,
+                feedback: revisionFeedback,
+              }),
+            continueRun: () => void act('continueWorkflow', { instance: s.flow!.instance }),
+            pause: () => void act('pauseWorkflow'),
+            cancel: () => void act('cancelWorkflow'),
+            answerQuestion: (questionId, value) =>
+              void act('answerQuestion', { questionId, answer: value }),
+            decideTool: (approvalId, allow) =>
+              void act('decide', { approvalId, decision: allow ? 'allow_once' : 'deny' }),
+            allowAlwaysTool: (approvalId) =>
+              void act('decide', { approvalId, decision: 'allow_always' }),
+            refreshDiff: () => void act('diff'),
+            rework: () => void act('reviseSubmission', { instance: s.flow!.instance }),
+            startRun: () => void act('startWorkflow'),
+          }}
+        />
+      ) : showWorkflowInteraction && s.workflow ? (
+        <div className="runtime-details">
+          <strong>
+            {s.workflow.name} · {s.workflow.steps[s.step]?.name ?? 'Ready'}
+          </strong>
+          <p>{s.workflow.steps[s.step]?.prompt}</p>
+          <button
+            className="primary"
+            disabled={!canAct || working || busy || !runtimeAvailable}
+            onClick={() => act('startWorkflow')}
+          >
+            Start workflow
+          </button>
+        </div>
+      ) : null}
+      {!interactionOnly && showWorkflowInteraction && s.flow && (
+        <WorkflowActivityHistory session={s} />
+      )}
+      {!interactionOnly && showWorkflowInteraction && s.flow && (
+        <details className="runtime-details" open={openRecovery}>
+          <summary>Execution details</summary>
+          {s.flow.instance &&
+            ['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(s.flow.status) && (
+              <button
+                className="primary"
+                disabled={!canAct || working || !runtimeAvailable}
+                onClick={() => void act('continueWorkflow', { instance: s.flow!.instance })}
+              >
+                Continue workflow
+              </button>
+            )}
+          <WorkflowRunDetails
+            session={s}
+            working={working || !canAct || !runtimeAvailable}
+            onRefreshDiff={() => void act('diff')}
+          />
+        </details>
+      )}
+      {!interactionOnly &&
+        (settingsOnly ? (
+          <>
+            {configuration}
+            <details className="session-settings-advanced">
+              <summary>Advanced</summary>
+              {inspection}
+              {advancedContent}
+            </details>
+          </>
+        ) : (
+          inspection
+        ))}
     </div>
   );
 }

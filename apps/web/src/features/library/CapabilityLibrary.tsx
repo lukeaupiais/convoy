@@ -80,9 +80,11 @@ export function profileRef(state: RuntimeState, value: string) {
 export function SessionCapabilities({
   state,
   session: s,
+  acquireControl,
 }: {
   state: RuntimeState;
   session: Session;
+  acquireControl?: () => Promise<void>;
 }) {
   const [value, setValue] = useState(s.capabilityProfile ? key(s.capabilityProfile) : '');
   const [error, setError] = useState('');
@@ -91,9 +93,10 @@ export function SessionCapabilities({
     () => setValue(s.capabilityProfile ? key(s.capabilityProfile) : ''),
     [s.id, s.capabilityProfile?.id, s.capabilityProfile?.version],
   );
+  const canControl = owns(s) || !!acquireControl;
   const locked =
     busy ||
-    !owns(s) ||
+    !canControl ||
     ['running', 'queued', 'waiting_approval', 'waiting_question'].includes(s.status) ||
     (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status));
   return (
@@ -111,6 +114,7 @@ export function SessionCapabilities({
             setBusy(true);
             setError('');
             try {
+              await acquireControl?.();
               await command('setCapabilityProfile', {
                 sessionId: s.id,
                 profile: profileRef(state, value),
@@ -125,7 +129,7 @@ export function SessionCapabilities({
           Apply profile
         </button>
       </div>
-      {!owns(s) && <p className="muted">Claim session control to change its profile.</p>}
+      {!canControl && <p className="muted">Claim session control to change its profile.</p>}
       {error && <p role="alert">{error}</p>}
       <details>
         <summary>
@@ -155,7 +159,7 @@ export function SessionCapabilities({
           className="secondary"
           disabled={
             busy ||
-            !owns(s) ||
+            !canControl ||
             !!s.control?.busy ||
             !s.workspace ||
             !s.capabilityProfile?.loadWorkspaceAgentsMd ||
@@ -165,6 +169,7 @@ export function SessionCapabilities({
             setBusy(true);
             setError('');
             try {
+              await acquireControl?.();
               await command('refreshWorkspaceGuidance', {
                 sessionId: s.id,
                 captureId: s.workspaceGuidance?.id ?? null,

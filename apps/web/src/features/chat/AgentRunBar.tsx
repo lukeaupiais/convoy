@@ -35,7 +35,11 @@ export function AgentRunBar({
   working,
   onStop,
   onReview,
+  compact = false,
+  showStatus = true,
 }: {
+  compact?: boolean;
+  showStatus?: boolean;
   session: Session;
   state: RuntimeState;
   tools: ToolActivity[];
@@ -74,57 +78,74 @@ export function AgentRunBar({
       (!startedAtMs || Date.parse(check.at) >= startedAtMs),
   ).length;
   const files = changedPaths(tools, turnStartSeq);
+  const hasChanges = Boolean(session.review?.status.trim() || session.review?.diff.trim() || files);
   return (
-    <section className={`agent-run-bar${running ? ' is-running' : ''}`} aria-label="Agent run">
-      <div className="run-primary">
-        <span className="run-signal" aria-hidden="true" />
-        <div>
-          <strong>{status}</strong>
-          <small>
-            {currentAgent?.name && currentAgent.name !== 'main' ? currentAgent.name : 'Convoy'}
-            {running && elapsedLabel(startedAt, clock)
-              ? ` · ${elapsedLabel(startedAt, clock)}`
-              : ''}
-          </small>
+    <section
+      className={`agent-run-bar${running ? ' is-running' : ''}${compact ? ' compact-run' : ''}`}
+      aria-label="Agent run"
+    >
+      {showStatus && (
+        <div className="run-primary" role="status" aria-label={status} title={status}>
+          <span className="run-signal" aria-hidden="true" />
+          <div>
+            <strong>{status}</strong>
+            {!compact && (
+              <small>
+                {currentAgent?.name && currentAgent.name !== 'main' ? currentAgent.name : 'Convoy'}
+                {running && elapsedLabel(startedAt, clock)
+                  ? ` · ${elapsedLabel(startedAt, clock)}`
+                  : ''}
+              </small>
+            )}
+          </div>
         </div>
-      </div>
-      <div className="run-location" title={session.workspace?.path}>
-        <Activity size={14} />
-        <span>
-          {environment?.name ??
-            runner?.name ??
-            (session.workspace ? 'Local workspace' : 'Discussion')}
-        </span>
-        {session.workspace?.branch && (
-          <span className="run-branch">
-            <GitBranch size={13} /> {session.workspace.branch.replace(/^convoy\//, '')}
-          </span>
-        )}
-      </div>
-      <div className="run-facts">
-        {activeTool && (
-          <span className="run-active-tool">{activeTool.tool.replaceAll('_', ' ')}</span>
-        )}
-        {files > 0 && (
+      )}
+      {!compact && (
+        <div className="run-location" title={session.workspace?.path}>
+          <Activity size={14} />
           <span>
-            <Layers3 size={13} /> {files} {files === 1 ? 'file' : 'files'}
+            {environment?.name ??
+              runner?.name ??
+              (session.workspace ? 'Local workspace' : 'Discussion')}
           </span>
-        )}
-        {successfulChecks > 0 && (
-          <span>
-            <CheckCircle2 size={13} /> {successfulChecks} passed
-          </span>
-        )}
-      </div>
+          {session.workspace?.branch && (
+            <span className="run-branch">
+              <GitBranch size={13} /> {session.workspace.branch.replace(/^convoy\//, '')}
+            </span>
+          )}
+        </div>
+      )}
+      {!compact && (
+        <div className="run-facts">
+          {activeTool && (
+            <span className="run-active-tool">{activeTool.tool.replaceAll('_', ' ')}</span>
+          )}
+          {files > 0 && (
+            <span>
+              <Layers3 size={13} /> {files} {files === 1 ? 'file' : 'files'}
+            </span>
+          )}
+          {successfulChecks > 0 && (
+            <span>
+              <CheckCircle2 size={13} /> {successfulChecks} passed
+            </span>
+          )}
+        </div>
+      )}
       <div className="run-actions">
-        {session.workspace && !running && (
-          <button type="button" onClick={onReview} disabled={working}>
-            <FileDiff size={13} /> Review
+        {session.workspace && !running && (!compact || hasChanges) && (
+          <button type="button" onClick={onReview} disabled={working} aria-label="Review changes">
+            <FileDiff size={13} /> <span>Review</span>
           </button>
         )}
         {running && (
-          <button type="button" onClick={onStop} disabled={working || stopping}>
-            <Square size={11} /> {stopping ? 'Stopping' : 'Stop'}
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={working || stopping}
+            aria-label={stopping ? 'Stopping' : 'Stop'}
+          >
+            <Square size={11} /> <span>{stopping ? 'Stopping' : 'Stop'}</span>
           </button>
         )}
       </div>

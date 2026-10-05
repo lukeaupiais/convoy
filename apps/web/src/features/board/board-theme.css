@@ -103,7 +103,7 @@ body:has(.board-studio) .select-options > button[aria-selected='true'] {
   background: #304a51;
   color: #8db9ac;
 }
-/* Dark board context, including configuration and ticket dialogs. */
+/* Board configuration surfaces. Ticket dialogs own their theme separately. */
 .app:has(.board-studio) {
   --font-system: 'Segoe UI', Tahoma, Arial, sans-serif;
   font-family: var(--font-system);
@@ -114,14 +114,7 @@ body:has(.board-studio) .select-options > button[aria-selected='true'] {
   --line: #384e58;
   --line-strong: #526872;
 }
-body:has(.board-studio)
-  :is(
-    .ticket-detail,
-    .new-task.dialog,
-    .board-settings,
-    .board-workflow-popover,
-    .board-workflow-drawer
-  ) {
+body:has(.board-studio) :is(.board-settings, .board-workflow-popover, .board-workflow-drawer) {
   --font-system: 'Segoe UI', Tahoma, Arial, sans-serif;
   font-family: var(--font-system);
   --ink: #e8e7df;
@@ -136,13 +129,7 @@ body:has(.board-studio)
   box-shadow: 3px 3px #080f18;
 }
 body:has(.board-studio)
-  :is(
-    .ticket-detail,
-    .new-task.dialog,
-    .board-settings,
-    .board-switcher-menu,
-    .project-switcher-menu
-  )
+  :is(.board-settings, .board-switcher-menu, .project-switcher-menu)
   :is(input, textarea, select, .select-trigger) {
   background: #15242e;
   color: #e8e7df;
@@ -151,14 +138,9 @@ body:has(.board-studio)
   box-shadow: none;
 }
 body:has(.board-studio)
-  :is(.ticket-detail, .new-task.dialog, .board-settings)
+  .board-settings
   :is(label, h2, h3, legend, .task-id, .description, .field-hint) {
   color: #d3dcd8;
-}
-body:has(.board-studio) .ticket-detail .ticket-property-grid {
-  background: #293e47;
-  border-color: #384e58;
-  border-radius: 0;
 }
 body:has(.board-studio) :is(.modal-backdrop, .select-scrim) {
   background: #080f18b8;

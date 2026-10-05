@@ -231,24 +231,6 @@
   border-color: #e4d6b3;
   border-radius: 12px;
 }
-.detail.task-detail,
-.new-task {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 20px 80px #26342020;
-}
-.detail h2,
-.new-task h2 {
-  color: var(--ink);
-  font-size: 23px;
-}
-.description,
-.detail-properties label,
-.detail-properties > div,
-.detail-properties strong {
-  color: #5f6c63;
-}
 @media (hover: hover) and (pointer: fine) {
   .task-card:hover {
     border-color: #afc299;

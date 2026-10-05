@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Copy, X, SlidersHorizontal } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowUp, Copy, X, SlidersHorizontal, ChartNoAxesColumn } from 'lucide-react';
+import { useDetailsPopover } from '../../shared/ui/useDetailsPopover';
 import { Select } from '../../shared/ui/Select';
 import { MessageText } from './MessageText';
 import {
@@ -11,13 +13,11 @@ import {
   type Session,
 } from '../../shared/api/runtime';
 import { AttachmentComposer, AttachmentList } from './ChatAttachments';
-import { AuthControls } from '../providers';
 import { SessionControls } from '../sessions';
 import './chat.css';
 import { copyText, newId } from '../../shared/lib/browser';
 import { AgentMark } from '../../shared/ui/AgentMark';
 import { useSessionStream } from './useSessionStream';
-import { ChatWorkspaceContext } from './ChatWorkspaceContext';
 import { buildTimeline } from './activity';
 import { ToolGroup, InlineQuestion } from './ToolActivity';
 import { AgentRunBar } from './AgentRunBar';
@@ -35,7 +35,8 @@ function ChatUsage({
   usage?: Session['modelUsage'];
   context?: Session['contextUsage'];
 }) {
-  if (!usage) return <span className="chat-usage-empty">No usage reported yet</span>;
+  const popover = useDetailsPopover();
+  if (!usage) return null;
   const metrics: [string, number | undefined][] = [
     ['Total in', usage.inputTokens],
     ['Out', usage.outputTokens],
@@ -43,26 +44,34 @@ function ChatUsage({
   ];
   if (usage.cacheWriteTokens !== undefined) metrics.push(['Cache write', usage.cacheWriteTokens]);
   return (
-    <div className="chat-usage" aria-label={`Chat model usage across ${usage.requests} responses`}>
-      {context && (
-        <span
-          title={`Last request: ${context.inputTokens.toLocaleString()} input tokens, provider measured.${context.compactAtTokens ? ` Compacts at ${context.compactAtTokens.toLocaleString()} tokens.` : ' Model capacity unknown.'}`}
-        >
-          Last input{' '}
-          <strong>
-            {tokenCount(context.inputTokens)}
-            {context.contextWindow
-              ? ` / ${tokenCount(context.contextWindow)} (${Math.round((context.inputTokens / context.contextWindow) * 100)}%)`
-              : ''}
-          </strong>
-        </span>
-      )}
-      {metrics.map(([label, value]) => (
-        <span key={label} title={`${label}: ${value?.toLocaleString() ?? 'not reported'} tokens`}>
-          {label} <strong>{tokenCount(value)}</strong>
-        </span>
-      ))}
-    </div>
+    <details className="composer-popover usage-popover" ref={popover}>
+      <summary aria-label="Model usage" title="Model usage">
+        <ChartNoAxesColumn size={17} />
+      </summary>
+      <div
+        className="composer-popover-panel chat-usage"
+        aria-label={`Chat model usage across ${usage.requests} responses`}
+      >
+        {context && (
+          <span
+            title={`Last request: ${context.inputTokens.toLocaleString()} input tokens, provider measured.${context.compactAtTokens ? ` Compacts at ${context.compactAtTokens.toLocaleString()} tokens.` : ' Model capacity unknown.'}`}
+          >
+            Last input{' '}
+            <strong>
+              {tokenCount(context.inputTokens)}
+              {context.contextWindow
+                ? ` / ${tokenCount(context.contextWindow)} (${Math.round((context.inputTokens / context.contextWindow) * 100)}%)`
+                : ''}
+            </strong>
+          </span>
+        )}
+        {metrics.map(([label, value]) => (
+          <span key={label} title={`${label}: ${value?.toLocaleString() ?? 'not reported'} tokens`}>
+            {label} <strong>{tokenCount(value)}</strong>
+          </span>
+        ))}
+      </div>
+    </details>
   );
 }
 function load(key: string): { messages: Note[]; draft: string; attachments: ContextFile[] } {
@@ -78,11 +87,17 @@ export function SessionChat({
   openTicket,
   openConversation,
   openWorkflowRun,
+  openProviders,
+  headerTarget,
+  settingsRequest = 0,
 }: {
+  settingsRequest?: number;
+  headerTarget?: HTMLElement | null;
   sessionId: string;
   openTicket: (id: number) => void;
   openConversation: (id: string) => void;
   openWorkflowRun?: (runId: string) => void;
+  openProviders: () => void;
 }) {
   const key = `convoy.chat.v1.${taskId}`;
   const [local, setLocal] = useState(() => load(key));
@@ -138,6 +153,10 @@ export function SessionChat({
                     : 'Ready';
   const [viewSession, setViewSession] = useState('all');
   const [controlsOpen, setControlsOpen] = useState(false);
+  const [workflowOpen, setWorkflowOpen] = useState(false);
+  useEffect(() => {
+    if (settingsRequest) setControlsOpen(true);
+  }, [settingsRequest]);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const optionsDialog = useRef<HTMLDialogElement>(null);
@@ -169,18 +188,6 @@ export function SessionChat({
     if (session?.model) setModel(session.model);
   }, [session?.id, session?.model]);
   useEffect(() => setReviewed(false), [session?.interruption?.at]);
-  useEffect(() => {
-    if (
-      [
-        'waiting_gate',
-        'awaiting_continue',
-        'awaiting_submission',
-        'failed',
-        'interrupted',
-      ].includes(session?.flow?.status ?? '')
-    )
-      setControlsOpen(true);
-  }, [session?.flow?.status]);
 
   useEffect(() => {
     try {
@@ -266,8 +273,8 @@ export function SessionChat({
       setReviewing(false);
     }
   }
-  return (
-    <section className="session-chat" aria-label={`Conversation ${taskId}`}>
+  const headerControls = (
+    <div className="chat-header-controls">
       {session && state && (
         <AgentRunBar
           session={session}
@@ -277,12 +284,23 @@ export function SessionChat({
           running={running}
           stopping={stopping}
           working={submitting}
+          compact={Boolean(headerTarget)}
+          showStatus={
+            running ||
+            stopping ||
+            stopped ||
+            Boolean(
+              session.pending ||
+              session.pendingQuestion ||
+              session.flow?.status === 'waiting_gate' ||
+              session.assignment?.state === 'uncertain',
+            )
+          }
           onStop={() => void control('stop')}
           onReview={() => void reviewChanges()}
         />
       )}
-      <div className="chat-context-bar">
-        {session && state && <ChatWorkspaceContext session={session} state={state} />}
+      {!headerTarget && (
         <button
           type="button"
           className="chat-options-toggle"
@@ -292,7 +310,12 @@ export function SessionChat({
         >
           <SlidersHorizontal size={16} />
         </button>
-      </div>
+      )}
+    </div>
+  );
+  return (
+    <section className="session-chat" aria-label={`Conversation ${taskId}`}>
+      {headerTarget ? createPortal(headerControls, headerTarget) : headerControls}
       <dialog
         ref={optionsDialog}
         className="chat-options-dialog"
@@ -313,79 +336,87 @@ export function SessionChat({
             <X size={18} />
           </button>
         </header>
-        {state && <AuthControls state={state} />}
-        {state && (
-          <div className="runtime-toolbar runtime-info">
-            <button
-              className="secondary"
-              disabled={submitting || !!busy || !state.auth.connected}
-              onClick={async () => {
-                setSubmitting(true);
-                try {
-                  await command('probeModel', { model });
-                } catch (e) {
-                  setError((e as Error).message);
-                } finally {
-                  setSubmitting(false);
-                }
-              }}
-            >
-              Test model access
-            </button>
-            <span>
-              {state.modelChecks?.[model]
-                ? `${state.modelChecks[model].available ? 'Available at last check' : 'Last check failed'} · ${new Date(state.modelChecks[model].checkedAt).toLocaleTimeString()}`
-                : 'A model test uses a small amount of subscription quota.'}
-            </span>
-          </div>
-        )}
         {session && state && (
           <SessionControls
             session={session}
             state={state}
             inlineChat
+            settingsOnly
+            openRecovery
+            showWorkflowInteraction={false}
+            advancedContent={
+              <>
+                {state && (
+                  <div className="runtime-toolbar runtime-info">
+                    <button
+                      className="secondary"
+                      disabled={submitting || !!busy || !state.auth.connected}
+                      onClick={async () => {
+                        setSubmitting(true);
+                        try {
+                          await command('probeModel', { model });
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setSubmitting(false);
+                        }
+                      }}
+                    >
+                      Test model access
+                    </button>
+                    <span>
+                      {state.modelChecks?.[model]
+                        ? `${state.modelChecks[model].available ? 'Available at last check' : 'Last check failed'} · ${new Date(state.modelChecks[model].checkedAt).toLocaleTimeString()}`
+                        : 'A model test uses a small amount of subscription quota.'}
+                    </span>
+                  </div>
+                )}
+                {!!session?.agentSessions?.length && (
+                  <label className="runtime-toolbar">
+                    Inspect session
+                    <Select
+                      aria-label="Inspect agent session"
+                      value={viewSession}
+                      onChange={(e) => setViewSession(e.target.value)}
+                    >
+                      <option value="all">All sessions</option>
+                      {session.agentSessions.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                          {a.id === session.currentAgentSessionId ? ' · active' : ''}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                )}
+                {!!session?.events.length && (
+                  <details className="chat-activity">
+                    <summary>Diagnostics</summary>
+                    {session.events
+                      .filter(
+                        (e) =>
+                          viewSession === 'all' ||
+                          !e.agentSessionId ||
+                          e.agentSessionId === viewSession,
+                      )
+                      .map((e) => (
+                        <details className="runtime-event" key={e.seq}>
+                          <summary>
+                            {e.type.replaceAll('_', ' ')} {e.tool ?? ''}
+                          </summary>
+                          <pre>{JSON.stringify(e.output ?? e, null, 2)}</pre>
+                        </details>
+                      ))}
+                  </details>
+                )}
+              </>
+            }
             runtimeAvailable={!connectionError}
             onOpenTicketMessages={
               session.activeTicketId ? () => openTicket(session.activeTicketId!) : undefined
             }
             onOpenWorkflowRun={openWorkflowRun}
           />
-        )}
-        {!!session?.agentSessions?.length && (
-          <label className="runtime-toolbar">
-            Inspect session
-            <Select
-              aria-label="Inspect agent session"
-              value={viewSession}
-              onChange={(e) => setViewSession(e.target.value)}
-            >
-              <option value="all">All sessions</option>
-              {session.agentSessions.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                  {a.id === session.currentAgentSessionId ? ' · active' : ''}
-                </option>
-              ))}
-            </Select>
-          </label>
-        )}
-        {!!session?.events.length && (
-          <details className="chat-activity">
-            <summary>Diagnostics</summary>
-            {session.events
-              .filter(
-                (e) =>
-                  viewSession === 'all' || !e.agentSessionId || e.agentSessionId === viewSession,
-              )
-              .map((e) => (
-                <details className="runtime-event" key={e.seq}>
-                  <summary>
-                    {e.type.replaceAll('_', ' ')} {e.tool ?? ''}
-                  </summary>
-                  <pre>{JSON.stringify(e.output ?? e, null, 2)}</pre>
-                </details>
-              ))}
-          </details>
         )}
       </dialog>
       {session && (
@@ -429,11 +460,6 @@ export function SessionChat({
           <div className="chat-empty">
             <AgentMark id={taskId} />
             <h3>What’s on your mind?</h3>
-            {state && !state.auth.connected && (
-              <button className="secondary" onClick={() => setControlsOpen(true)}>
-                Connect account
-              </button>
-            )}
           </div>
         )}
         {timeline.map((item) => {
@@ -535,7 +561,9 @@ export function SessionChat({
             Reconnecting live feed · showing saved state
           </small>
         )}
-        {(running || stopped || workflowManaged || session?.assignment?.state === 'uncertain') && (
+        {(canResume ||
+          session?.assignment?.state === 'uncertain' ||
+          (!headerTarget && (running || stopped || workflowManaged))) && (
           <div className="chat-run-status">
             <span role="status">
               <i className={running ? 'working' : ''} />
@@ -624,6 +652,38 @@ export function SessionChat({
             {error || connectionError}
           </div>
         )}
+        {state && !state.auth.connected && (
+          <div className="chat-connection-action">
+            <button type="button" className="secondary" onClick={openProviders}>
+              Connect a provider
+            </button>
+          </div>
+        )}
+        {!canMessage && session && (session.workflow || session.flow) && state && (
+          <div className="chat-workflow-action">
+            <button
+              type="button"
+              className="secondary"
+              aria-expanded={workflowOpen}
+              onClick={() => setWorkflowOpen(!workflowOpen)}
+            >
+              {workflowOpen ? 'Hide workflow' : 'Review workflow'}
+            </button>
+            {workflowOpen && (
+              <SessionControls
+                session={session}
+                state={state}
+                inlineChat
+                interactionOnly
+                runtimeAvailable={!connectionError}
+                onOpenTicketMessages={
+                  session.activeTicketId ? () => openTicket(session.activeTicketId!) : undefined
+                }
+                onOpenWorkflowRun={openWorkflowRun}
+              />
+            )}
+          </div>
+        )}
         <AttachmentComposer
           sessionId={taskId}
           files={local.attachments}
@@ -644,13 +704,7 @@ export function SessionChat({
               <textarea
                 ref={composerInput}
                 aria-label="Message"
-                placeholder={
-                  !canMessage
-                    ? 'Review the workflow in Chat settings.'
-                    : running
-                      ? 'Add direction for the next turn…'
-                      : 'Message Convoy…'
-                }
+                placeholder={running ? 'Add direction for the next turn…' : 'Message Convoy…'}
                 value={local.draft}
                 maxLength={12000}
                 rows={1}
@@ -696,7 +750,6 @@ export function SessionChat({
                     Steer now
                   </button>
                 )}
-                {running && <small className="composer-send-mode">Enter queues next</small>}
                 <button
                   type="submit"
                   className="chat-send"
@@ -709,7 +762,13 @@ export function SessionChat({
                     !state?.auth.connected
                   }
                   aria-label={running ? 'Queue message' : 'Send message'}
-                  title={running ? 'Queue for the next turn' : 'Send message'}
+                  title={
+                    !canMessage
+                      ? 'Complete the pending workflow action before sending'
+                      : running
+                        ? 'Queue for the next turn'
+                        : 'Send message'
+                  }
                 >
                   <ArrowUp size={17} />
                 </button>

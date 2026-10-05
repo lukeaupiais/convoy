@@ -583,6 +583,7 @@ function App() {
             create={() => void newChat()}
             openTicket={setSelected}
             openWorkflowRun={openWorkflowRun}
+            openProviders={() => navigate('Providers')}
           />
         )}
         {page === 'Workflows' && (
