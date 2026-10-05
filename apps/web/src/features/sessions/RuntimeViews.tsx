@@ -201,7 +201,11 @@ export function SessionControls({
   );
   const inspection = (
     <>
-      <SessionCapabilities state={state} session={s} />
+      <SessionCapabilities
+        state={state}
+        session={s}
+        acquireControl={compact ? ensureControl : undefined}
+      />
       <details className="runtime-details">
         <summary>
           {settingsOnly ? 'Effective instructions' : 'Workspace, workflow & effective instructions'}
