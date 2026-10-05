@@ -55,6 +55,10 @@ documented in [`execution-access.md`](execution-access.md).
 Deployment storage, migration, and offline backup are documented in
 [`persistence.md`](persistence.md).
 
+The durable run and activity contract is documented in
+[`durable-automation.md`](durable-automation.md); operator presentation is documented
+in [`workflow-interaction.md`](workflow-interaction.md).
+
 ## Ownership boundaries
 
 Authoritative state has one owner. Work owns projects/tickets/boards; workflows

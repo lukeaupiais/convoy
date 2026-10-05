@@ -1,33 +1,52 @@
 # Documentation
 
-Start with the [architecture overview](architecture/README.md) for dependency
-rules and module ownership. Use the terms defined by the owning modules and
-shared contracts when changing code or UI copy.
+This directory contains maintained project documentation published with the
+repository. Internal research, comparisons, implementation plans, assignments,
+and review records belong in the ignored root `research/` directory. See
+[Contributing](../CONTRIBUTING.md#documentation-and-internal-research) for the
+publication rule.
 
-- [Execution policy and runner authority](architecture/execution-access.md)
-- [Disposable verification runtimes — specification](architecture/disposable-verification-runtime-spec.md)
+## Running Convoy
+
+- [Getting started](../README.md#get-it-running)
+- [Desktop builds](desktop.md)
+- [Portable local and SSH workers](portable-workers.md)
+- [Deployment persistence, migration, and backup](architecture/persistence.md)
+- [Command execution](command-execution.md)
 - [Browser verification through the shell](architecture/browser-shell-verification.md)
-- [Wiki reading and authoring interface](architecture/wiki-interface.md)
-- [Wiki foundation](architecture/wiki-foundation.md)
-- [Model providers, organizations, and client access](architecture/model-providers-organizations-and-client-access.md)
+
+## Architecture and contracts
+
+Start with the [architecture overview](architecture/README.md) for dependency
+rules and ownership. Source READMEs describe the boundaries within each directory.
+
+- [Durable automation](architecture/durable-automation.md)
+- [Workflow interaction and ticket workspaces](architecture/workflow-interaction.md)
+- [Automations and workflow selection](architecture/workflow-selection-and-automation-spec.md)
+- [Board automation visibility](architecture/board-workflow-visibility-spec.md)
+- [Structured workflow submissions](architecture/structured-submissions.md)
+- [Approved workflow replies](architecture/approved-workflow-replies.md)
+- [Execution policy and runner authority](architecture/execution-access.md)
 - [Module command ownership](architecture/module-command-registry.md)
 - [Provider boundary](architecture/provider-boundary.md)
+- [Prompt caching](architecture/prompt-caching.md)
 - [Tool and approval contract](architecture/tool-harness.md)
-- [Structured workflow submissions](architecture/structured-submissions.md)
-- [General workflow interaction](architecture/workflow-interaction-spec.md)
-- [Ticket and run workspace — implementation specification](architecture/ticket-run-workspace-spec.md)
-- [Ticket workspace cleanup — presentation specification](architecture/ticket-workspace-cleanup-spec.md)
-- [Repository guidance and read-only shell — implementation spec](architecture/repository-guidance-and-read-only-shell-spec.md)
-- [Workflow selection and start automations](architecture/workflow-selection-and-automation-spec.md)
-- [Board workflow visibility](architecture/board-workflow-visibility-spec.md)
-- [Board integrations product and behavior spec](board-integrations-spec.md)
-- [Custom ticket source product and architecture spec](custom-ticket-source-spec.md)
-- [Ticket sync bindings, project routing, and board projection](ticket-sync-bindings-spec.md)
-- [Extension contract](architecture/extensions.md)
-- [Command execution](command-execution.md)
-- [Portable local and SSH workers](portable-workers.md)
-- [Desktop builds](desktop.md)
+- [Declarative extensions](architecture/extensions.md)
+- [Wiki foundation](architecture/wiki-foundation.md)
+- [Wiki reading and authoring interface](architecture/wiki-interface.md)
 
-Architecture documents describe current boundaries and note unfinished work
-where relevant. The nearest source README describes ownership within a directory;
-tests verify behavior at the corresponding boundary.
+## Maintained specifications
+
+These describe implemented foundations and their intended extensions. Read each
+document's status and scope before treating a behavior as available. Proposed
+sections are design requirements, not evidence of a shipped capability.
+
+- [Model providers, organizations, and client access](architecture/model-providers-organizations-and-client-access.md)
+- [Disposable verification runtimes](architecture/disposable-verification-runtime-spec.md)
+- [Board integrations](board-integrations-spec.md)
+- [Custom ticket sources](custom-ticket-source-spec.md)
+- [Ticket sync bindings, project routing, and board projection](ticket-sync-bindings-spec.md)
+
+Reusable configuration and browser resources live in `docs/examples/` and the
+example files alongside these guides. Tests verify behavior at the corresponding
+boundary; research notes and historical review records are not runtime contracts.

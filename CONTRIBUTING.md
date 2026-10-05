@@ -39,10 +39,11 @@ Run these checks before opening a pull request:
 
 ```sh
 npm run check:architecture
+npm run check:docs
 npm run build
 ```
 
-CI runs those two checks plus module and web tests for pushes and pull requests.
+CI runs those checks plus module and web tests for pushes and pull requests.
 Run the smallest additional test group that covers the change. Module and web tests live in
 `tests/modules` and `tests/web`; runner lifecycle tests live in `tests/runner`;
 behavior crossing modules belongs in `tests/acceptance`. To run the standard
@@ -57,6 +58,31 @@ Runner and acceptance tests can start real processes, Bubblewrap, tmux, and
 loopback servers. If a host cannot provide those facilities, report the exact
 failed test and environment limit in the pull request. Do not weaken a test to
 make an unsupported environment pass.
+
+## Documentation and internal research
+
+`docs/` and source READMEs are maintained project documentation published with
+GitHub. They explain setup, current behavior, ownership, contracts, and reviewed
+specifications. A specification that includes planned work must identify what is
+implemented and what remains proposed; it must not present a plan as a capability.
+
+Keep exploratory research, competitor comparisons, task plans, agent assignments,
+review logs, screenshots, and customer investigations in the ignored root
+`research/` directory. Do not put them in `docs/`, source READMEs, or a tracked
+archive, and do not force-add them. Local notes are not included in clones; retain
+an independent backup if needed. Use `research/` for new notes rather than the
+legacy `docs/research/` location.
+
+Promote useful conclusions by writing a focused, reviewed contract or decision
+in `docs/` or the owning source README. Remove implementation instructions,
+transient commit/PR status, local paths, and customer evidence from that public
+version. Public documentation must stand on its own without linking to ignored
+notes, `AGENTS.md`, or `CONTEXT.md`. Keep example skills and scripts in `docs/examples/`
+when they are maintained, reusable resources.
+
+Run `npm run check:docs` before committing. It checks public Markdown links and
+rejects internal note locations in the Git index, including force-added notes.
+Review `git diff --cached --name-status` before pushing.
 
 ## Open a pull request
 

@@ -8,6 +8,11 @@ scope and fail with actionable file paths.
 `check-architecture.mjs` verifies dependency direction, public module and feature
 imports, runtime command type/validator parity, feature stylesheet ownership,
 control-plane responsibility seams, cycles, and strategic documentation.
+`check-docs.mjs` checks published Markdown links and rejects links to ignored
+local material. It also checks the Git index for internal research and guidance,
+including files added with `git add -f`. It checks local file targets, not remote
+URLs or heading fragments. New Markdown under `docs/` is included before staging.
+
 Prettier scripts cover the TypeScript/React client and shared contracts; formatting
 is a readability gate, not a substitute for cohesive modules.
 

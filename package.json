@@ -8,6 +8,7 @@
   },
   "scripts": {
     "check:architecture": "node scripts/check-architecture.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "format": "prettier --write apps/web/src packages/contracts/src",
     "format:check": "prettier --check apps/web/src packages/contracts/src",
     "dev": "vite",
