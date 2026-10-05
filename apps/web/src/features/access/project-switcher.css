@@ -22,6 +22,7 @@
   width: min(300px, 80vw);
   padding: 8px;
   background: var(--surface);
+  color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 12px 30px #17271b22;

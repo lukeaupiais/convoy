@@ -611,3 +611,77 @@
     font-size: 16px;
   }
 }
+
+/* Tickets share the board’s solid maritime palette. */
+body:has(.board-studio) .ticket-detail .ticket-workspace-grid {
+  background: #15242e;
+  border-color: #384e58;
+}
+body:has(.board-studio) .ticket-detail .ticket-context {
+  background: #20313b;
+  border-color: #384e58;
+}
+body:has(.board-studio)
+  .ticket-detail
+  :is(
+    .ticket-status,
+    .ticket-message,
+    .ticket-related-row,
+    .ticket-description-editor > .artifact-markdown
+  ) {
+  background: #293e47;
+  color: #d3dcd8;
+  border-color: #526872;
+  border-radius: 0;
+}
+body:has(.board-studio) .ticket-detail .ticket-status {
+  color: #8db9ac;
+  border-color: #526872;
+}
+body:has(.board-studio)
+  .ticket-detail
+  :is(
+    .ticket-context-facts dd,
+    .ticket-facts dd,
+    .artifact-markdown,
+    .ticket-context-more > summary,
+    .ticket-record-content h3,
+    .ticket-workspace-heading h2
+  ) {
+  color: #e8e7df;
+}
+body:has(.board-studio)
+  .ticket-detail
+  :is(
+    .ticket-context-facts dt,
+    .ticket-facts dt,
+    .ticket-context h3,
+    .ticket-empty,
+    .ticket-thread-selector,
+    .ticket-reply-destination
+  ) {
+  color: #a6b6bb;
+}
+body:has(.board-studio) .ticket-detail .artifact-markdown {
+  font-family: var(--font-system);
+}
+body:has(.board-studio)
+  .ticket-detail
+  :is(.ticket-context-action, .ticket-description-toggle, .ticket-record-link) {
+  color: #8db9ac;
+}
+body:has(.board-studio) .ticket-detail :is(.detail-top button, .secondary) {
+  color: #e8e7df;
+  background: #293e47;
+  border-color: #526872;
+  border-radius: 0;
+  box-shadow: none;
+}
+body:has(.board-studio) .ticket-detail .ticket-description-collapsed::after {
+  background: linear-gradient(transparent, #15242e);
+}
+body:has(.board-studio)
+  .ticket-detail
+  :is(.ticket-context-more, .ticket-context-group, .detail-top) {
+  border-color: #384e58;
+}
