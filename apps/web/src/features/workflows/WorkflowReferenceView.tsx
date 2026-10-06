@@ -26,7 +26,7 @@ export function WorkflowReferenceView({
     <section className="workflow-reference">
       <header>
         <h2 ref={heading} tabIndex={-1}>
-          {workflow ? `${workflow.name} · v${workflow.version}` : 'Workflow version unavailable'}
+          {workflow?.name ?? 'Workflow unavailable'}
         </h2>
         <button type="button" onClick={onBack}>
           Workflows
@@ -41,10 +41,7 @@ export function WorkflowReferenceView({
                   <h3>{rule.name}</h3>
                   {reference.ruleRevision !== undefined &&
                     reference.ruleRevision !== rule.revision && (
-                      <p>
-                        Automation changed since inspection (previously revision{' '}
-                        {reference.ruleRevision}).
-                      </p>
+                      <p>Automation changed since inspection.</p>
                     )}
                   <p>
                     {state.projects.find((p) => p.id === rule.projectId)?.name}
@@ -60,12 +57,14 @@ export function WorkflowReferenceView({
                       If {condition.field} = {String(condition.value)}
                     </p>
                   ))}
+                  <p>{rule.enabled ? 'Enabled' : 'Disabled'}</p>
                   <p>
-                    Revision {rule.revision} · {rule.enabled ? 'Enabled' : 'Disabled'}
-                  </p>
-                  <p>
-                    {rule.when.event.replaceAll('_', ' ')} → {rule.then.workflowId} v
-                    {rule.then.workflowVersion}
+                    {rule.when.event.replaceAll('_', ' ')} →{' '}
+                    {state.workflows.find(
+                      (value) =>
+                        value.id === rule.then.workflowId &&
+                        value.version === rule.then.workflowVersion,
+                    )?.name ?? 'Workflow unavailable'}
                   </p>
                   {(rule.then.workflowId !== workflow.id ||
                     rule.then.workflowVersion !== workflow.version) && (

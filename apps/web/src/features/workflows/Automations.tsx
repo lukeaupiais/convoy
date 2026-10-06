@@ -5,6 +5,7 @@ import {
   type AutomationRule,
   type WorkflowJsonSchema,
 } from '../../shared/api/runtime';
+import { workflowSelectionOptions, publishedWorkflowsForProject } from './workflow-runs';
 import { parseActivityJsonEdit } from './workflow-authoring';
 type Input = Omit<AutomationRule, 'id' | 'organizationId' | 'principal' | 'revision'> & {
   id?: string;
@@ -48,7 +49,15 @@ function compatibleEventField(
       (field.type === 'enum' && field.values?.every((value) => schema.enum?.includes(value))))
   );
 }
-export function Automations({ state }: { state: RuntimeState }) {
+export function Automations({
+  state,
+  projectId,
+  workflowId,
+}: {
+  state: RuntimeState;
+  projectId?: string;
+  workflowId?: string;
+}) {
   const [editing, setEditing] = useState<Input | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft | null>(null);
   const [revision, setRevision] = useState(0);
@@ -57,6 +66,10 @@ export function Automations({ state }: { state: RuntimeState }) {
   const [jsonInputDrafts, setJsonInputDrafts] = useState<Record<string, string>>({});
   const [jsonInputErrors, setJsonInputErrors] = useState<Record<string, string>>({});
   const capabilities = state.automationCapabilities;
+  const defaultDefinition =
+    projectId && workflowId
+      ? publishedWorkflowsForProject(state, projectId).find((value) => value.id === workflowId)
+      : undefined;
   const project = state.projects.find((p) => p.id === editing?.projectId);
   const event = capabilities?.events.find((e) => e.id === editing?.when.event);
   const eventRef = event?.descriptorId ?? event?.id;
@@ -120,10 +133,14 @@ export function Automations({ state }: { state: RuntimeState }) {
           }
         : {
             name: '',
-            projectId: state.projects[0]?.id ?? '',
+            projectId: projectId ?? state.projects[0]?.id ?? '',
             when: { event: '' },
             if: [],
-            then: { action: 'start_workflow', workflowId: '', workflowVersion: 1 },
+            then: {
+              action: 'start_workflow',
+              workflowId: defaultDefinition?.id ?? '',
+              workflowVersion: defaultDefinition?.version ?? 1,
+            },
             enabled: false,
           },
     );
@@ -196,7 +213,6 @@ export function Automations({ state }: { state: RuntimeState }) {
   return (
     <section className="workflow-start-rules" aria-label="Automations">
       <header>
-        <h2>Automations</h2>
         <button onClick={() => begin()} disabled={!capabilities?.events.length}>
           New automation
         </button>
@@ -207,9 +223,9 @@ export function Automations({ state }: { state: RuntimeState }) {
             setJsonInputErrors({});
             setScheduleDraft({
               name: '',
-              projectId: state.projects[0]?.id ?? '',
-              workflowId: '',
-              workflowVersion: 1,
+              projectId: projectId ?? state.projects[0]?.id ?? '',
+              workflowId: defaultDefinition?.id ?? '',
+              workflowVersion: defaultDefinition?.version ?? 1,
               runInput: {},
               kind: 'interval',
               everySeconds: 3600,
@@ -227,32 +243,44 @@ export function Automations({ state }: { state: RuntimeState }) {
           New schedule
         </button>
       </header>
-      {(state.workflowSchedules?.items ?? []).map((schedule) => (
-        <div key={`${schedule.id}:${schedule.revision}`}>
-          <strong>{schedule.name}</strong>
-          <span>
-            {' '}
-            ·{' '}
-            {schedule.enabled
-              ? `Next ${new Date(schedule.nextFireAt).toLocaleString()}`
-              : 'Disabled'}
-          </span>
-        </div>
-      ))}
-      {(state.automations ?? []).map((rule) => (
-        <div key={rule.id}>
-          <button onClick={() => begin(rule)}>{rule.name}</button>
-          <span>
-            {capabilities?.events.find((e) => e.id === rule.when.event)?.label ??
-              'Unavailable event'}{' '}
-            →{' '}
-            {state.workflows.find(
-              (w) => w.id === rule.then.workflowId && w.version === rule.then.workflowVersion,
-            )?.name ?? 'Unavailable workflow'}
-          </span>
-          {!rule.enabled && <small>Disabled</small>}
-        </div>
-      ))}
+      {(state.workflowSchedules?.items ?? [])
+        .filter(
+          (schedule) =>
+            (!projectId || schedule.projectId === projectId) &&
+            (!workflowId || schedule.workflowId === workflowId),
+        )
+        .map((schedule) => (
+          <div key={`${schedule.id}:${schedule.revision}`}>
+            <strong>{schedule.name}</strong>
+            <span>
+              {' '}
+              ·{' '}
+              {schedule.enabled
+                ? `Next ${new Date(schedule.nextFireAt).toLocaleString()}`
+                : 'Disabled'}
+            </span>
+          </div>
+        ))}
+      {(state.automations ?? [])
+        .filter(
+          (rule) =>
+            (!projectId || rule.projectId === projectId) &&
+            (!workflowId || rule.then.workflowId === workflowId),
+        )
+        .map((rule) => (
+          <div key={rule.id}>
+            <button onClick={() => begin(rule)}>{rule.name}</button>
+            <span>
+              {capabilities?.events.find((e) => e.id === rule.when.event)?.label ??
+                'Unavailable event'}{' '}
+              →{' '}
+              {state.workflows.find(
+                (w) => w.id === rule.then.workflowId && w.version === rule.then.workflowVersion,
+              )?.name ?? 'Unavailable workflow'}
+            </span>
+            {!rule.enabled && <small>Disabled</small>}
+          </div>
+        ))}
       {editing && (
         <form
           onSubmit={(e) => {
@@ -268,34 +296,38 @@ export function Automations({ state }: { state: RuntimeState }) {
               required
             />
           </label>
-          <label>
-            Project
-            <select
-              value={editing.projectId}
-              disabled={Boolean(editing.id)}
-              onChange={(e) => {
-                setJsonInputDrafts({});
-                setJsonInputErrors({});
-                setEditing({
-                  ...editing,
-                  projectId: e.target.value,
-                  when: { event: editing.when.event },
-                  then: {
-                    action: 'start_workflow',
-                    workflowId: '',
-                    workflowVersion: 1,
-                    inputBindings: {},
-                  },
-                });
-              }}
-            >
-              {state.projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!projectId && (
+            <label>
+              Project
+              <select
+                value={editing.projectId}
+                disabled={Boolean(projectId || editing.id)}
+                onChange={(e) => {
+                  setJsonInputDrafts({});
+                  setJsonInputErrors({});
+                  setEditing({
+                    ...editing,
+                    projectId: e.target.value,
+                    when: { event: editing.when.event },
+                    then: {
+                      action: 'start_workflow',
+                      workflowId: '',
+                      workflowVersion: 1,
+                      inputBindings: {},
+                    },
+                  });
+                }}
+              >
+                {state.projects
+                  .filter((value) => !projectId || value.id === projectId)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
           <label>
             When
             <select
@@ -647,9 +679,12 @@ export function Automations({ state }: { state: RuntimeState }) {
               }}
             >
               <option value={JSON.stringify(['', 1])}>Start workflow</option>
-              {workflows.map((w) => (
+              {workflowSelectionOptions(state, editing.projectId, {
+                id: editing.then.workflowId,
+                version: editing.then.workflowVersion,
+              }).map((w) => (
                 <option key={`${w.id}:${w.version}`} value={JSON.stringify([w.id, w.version])}>
-                  {w.name} · v{w.version}
+                  {w.name}
                 </option>
               ))}
             </select>
@@ -865,7 +900,7 @@ export function Automations({ state }: { state: RuntimeState }) {
             >
               <option value="reject">Reject while active</option>
               <option value="hold">Hold while active</option>
-              <option value="independent">Allow independent runs</option>
+              <option value="independent">Allow concurrent runs</option>
             </select>
           </label>
           {editing.concurrency?.policy === 'independent' && (
@@ -953,28 +988,33 @@ export function Automations({ state }: { state: RuntimeState }) {
               onChange={(e) => setScheduleDraft({ ...scheduleDraft, name: e.target.value })}
             />
           </label>
-          <label>
-            Project
-            <select
-              value={scheduleDraft.projectId}
-              onChange={(e) => {
-                setJsonInputDrafts({});
-                setJsonInputErrors({});
-                setScheduleDraft({
-                  ...scheduleDraft,
-                  projectId: e.target.value,
-                  workflowId: '',
-                  runInput: {},
-                });
-              }}
-            >
-              {state.projects.map((value) => (
-                <option key={value.id} value={value.id}>
-                  {value.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!projectId && (
+            <label>
+              Project
+              <select
+                value={scheduleDraft.projectId}
+                disabled={Boolean(projectId)}
+                onChange={(e) => {
+                  setJsonInputDrafts({});
+                  setJsonInputErrors({});
+                  setScheduleDraft({
+                    ...scheduleDraft,
+                    projectId: e.target.value,
+                    workflowId: '',
+                    runInput: {},
+                  });
+                }}
+              >
+                {state.projects
+                  .filter((value) => !projectId || value.id === projectId)
+                  .map((value) => (
+                    <option key={value.id} value={value.id}>
+                      {value.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
           <label>
             Workflow
             <select
@@ -988,9 +1028,12 @@ export function Automations({ state }: { state: RuntimeState }) {
               }}
             >
               <option value={JSON.stringify(['', 1])}>Choose workflow</option>
-              {scheduleWorkflows.map((w) => (
+              {workflowSelectionOptions(state, scheduleDraft.projectId, {
+                id: scheduleDraft.workflowId,
+                version: scheduleDraft.workflowVersion,
+              }).map((w) => (
                 <option key={`${w.id}:${w.version}`} value={JSON.stringify([w.id, w.version])}>
-                  {w.name} · v{w.version}
+                  {w.name}
                 </option>
               ))}
             </select>

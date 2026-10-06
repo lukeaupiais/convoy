@@ -70,7 +70,7 @@ import {
   type PresentationBinding,
   type SessionMode,
 } from './workflow-codec';
-import { workflowsForProject } from './workflow-runs';
+import { workflowsForProject, workflowSelectionOptions } from './workflow-runs';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { WorkflowStages } from './WorkflowStages';
 import './workflow.css';
@@ -196,10 +196,12 @@ export function WorkflowEditor({
   state,
   initialWorkflowId,
   createNew = false,
+  onWorkflowChange,
 }: {
   state: RuntimeState;
   initialWorkflowId?: string;
   createNew?: boolean;
+  onWorkflowChange?: (id: string) => void;
 }) {
   const activeProjectId = state.activeContext?.projectId;
   const activeProject = state.projects.find((value) => value.id === activeProjectId);
@@ -259,6 +261,9 @@ export function WorkflowEditor({
         },
     ),
   );
+  useEffect(() => {
+    onWorkflowChange?.(draft.id);
+  }, [draft.id, onWorkflowChange]);
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const activeContextKeyRef = useRef(activeContextKey);
@@ -434,17 +439,10 @@ export function WorkflowEditor({
   const selectedEdge = draft.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const snapshot = JSON.stringify(toWorkflow(draft));
   const draftOptions = [
-    ...published.map((workflow) => ({
-      id: workflow.id,
-      label: `${workflow.name} · v${workflow.version ?? 0}`,
-      draft: false,
-    })),
-    ...Object.entries(draftRecords).map(([id, value]) => ({
-      id: `draft:${id}`,
-      sourceId: id,
-      label: `${String(value.workflow?.name ?? 'Untitled')} · draft`,
-      draft: true,
-    })),
+    ...published.map((workflow) => ({ id: workflow.id, label: workflow.name })),
+    ...Object.entries(draftRecords)
+      .filter(([id]) => !published.some((workflow) => workflow.id === id))
+      .map(([id, value]) => ({ id, label: String(value.workflow?.name ?? 'Untitled') })),
   ];
   function patchNode(id: string, patch: Partial<GraphNode>) {
     const currentNode = draft.nodes.find((node) => node.id === id);
@@ -692,7 +690,7 @@ export function WorkflowEditor({
       setSelectedId(null);
       setSelectedEdgeId(null);
       if (!next.nodes.length) setView('graph');
-      setMessage(stored ? 'Draft loaded.' : 'Published version loaded.');
+      setMessage('');
     }
   }
   function newWorkflow(template: WorkflowTemplate) {
@@ -820,7 +818,7 @@ export function WorkflowEditor({
       setSaveStatus('saved');
       setRevision(0);
       setPublishPending(false);
-      setMessage('Published.');
+      setMessage('Changes applied.');
     } catch (error) {
       if (
         activeContextKeyRef.current !== contextKey ||
@@ -911,10 +909,7 @@ export function WorkflowEditor({
             value={draft.id}
             onChange={(event) => load(event.target.value)}
           >
-            <option value={draft.id}>
-              {draft.name || 'Untitled'}
-              {draft.version ? ` · v${draft.version}` : ' · draft'}
-            </option>
+            <option value={draft.id}>{draft.name || 'Untitled'}</option>
             {draftOptions
               .filter((option) => option.id !== draft.id)
               .map((option) => (
@@ -934,6 +929,23 @@ export function WorkflowEditor({
           >
             <Plus size={17} />
           </button>
+        </div>
+        <div className="workflow-mode" role="group" aria-label="Editor view">
+          {(['stages', 'graph'] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              aria-pressed={view === mode}
+              className={view === mode ? 'selected' : ''}
+              onClick={() => {
+                setView(mode);
+                setSelectedEdgeId(null);
+                setConnecting(null);
+              }}
+            >
+              {mode === 'stages' ? 'Stages' : 'Graph'}
+            </button>
+          ))}
         </div>
         {saveStatus !== 'saved' && (
           <span className={`workflow-save-state ${saveStatus}`}>
@@ -964,7 +976,7 @@ export function WorkflowEditor({
             }
             onClick={() => void publish()}
           >
-            {working ? 'Publishing…' : 'Publish'}
+            {working ? 'Saving…' : 'Apply changes'}
           </button>
         </div>
       </header>
@@ -991,15 +1003,6 @@ export function WorkflowEditor({
             }}
           >
             <Settings2 size={14} /> Settings
-          </button>
-          <button
-            onClick={() => {
-              setView((value) => (value === 'graph' ? 'stages' : 'graph'));
-              setSelectedEdgeId(null);
-              setMoreMenuOpen(false);
-            }}
-          >
-            <GitBranch size={14} /> {view === 'graph' ? 'Stages' : 'Advanced graph'}
           </button>
           {view === 'stages' && (
             <button
@@ -2937,14 +2940,20 @@ function CompositionFields({
         {!value && <option value="">Choose published workflow</option>}
         {value && !candidates.some((item) => `${item.id}@${item.version}` === value) && (
           <option value={value} disabled>
-            {value} · unavailable
+            Workflow unavailable
           </option>
         )}
-        {candidates.map((item) => (
-          <option key={`${item.id}@${item.version}`} value={`${item.id}@${item.version}`}>
-            {item.name} · v{item.version}
-          </option>
-        ))}
+        {workflowSelectionOptions(
+          state,
+          project?.id ?? '',
+          candidates.find((item) => `${item.id}@${item.version}` === value),
+        )
+          .filter((item) => Boolean(item.resultSchema))
+          .map((item) => (
+            <option key={`${item.id}@${item.version}`} value={`${item.id}@${item.version}`}>
+              {item.name}
+            </option>
+          ))}
       </select>
     </label>
   );
@@ -3144,11 +3153,17 @@ function CompositionFields({
               onChange={(event) => setNewBranchWorkflow(event.target.value)}
             >
               <option value="">Choose published workflow</option>
-              {candidates.map((item) => (
-                <option key={`${item.id}@${item.version}`} value={`${item.id}@${item.version}`}>
-                  {item.name} · v{item.version}
-                </option>
-              ))}
+              {workflowSelectionOptions(
+                state,
+                project?.id ?? '',
+                candidates.find((item) => `${item.id}@${item.version}` === newBranchWorkflow),
+              )
+                .filter((item) => Boolean(item.resultSchema))
+                .map((item) => (
+                  <option key={`${item.id}@${item.version}`} value={`${item.id}@${item.version}`}>
+                    {item.name}
+                  </option>
+                ))}
             </select>
           </label>
           <button
@@ -3424,9 +3439,6 @@ function CompositionFields({
           {node.inputSchemaDigest && <code>Input {node.inputSchemaDigest}</code>}
           {node.resultSchemaDigest && <code>Result {node.resultSchemaDigest}</code>}
         </details>
-      )}
-      {(node.type === 'child' || node.type === 'map') && node.workflow && (
-        <span className="workflow-field-value">Pinned workflow v{node.workflow.version}</span>
       )}
     </details>
   );

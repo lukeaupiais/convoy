@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight } from 'lucide-react';
 import {
   command,
   type RuntimeState,
@@ -9,13 +10,15 @@ import { WorkflowHumanTaskPanel } from './WorkflowHumanTaskPanel';
 import { WorkflowRunComposition, WorkflowRunResultPanel } from './WorkflowRunComposition';
 import {
   independentWorkflowRuns,
+  acquireWorkflowRunControl,
   currentWorkflowRunDetail,
   runAllowsContinue,
   runControlEligibility,
   runIsTerminal,
   workflowForRun,
   workflowRunCommandTarget,
-  workflowsForProject,
+  publishedWorkflowsForProject,
+  workflowRunLabel,
 } from './workflow-runs';
 import './workflow-runs.css';
 
@@ -35,10 +38,20 @@ export function WorkflowRuns({
   state,
   projectId,
   initialRunId,
+  workflowId,
+  onOpenConversation,
+  onOpenRun,
+  startOpen,
+  closeStart,
 }: {
   state: RuntimeState;
   projectId?: string;
   initialRunId?: string;
+  workflowId?: string;
+  onOpenConversation?: (id: string) => void;
+  onOpenRun?: (id: string) => void;
+  startOpen: boolean;
+  closeStart: () => void;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState(projectId ?? '');
   const [selectedWorkflow, setSelectedWorkflow] = useState('');
@@ -144,15 +157,25 @@ export function WorkflowRuns({
 
   const project = state.projects.find((value) => value.id === selectedProjectId);
   const workflows = useMemo(
-    () => (project ? workflowsForProject(state, project.id) : []),
+    () => (project ? publishedWorkflowsForProject(state, project.id) : []),
     [project, state],
   );
   const availableRuns = useMemo(
-    () => independentWorkflowRuns(state, projectId),
-    [projectId, state.workflowRuns],
+    () =>
+      (workflowId
+        ? (state.workflowRuns ?? []).filter(
+            (run) => run.workflowId === workflowId && (!projectId || run.projectId === projectId),
+          )
+        : independentWorkflowRuns(state, projectId)
+      )
+        .slice()
+        .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt)),
+    [projectId, workflowId, state.workflowRuns],
   );
-  const selectedDefinition = workflows.find(
-    (workflow) => JSON.stringify([workflow.id, workflow.version]) === selectedWorkflow,
+  const selectedDefinition = workflows.find((workflow) =>
+    workflowId
+      ? workflow.id === workflowId
+      : JSON.stringify([workflow.id, workflow.version]) === selectedWorkflow,
   );
 
   useEffect(() => {
@@ -217,6 +240,7 @@ export function WorkflowRuns({
         runInput: runInputValues,
       });
       await selectRun(response.result.workflowRunId);
+      closeStart();
       setRefreshKey((value) => value + 1);
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : String(caught));
@@ -225,9 +249,7 @@ export function WorkflowRuns({
     }
   }
 
-  async function runCommand(
-    action: 'claimWorkflowRun' | 'releaseWorkflowRun' | 'continueWorkflowRun' | 'cancelWorkflowRun',
-  ) {
+  async function runCommand(action: 'continueWorkflowRun' | 'cancelWorkflowRun') {
     const target = workflowRunCommandTarget(
       selectedRunId,
       detailRef.current,
@@ -240,6 +262,7 @@ export function WorkflowRuns({
     setBusy(true);
     setActionError('');
     try {
+      await ensureControl();
       if (action === 'continueWorkflowRun') {
         if (!target.instance)
           throw new Error('This workflow run has no current activity instance.');
@@ -335,21 +358,13 @@ export function WorkflowRuns({
   const ownsRunControl = Boolean(
     currentDetail && control?.ownsControl && (currentDetail.lease?.expiresAt ?? 0) > Date.now(),
   );
-  const canAct = Boolean(
-    currentDetail &&
-    control?.ownsControl &&
-    (currentDetail.lease?.expiresAt ?? 0) > Date.now() &&
-    !busy,
-  );
+  const canAct = Boolean(currentDetail && control?.canClaim && !busy);
   const canReviewTask = Boolean(canAct && currentDetail?.humanTaskReviewerEligible === true);
   const canViewHumanDraft = Boolean(
-    ownsRunControl && currentDetail?.humanTaskReviewerEligible === true,
+    control?.canClaim && currentDetail?.humanTaskReviewerEligible === true,
   );
   canReviewTaskRef.current = Boolean(
-    currentDetail &&
-    control?.ownsControl &&
-    (currentDetail.lease?.expiresAt ?? 0) > Date.now() &&
-    currentDetail.humanTaskReviewerEligible === true,
+    currentDetail && control?.canClaim && currentDetail.humanTaskReviewerEligible === true,
   );
   const humanContextKey = JSON.stringify([
     selectedRunId,
@@ -361,6 +376,24 @@ export function WorkflowRuns({
     state.activeContext?.principal,
   ]);
   humanContextRef.current = humanContextKey;
+  async function ensureControl() {
+    if (!currentDetail) throw new Error('Select a workflow run.');
+    const contextKey = humanContextKey;
+    const fresh = await acquireWorkflowRunControl(
+      currentDetail,
+      () => (humanContextRef.current === contextKey ? detailRef.current : null),
+      (id) => command('claimWorkflowRun', { workflowRunId: id, label: 'Web workflows' }),
+      async (id) => (await command('getWorkflowRun', { workflowRunId: id })).result,
+    );
+    detailRef.current = fresh;
+    setDetail(fresh);
+    return fresh;
+  }
+  async function ensureReviewer() {
+    const fresh = await ensureControl();
+    if (fresh.humanTaskReviewerEligible !== true)
+      throw new Error('You are not eligible to review this workflow activity.');
+  }
   const error = actionError || refreshError;
   const currentResponse = currentDetail?.humanResponses
     ?.slice()
@@ -372,7 +405,7 @@ export function WorkflowRuns({
       !currentDetail ||
       currentDetail.status !== 'completed' ||
       !currentDetail.resultDigest ||
-      !ownsRunControl ||
+      !control?.canClaim ||
       currentDetail.workflowRunResultEligible !== true
     ) {
       terminalResultGeneration.current += 1;
@@ -381,7 +414,7 @@ export function WorkflowRuns({
       setTerminalResultBusy(false);
       return;
     }
-    if (terminalResult?.contextKey !== humanContextKey) {
+    if (terminalResult && terminalResult.contextKey !== humanContextKey) {
       terminalResultGeneration.current += 1;
       setTerminalResult(null);
     }
@@ -390,7 +423,7 @@ export function WorkflowRuns({
     currentDetail?.status,
     currentDetail?.resultDigest,
     currentDetail?.workflowRunResultEligible,
-    ownsRunControl,
+    control?.canClaim,
     humanContextKey,
     terminalResult?.contextKey,
   ]);
@@ -400,8 +433,8 @@ export function WorkflowRuns({
       !currentDetail ||
       currentDetail.status !== 'completed' ||
       !currentDetail.resultDigest ||
-      !ownsRunControl ||
-      currentDetail.workflowRunResultEligible !== true
+      !control?.canClaim ||
+      (ownsRunControl && currentDetail.workflowRunResultEligible !== true)
     )
       return;
     const runId = currentDetail.id;
@@ -411,6 +444,9 @@ export function WorkflowRuns({
     setTerminalResultBusy(true);
     setTerminalResultError('');
     try {
+      const fresh = await ensureControl();
+      if (fresh.workflowRunResultEligible !== true)
+        throw new Error('You cannot view this workflow result.');
       const response = await command('getWorkflowRunResult', { workflowRunId: runId });
       const latest = detailRef.current;
       if (
@@ -442,7 +478,7 @@ export function WorkflowRuns({
     const contextChanged = committedHumanContext.current !== humanContextKey;
     committedHumanContext.current = humanContextKey;
     const reviewerCanOperate = Boolean(
-      ownsRunControl && currentDetail?.humanTaskReviewerEligible === true,
+      control?.canClaim && currentDetail?.humanTaskReviewerEligible === true,
     );
     if (!contextChanged && reviewerCanOperate) return;
     humanMaterialGeneration.current += 1;
@@ -478,6 +514,7 @@ export function WorkflowRuns({
     setHumanReview(null);
     setHumanReviewContext('');
     try {
+      await ensureReviewer();
       const result = await command('submitWorkflowHumanResponse', {
         workflowRunId: currentDetail.id,
         instance: currentDetail.instance,
@@ -517,6 +554,7 @@ export function WorkflowRuns({
         reader.readAsDataURL(file);
       });
       const data = dataUrl.slice(dataUrl.indexOf(',') + 1);
+      await ensureReviewer();
       await command('captureWorkflowEvidence', {
         workflowRunId: currentDetail.id,
         instance: currentDetail.instance,
@@ -567,6 +605,7 @@ export function WorkflowRuns({
     setActionError('');
     setHumanReview(null);
     try {
+      await ensureReviewer();
       const response = await command('prepareWorkflowHumanReview', {
         workflowRunId: currentDetail.id,
         instance: currentDetail.instance,
@@ -605,6 +644,7 @@ export function WorkflowRuns({
     setBusy(true);
     setActionError('');
     try {
+      await ensureReviewer();
       await command('decideWorkflowRun', {
         workflowRunId: currentDetail.id,
         instance: currentDetail.instance,
@@ -637,6 +677,7 @@ export function WorkflowRuns({
     setBusy(true);
     setActionError('');
     try {
+      await ensureReviewer();
       const response = await command('readWorkflowEvidence', {
         workflowRunId: currentDetail.id,
         evidenceId,
@@ -659,118 +700,124 @@ export function WorkflowRuns({
 
   return (
     <section className="workflow-runs" aria-label="Workflow runs">
-      <header className="workflow-runs-header">
-        <h2>Runs</h2>
-        {state.workflowRunsTruncated && (
-          <span role="status">
-            Showing {state.workflowRuns?.length ?? 0} of {state.workflowRunsTotal ?? 0} workflow
-            runs ({availableRuns.length} independent).
-          </span>
-        )}
-      </header>
-
-      <form className="workflow-run-start" onSubmit={(event) => void startRun(event)}>
-        {!projectId && (
-          <label>
-            Project
-            <select
-              value={selectedProjectId}
-              onChange={(event) => {
-                setSelectedProjectId(event.target.value);
-                setSelectedWorkflow('');
-              }}
-            >
-              <option value="">Select project</option>
-              {state.projects.map((value) => (
-                <option key={value.id} value={value.id}>
-                  {value.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <label>
-          Workflow
-          <select
-            value={selectedWorkflow}
-            disabled={!project || workflows.length === 0}
-            onChange={(event) => setSelectedWorkflow(event.target.value)}
-          >
-            <option value="">Select workflow</option>
-            {workflows.map((value) => (
-              <option
-                key={`${value.id}:${value.version}`}
-                value={JSON.stringify([value.id, value.version])}
+      {state.workflowRunsTruncated && (
+        <p className="workflow-run-count">Older runs may be omitted.</p>
+      )}
+      {startOpen && (
+        <form
+          id="workflow-run-start"
+          className="workflow-run-start"
+          onSubmit={(event) => void startRun(event)}
+        >
+          {!projectId && (
+            <label>
+              Project
+              <select
+                value={selectedProjectId}
+                onChange={(event) => {
+                  setSelectedProjectId(event.target.value);
+                  setSelectedWorkflow('');
+                }}
               >
-                {value.name} · v{value.version}
-              </option>
-            ))}
-          </select>
-        </label>
-        {selectedDefinition?.runInputSchema?.type === 'object' &&
-          Object.entries(selectedDefinition.runInputSchema.properties ?? {}).map(
-            ([field, schema]) => (
-              <label key={field}>
-                {field}
-                {selectedDefinition.runInputSchema?.required?.includes(field) ? ' *' : ''}
-                {schema.enum ? (
-                  <select
-                    value={String(runInputValues[field] ?? '')}
-                    onChange={(event) =>
-                      setRunInputValues((value) => ({
-                        ...value,
-                        [field]: schema.enum?.find((item) => String(item) === event.target.value),
-                      }))
-                    }
-                  >
-                    <option value="">Select</option>
-                    {schema.enum.map((item) => (
-                      <option key={JSON.stringify(item)} value={String(item)}>
-                        {String(item)}
-                      </option>
-                    ))}
-                  </select>
-                ) : schema.type === 'boolean' ? (
-                  <input
-                    type="checkbox"
-                    checked={Boolean(runInputValues[field])}
-                    onChange={(event) =>
-                      setRunInputValues((value) => ({ ...value, [field]: event.target.checked }))
-                    }
-                  />
-                ) : (
-                  <input
-                    type={schema.type === 'number' || schema.type === 'integer' ? 'number' : 'text'}
-                    required={selectedDefinition.runInputSchema?.required?.includes(field)}
-                    value={String(runInputValues[field] ?? '')}
-                    onChange={(event) =>
-                      setRunInputValues((value) => ({
-                        ...value,
-                        [field]:
-                          event.target.value === ''
-                            ? ''
-                            : schema.type === 'number' || schema.type === 'integer'
-                              ? Number(event.target.value)
-                              : event.target.value,
-                      }))
-                    }
-                  />
-                )}
-              </label>
-            ),
+                <option value="">Select project</option>
+                {state.projects.map((value) => (
+                  <option key={value.id} value={value.id}>
+                    {value.name}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
-        <button className="primary" disabled={!project || !selectedDefinition || busy}>
-          Start run
-        </button>
-      </form>
-      {project && workflows.length === 0 && (
+          {!workflowId && (
+            <label>
+              Workflow
+              <select
+                value={selectedWorkflow}
+                disabled={!project || workflows.length === 0}
+                onChange={(event) => setSelectedWorkflow(event.target.value)}
+              >
+                <option value="">Select workflow</option>
+                {workflows.map((value) => (
+                  <option
+                    key={`${value.id}:${value.version}`}
+                    value={JSON.stringify([value.id, value.version])}
+                  >
+                    {value.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {selectedDefinition?.runInputSchema?.type === 'object' &&
+            Object.entries(selectedDefinition.runInputSchema.properties ?? {}).map(
+              ([field, schema]) => (
+                <label key={field}>
+                  {field}
+                  {selectedDefinition.runInputSchema?.required?.includes(field) ? ' *' : ''}
+                  {schema.enum ? (
+                    <select
+                      value={String(runInputValues[field] ?? '')}
+                      onChange={(event) =>
+                        setRunInputValues((value) => ({
+                          ...value,
+                          [field]: schema.enum?.find((item) => String(item) === event.target.value),
+                        }))
+                      }
+                    >
+                      <option value="">Select</option>
+                      {schema.enum.map((item) => (
+                        <option key={JSON.stringify(item)} value={String(item)}>
+                          {String(item)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : schema.type === 'boolean' ? (
+                    <input
+                      type="checkbox"
+                      checked={Boolean(runInputValues[field])}
+                      onChange={(event) =>
+                        setRunInputValues((value) => ({ ...value, [field]: event.target.checked }))
+                      }
+                    />
+                  ) : (
+                    <input
+                      type={
+                        schema.type === 'number' || schema.type === 'integer' ? 'number' : 'text'
+                      }
+                      required={selectedDefinition.runInputSchema?.required?.includes(field)}
+                      value={String(runInputValues[field] ?? '')}
+                      onChange={(event) =>
+                        setRunInputValues((value) => ({
+                          ...value,
+                          [field]:
+                            event.target.value === ''
+                              ? ''
+                              : schema.type === 'number' || schema.type === 'integer'
+                                ? Number(event.target.value)
+                                : event.target.value,
+                        }))
+                      }
+                    />
+                  )}
+                </label>
+              ),
+            )}
+          <button className="primary" disabled={!project || !selectedDefinition || busy}>
+            Start run
+          </button>
+          <button type="button" onClick={closeStart}>
+            Cancel
+          </button>
+        </form>
+      )}
+      {startOpen && project && workflows.length === 0 && (
         <p role="status">No published workflows are available for this project.</p>
       )}
 
-      <div className="workflow-runs-layout">
-        <nav className="workflow-run-list" aria-label="Independent workflow runs">
+      <div className={`workflow-runs-layout ${currentDetail ? 'has-detail' : 'is-list'}`}>
+        <nav className="workflow-run-list" aria-label="Workflow runs">
           {availableRuns.length === 0 ? (
-            <p>No independent runs.</p>
+            <p>No runs yet.</p>
           ) : (
             availableRuns.map((run) => {
               const definition = workflowForRun(run, state.workflows);
@@ -780,16 +827,38 @@ export function WorkflowRuns({
                   key={run.id}
                   className={run.id === selectedRunId ? 'is-selected' : ''}
                   aria-pressed={run.id === selectedRunId}
-                  onClick={() => void selectRun(run.id)}
+                  onClick={() => {
+                    if (run.independent) void selectRun(run.id);
+                    else {
+                      const session = state.sessions.find((value) => value.id === run.sessionId);
+                      if (session) onOpenConversation?.(session.conversationId ?? session.id);
+                    }
+                  }}
+                  disabled={
+                    !run.independent &&
+                    (!onOpenConversation ||
+                      !state.sessions.some((value) => value.id === run.sessionId))
+                  }
+                  aria-label={`${run.independent ? 'Open run' : 'Open chat'} from ${recordedAt(run.startedAt)}`}
                 >
                   <strong>
-                    {definition?.name ?? run.workflowId} · v{run.workflowVersion}
+                    {workflowId ? recordedAt(run.startedAt) : (definition?.name ?? 'Workflow run')}
                   </strong>
-                  <span>{run.status.replaceAll('_', ' ')}</span>
-                  <small>
-                    {state.projects.find((value) => value.id === run.projectId)?.name ??
-                      run.projectId}
+                  {run.id !== selectedRunId && (
+                    <span className={`workflow-run-state is-${run.status}`}>
+                      {workflowRunLabel(run.status)}
+                    </span>
+                  )}
+                  <small className="workflow-run-destination">
+                    {run.independent ? 'View run' : 'Open chat'}
+                    <ArrowRight size={14} aria-hidden="true" />
                   </small>
+                  {!projectId && (
+                    <small>
+                      {state.projects.find((value) => value.id === run.projectId)?.name ??
+                        run.projectId}
+                    </small>
+                  )}
                 </button>
               );
             })
@@ -801,30 +870,16 @@ export function WorkflowRuns({
             <header>
               <div>
                 <h3>
-                  {workflow?.name ?? currentDetail.workflowId} · v{currentDetail.workflowVersion}
+                  {workflowId
+                    ? (currentNode?.name ?? 'Result')
+                    : (workflow?.name ?? 'Workflow run')}
                 </h3>
-                <span role="status">{currentDetail.status.replaceAll('_', ' ')}</span>
+                <span role="status">{workflowRunLabel(currentDetail.status)}</span>
+                {!workflowId && currentNode && (
+                  <p className="workflow-current-step">{currentNode.name}</p>
+                )}
               </div>
               <div className="workflow-run-controls">
-                {control?.ownsControl ? (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() => void runCommand('releaseWorkflowRun')}
-                  >
-                    Release control
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy || !control?.canClaim}
-                    onClick={() => void runCommand('claimWorkflowRun')}
-                  >
-                    Claim control
-                  </button>
-                )}
                 {runAllowsContinue(currentDetail.status) && currentDetail.instance && (
                   <button
                     type="button"
@@ -851,60 +906,17 @@ export function WorkflowRuns({
             {control?.controlledElsewhere && currentDetail.lease && (
               <p role="status">Controlled by {currentDetail.lease.label}</p>
             )}
-            <dl className="workflow-run-facts">
-              <div>
-                <dt>Project</dt>
-                <dd>
-                  {state.projects.find((value) => value.id === currentDetail.projectId)?.name ??
-                    currentDetail.projectId}
-                </dd>
-              </div>
-              <div>
-                <dt>Current activity</dt>
-                <dd>{currentNode?.name ?? currentDetail.nodeId ?? 'Complete'}</dd>
-              </div>
-              {currentDetail.attempt && (
-                <div>
-                  <dt>Attempt</dt>
-                  <dd>
-                    {currentDetail.attempt.status} · {currentDetail.attempt.instance}
-                  </dd>
-                </div>
-              )}
-              <div>
-                <dt>Started</dt>
-                <dd>{recordedAt(currentDetail.startedAt)}</dd>
-              </div>
-              {currentDetail.lease && (
-                <div>
-                  <dt>Control lease</dt>
-                  <dd>
-                    {currentDetail.lease.label} · expires{' '}
-                    {recordedAt(new Date(currentDetail.lease.expiresAt).toISOString())}
-                  </dd>
-                </div>
-              )}
-            </dl>
             <WorkflowRunResultPanel
               run={currentDetail}
-              canRead={ownsRunControl && currentDetail.workflowRunResultEligible === true}
+              canRead={
+                Boolean(control?.canClaim) &&
+                (!ownsRunControl || currentDetail.workflowRunResultEligible === true)
+              }
               contextKey={humanContextKey}
-              loaded={terminalResult}
+              loaded={ownsRunControl ? terminalResult : null}
               busy={terminalResultBusy}
               error={terminalResultError}
               onRead={() => void loadTerminalResult()}
-            />
-            <WorkflowRunComposition
-              run={currentDetail}
-              selectedRunId={selectedRunId}
-              onOpenRun={(runId) => void selectRun(runId)}
-              nodeLabel={(nodeId) =>
-                workflow?.nodes.find((node) => node.id === nodeId)?.name ?? nodeId
-              }
-              onPage={(offset) => {
-                compositionPageGeneration.current += 1;
-                setCompositionOffset(offset);
-              }}
             />
             {currentDetail.status === 'waiting_gate' && currentNode?.kind === 'human' && (
               <section className="workflow-human-task" aria-label="Human task">
@@ -960,12 +972,13 @@ export function WorkflowRuns({
                     <button
                       type="button"
                       className="primary"
-                      disabled={!canAct || busy}
+                      disabled={!canReviewTask || busy}
                       onClick={async () => {
                         if (!currentDetail.instance) return;
                         setBusy(true);
                         setActionError('');
                         try {
+                          await ensureReviewer();
                           await command('decideWorkflowRun', {
                             workflowRunId: currentDetail.id,
                             instance: currentDetail.instance,
@@ -985,12 +998,13 @@ export function WorkflowRuns({
                     <button
                       type="button"
                       className="secondary"
-                      disabled={!canAct || busy}
+                      disabled={!canReviewTask || busy}
                       onClick={async () => {
                         if (!currentDetail.instance) return;
                         setBusy(true);
                         setActionError('');
                         try {
+                          await ensureReviewer();
                           await command('decideWorkflowRun', {
                             workflowRunId: currentDetail.id,
                             instance: currentDetail.instance,
@@ -1013,7 +1027,52 @@ export function WorkflowRuns({
                 )}
               </section>
             )}
-            <details className="workflow-run-history" open>
+            <details className="workflow-run-history">
+              <summary>Diagnostics</summary>
+              <dl className="workflow-run-facts">
+                <div>
+                  <dt>Project</dt>
+                  <dd>
+                    {state.projects.find((value) => value.id === currentDetail.projectId)?.name ??
+                      currentDetail.projectId}
+                  </dd>
+                </div>
+                {currentDetail.attempt && (
+                  <div>
+                    <dt>Attempt</dt>
+                    <dd>
+                      {currentDetail.attempt.status} · {currentDetail.attempt.instance}
+                    </dd>
+                  </div>
+                )}
+                <div>
+                  <dt>Started</dt>
+                  <dd>{recordedAt(currentDetail.startedAt)}</dd>
+                </div>
+                {currentDetail.lease && (
+                  <div>
+                    <dt>Control lease</dt>
+                    <dd>
+                      {currentDetail.lease.label} · expires{' '}
+                      {recordedAt(new Date(currentDetail.lease.expiresAt).toISOString())}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+              <WorkflowRunComposition
+                run={currentDetail}
+                selectedRunId={selectedRunId}
+                onOpenRun={(runId) => (onOpenRun ? onOpenRun(runId) : void selectRun(runId))}
+                nodeLabel={(nodeId) =>
+                  workflow?.nodes.find((node) => node.id === nodeId)?.name ?? 'Activity'
+                }
+                onPage={(offset) => {
+                  compositionPageGeneration.current += 1;
+                  setCompositionOffset(offset);
+                }}
+              />
+            </details>
+            <details className="workflow-run-history">
               <summary>Activity history</summary>
               <ol>
                 {currentDetail.history.map((entry, index) => (
@@ -1021,7 +1080,7 @@ export function WorkflowRuns({
                     <div>
                       <span>
                         {workflow?.nodes.find((node) => node.id === entry.nodeId)?.name ??
-                          entry.nodeId}
+                          'Activity'}
                       </span>
                       <span> · {entry.outcome}</span>
                       {entry.summary && <p>{entry.summary}</p>}
