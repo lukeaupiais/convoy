@@ -73,7 +73,6 @@ import {
 import { workflowsForProject } from './workflow-runs';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { WorkflowStages } from './WorkflowStages';
-import { Automations } from './Automations';
 import './workflow.css';
 import './workflow-theme.css';
 
@@ -193,7 +192,15 @@ function templateWorkflow(template: WorkflowTemplate): GraphWorkflow {
   });
 }
 
-export function WorkflowEditor({ state }: { state: RuntimeState }) {
+export function WorkflowEditor({
+  state,
+  initialWorkflowId,
+  createNew = false,
+}: {
+  state: RuntimeState;
+  initialWorkflowId?: string;
+  createNew?: boolean;
+}) {
   const activeProjectId = state.activeContext?.projectId;
   const activeProject = state.projects.find((value) => value.id === activeProjectId);
   const activeContextKey = JSON.stringify({
@@ -235,10 +242,12 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
     ),
   );
   const configuredPublished = published.find(
-    (workflow) => workflow.id === state.defaultWorkflowId,
+    (workflow) => workflow.id === (initialWorkflowId ?? state.defaultWorkflowId),
   ) as GraphWorkflow | undefined;
-  const initialSource = configuredPublished ?? undefined;
-  const initialRecord = initialSource ? draftRecords[initialSource.id] : undefined;
+  const initialSource = createNew ? undefined : configuredPublished;
+  const initialRecord = createNew
+    ? undefined
+    : draftRecords[initialWorkflowId ?? initialSource?.id ?? ''];
   const [draft, setDraft] = useState<GraphWorkflow>(() =>
     fromWorkflow(
       (initialRecord?.workflow as unknown as GraphWorkflow | undefined) ??
@@ -1407,7 +1416,6 @@ export function WorkflowEditor({ state }: { state: RuntimeState }) {
           {message}
         </p>
       )}
-      <Automations state={state} />
     </section>
   );
 }
@@ -2467,7 +2475,7 @@ function NodeInspector({
                   key={`${event.id}@${event.revision}`}
                   value={`${event.id}@${event.revision}`}
                 >
-              {event.label} · v{event.revision} · {event.tenantScope}
+                  {event.label} · v{event.revision} · {event.tenantScope}
                 </option>
               ))}
               {[...legacyTicketWaitEvents]

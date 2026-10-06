@@ -8,7 +8,7 @@ import '../shared/styles/minimal.css';
 import { ChatWorkspace } from '../features/chat/ChatWorkspace';
 import { NewChatDialog } from '../features/chat/ChatWorkspaceContext';
 import { RuntimeSessions } from '../features/sessions/RuntimeViews';
-import { liveModel } from '../features/sessions/sessionMonitor';
+import { AttentionMenu } from '../features/sessions';
 import { Wiki, parseWikiLocation, wikiHref } from '../features/knowledge';
 import { SettingsPage } from './SettingsPage';
 import {
@@ -398,7 +398,6 @@ function App() {
           setSelected(id);
         }}
         unpin={togglePin}
-        attentionCount={liveRuntime ? liveModel(liveRuntime).attentionCount : 0}
       />
       <main>
         <header className="topbar">
@@ -454,6 +453,12 @@ function App() {
             )}
           </div>
           <div className="top-actions">
+            <AttentionMenu state={liveRuntime} unavailable={!!runtimeError} loadGlobal={page === 'Project board'} open={(target) => {
+              if (target.kind === 'conversation') inspectConversation(target.id);
+              else if (target.kind === 'ticket') setSelected(target.id);
+              else if (target.id) openWorkflowRun(target.id);
+              else navigate('Workflows');
+            }} />
             {page === 'Chat' ? (
               <button className="primary" disabled={saving} onClick={() => void newChat()}>
                 <Plus size={15} />
@@ -594,6 +599,7 @@ function App() {
             workflowReference={workflowReference}
             workflowRunId={workflowRunId}
             onCloseReference={() => setWorkflowReference(undefined)}
+            onOpenConversation={inspectConversation}
           />
         )}
         {page === 'Runners' && <SettingsPage key="runner-settings" view="Runners" />}

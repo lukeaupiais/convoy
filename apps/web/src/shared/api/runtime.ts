@@ -46,11 +46,12 @@ export async function command<Action extends RuntimeAction>(
   return result;
 }
 
-export function useRuntime(taskId?: number, overview = false) {
+export function useRuntime(taskId?: number, overview = false, enabled = true) {
   const [state, setState] = useState<RuntimeState | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!enabled) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -80,7 +81,7 @@ export function useRuntime(taskId?: number, overview = false) {
       clearTimeout(timer);
       window.removeEventListener('convoy-context-changed', contextChanged);
     };
-  }, [taskId, overview]);
+  }, [taskId, overview, enabled]);
 
   return { state, error };
 }
