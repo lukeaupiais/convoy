@@ -14,6 +14,9 @@ const {
   independentWorkflowRuns,
   workflowsForProject,
   workflowOverview,
+  publishedWorkflowsForProject,
+  workflowSelectionOptions,
+  acquireWorkflowRunControl,
   workflowForRun,
   currentWorkflowRunDetail,
   workflowRunCommandTarget,
@@ -257,4 +260,135 @@ test('overview keeps definitions, drafts and latest runs inside the selected pro
     ['private', 'release'],
   );
   assert.deepEqual(workflowOverview(fixture, 'missing'), []);
+});
+
+test('automatic control acquisition pins the selected activity and stops on conflicts', async () => {
+  const run = {
+    id: 'inventory-run',
+    projectId: 'inventory',
+    independent: true,
+    instance: 'count-1',
+    nodeId: 'count',
+    lease: null,
+  };
+  const owned = { ...run, lease: { expiresAt: Date.now() + 60000, ownedByCurrentCaller: true } };
+  const calls = [];
+  const result = await acquireWorkflowRunControl(
+    run,
+    () => run,
+    async (id) => calls.push(['claim', id]),
+    async (id) => {
+      calls.push(['read', id]);
+      return owned;
+    },
+  );
+  assert.equal(result, owned);
+  assert.deepEqual(calls, [
+    ['claim', run.id],
+    ['read', run.id],
+  ]);
+  assert.equal(
+    await acquireWorkflowRunControl(
+      owned,
+      () => owned,
+      async () => assert.fail('already owned'),
+      async () => assert.fail('already owned'),
+    ),
+    owned,
+  );
+  await assert.rejects(
+    acquireWorkflowRunControl(
+      run,
+      () => run,
+      async () => {
+        throw new Error('Lease conflict');
+      },
+      async () => assert.fail('must not read'),
+    ),
+    /Lease conflict/,
+  );
+  await assert.rejects(
+    acquireWorkflowRunControl(
+      run,
+      () => ({ ...owned, lease: { ...owned.lease, ownedByCurrentCaller: false } }),
+      async () => assert.fail('must not claim'),
+      async () => assert.fail('must not read'),
+    ),
+    /controlled elsewhere/,
+  );
+  await assert.rejects(
+    acquireWorkflowRunControl(
+      run,
+      () => run,
+      async () => {},
+      async () => ({ ...owned, instance: 'count-2' }),
+    ),
+    /activity changed/,
+  );
+  let current = run;
+  await assert.rejects(
+    acquireWorkflowRunControl(
+      run,
+      () => current,
+      async () => {
+        current = null;
+      },
+      async () => owned,
+    ),
+    /activity changed/,
+  );
+});
+
+test('workflow choices show one definition per name while retaining existing exact selections', () => {
+  const fixture = {
+    projects: [
+      { id: 'inventory', organizationId: 'org' },
+      { id: 'publishing', organizationId: 'other' },
+    ],
+    workflows: [
+      {
+        id: 'count',
+        name: 'Count inventory',
+        organizationId: 'org',
+        projectId: 'inventory',
+        version: 1,
+      },
+      {
+        id: 'count',
+        name: 'Count inventory',
+        organizationId: 'org',
+        projectId: 'inventory',
+        version: 3,
+      },
+      { id: 'count', name: 'Organization count', organizationId: 'org', version: 9 },
+      {
+        id: 'release',
+        name: 'Release article',
+        organizationId: 'other',
+        projectId: 'publishing',
+        version: 2,
+      },
+    ],
+  };
+  assert.deepEqual(
+    publishedWorkflowsForProject(fixture, 'inventory').map((value) => [value.id, value.version]),
+    [['count', 3]],
+  );
+  assert.deepEqual(
+    workflowSelectionOptions(fixture, 'inventory', { id: 'count', version: 1 }).map((value) => [
+      value.id,
+      value.version,
+    ]),
+    [['count', 1]],
+  );
+  assert.deepEqual(
+    publishedWorkflowsForProject(fixture, 'publishing').map((value) => value.id),
+    ['release'],
+  );
+  assert.deepEqual(
+    workflowSelectionOptions(fixture, 'publishing', { id: 'count', version: 1 }).map(
+      (value) => value.id,
+    ),
+    ['release'],
+  );
 });

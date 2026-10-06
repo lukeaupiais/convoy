@@ -22,9 +22,7 @@ export function workflowsForProject(state: RuntimeState, projectId: string) {
     );
 }
 
-export function workflowOverview(state: RuntimeState, projectId: string) {
-  const project = state.projects.find((value) => value.id === projectId);
-  if (!project) return [];
+export function publishedWorkflowsForProject(state: RuntimeState, projectId: string) {
   const definitions = new Map<string, WorkflowDefinition>();
   const rank = (value: WorkflowDefinition) => (value.projectId ? 3 : value.teamId ? 2 : 1);
   for (const definition of workflowsForProject(state, projectId)) {
@@ -37,6 +35,31 @@ export function workflowOverview(state: RuntimeState, projectId: string) {
       definitions.set(definition.id, definition);
     }
   }
+  return [...definitions.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// An existing rule keeps its exact pin until the user chooses another workflow.
+export function workflowSelectionOptions(
+  state: RuntimeState,
+  projectId: string,
+  selected?: { id: string; version?: number },
+) {
+  const pinned =
+    selected &&
+    workflowsForProject(state, projectId).find(
+      (value) => value.id === selected.id && value.version === selected.version,
+    );
+  return publishedWorkflowsForProject(state, projectId).map((value) =>
+    pinned?.id === value.id ? pinned : value,
+  );
+}
+
+export function workflowOverview(state: RuntimeState, projectId: string) {
+  const project = state.projects.find((value) => value.id === projectId);
+  if (!project) return [];
+  const definitions = new Map(
+    publishedWorkflowsForProject(state, projectId).map((value) => [value.id, value]),
+  );
   const drafts = Object.values(state.workflowDrafts ?? {}).filter(
     ({ workflow }) =>
       (workflow.organizationId ?? 'personal') === project.organizationId &&
@@ -58,6 +81,16 @@ export function workflowOverview(state: RuntimeState, projectId: string) {
         latestRun,
       };
     });
+}
+
+export function workflowRunLabel(status: string) {
+  const labels: Record<string, string> = {
+    waiting_gate: 'Waiting for review',
+    awaiting_continue: 'Ready to continue',
+    awaiting_submission: 'Waiting for submission',
+    waiting_event: 'Waiting for event',
+  };
+  return labels[status] ?? status.replaceAll('_', ' ');
 }
 
 export function workflowForRun(run: WorkflowRun, workflows: WorkflowDefinition[]) {
@@ -98,6 +131,34 @@ export function runControlEligibility(run: WorkflowRun, now = Date.now()) {
     canClaim: !leaseActive || ownsControl,
     controlledElsewhere: leaseActive && !ownsControl,
   };
+}
+
+export async function acquireWorkflowRunControl(
+  expected: WorkflowRun,
+  current: () => WorkflowRun | null,
+  claim: (id: string) => Promise<unknown>,
+  refresh: (id: string) => Promise<WorkflowRun>,
+) {
+  const matches = (run: WorkflowRun | null) =>
+    Boolean(
+      run &&
+      run.independent &&
+      run.id === expected.id &&
+      run.projectId === expected.projectId &&
+      run.instance === expected.instance &&
+      run.nodeId === expected.nodeId,
+    );
+  if (!matches(current())) throw new Error('The workflow activity changed. Review it again.');
+  if (runControlEligibility(current()!).ownsControl) return current()!;
+  if (!runControlEligibility(current()!).canClaim)
+    throw new Error('This workflow run is controlled elsewhere.');
+  await claim(expected.id);
+  const fresh = await refresh(expected.id);
+  if (!matches(current()) || !matches(fresh))
+    throw new Error('The workflow activity changed. Review it again.');
+  if (!runControlEligibility(fresh).ownsControl)
+    throw new Error('Unable to acquire workflow control.');
+  return fresh;
 }
 
 export function runAllowsContinue(status: string) {

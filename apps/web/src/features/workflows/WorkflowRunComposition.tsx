@@ -79,9 +79,7 @@ export function WorkflowRunComposition({
             {composition.slots.map((slot) => (
               <li key={slot.runId}>
                 <div>
-                  <strong>
-                    {slot.workflowId} · v{slot.workflowVersion}
-                  </strong>
+                  <strong>{slot.workflowId}</strong>
                   <span>
                     {slot.status.replaceAll('_', ' ')}
                     {slot.message ? ` · ${slot.message}` : ''}
@@ -116,7 +114,7 @@ export function WorkflowRunComposition({
                 <li key={`${slot.id}:${slot.runId}`}>
                   <div>
                     <strong>
-                      {slot.id} · {slot.workflowId} · v{slot.workflowVersion}
+                      {slot.id} · {slot.workflowId}
                     </strong>
                     <span>
                       {slot.trigger} · {slot.status.replaceAll('_', ' ')}

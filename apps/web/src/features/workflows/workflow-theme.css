@@ -1,55 +1,330 @@
-/* Early workstation canvas: squared frames and a sparse pixel grid. */
-.workflow-studio .workflow-studio-heading {
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--line);
+/* Solid workstation surfaces shared by stage and graph authoring. */
+.runtime-page .workflow-studio {
+  color-scheme: dark;
+  --wf-border: #344b57;
+  --wf-ink: #e8e7df;
+  --wf-muted: #a6b6bb;
+  color: var(--wf-ink);
+  background: #18252e;
 }
-.workflow-studio .workflow-canvas-viewport {
-  background-color: #203347;
-  background-image: radial-gradient(#8eaca858 1px, transparent 1px);
-  background-size: 12px 12px;
-}
-.workflow-studio
-  :is(
-    .graph-node,
-    .workflow-node,
-    .canvas-controls,
-    .node-palette,
-    .workflow-settings,
-    .workflow-toolbar,
-    .trigger-editor,
-    .live-evidence,
-    .node-inspector
-  ) {
-  background: var(--surface);
-  border: 1px solid #b8c5bd;
+.runtime-page .workflow-studio :is(button, input, select, textarea, details) {
   border-radius: 0;
-  box-shadow:
-    var(--raised),
-    1px 1px #72878350;
+  box-shadow: none;
 }
-.workflow-studio .graph-node-head {
-  background: #365264;
-  color: #fff;
+.runtime-page .workflow-studio :focus-visible {
+  outline: 2px solid #c7ac76;
+  outline-offset: -2px;
 }
-.workflow-studio .graph-node-head :is(strong, em, svg) {
-  color: #fff;
+.runtime-page .workflow-studio .workflow-studio-heading {
+  gap: 12px;
+  padding: 12px 20px;
+  background: #18252e;
+  border-bottom: 1px solid var(--wf-border);
+  flex-wrap: wrap;
 }
-.workflow-studio .graph-node-head em {
-  background: transparent;
+.runtime-page .workflow-studio .workflow-selector {
+  flex: 1;
+}
+.runtime-page .workflow-studio .workflow-selector select {
+  color: var(--wf-ink);
+  font-size: 14px;
+}
+.runtime-page .workflow-studio option {
+  color: var(--wf-ink);
+  background: #20313b;
+}
+.runtime-page .workflow-studio .workflow-toolbar {
+  margin-left: 0;
+  padding: 0;
   border: 0;
+  background: #18252e;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio .workflow-mode {
+  padding: 0;
+  border: 1px solid var(--wf-border);
+  border-radius: 0;
+  background: #18252e;
+}
+.runtime-page .workflow-studio .workflow-mode button {
+  min-height: 36px;
+  border-radius: 0;
+  color: var(--wf-muted);
+  background: #18252e;
+}
+.runtime-page .workflow-studio .workflow-mode button.selected {
+  color: var(--wf-ink);
+  background: #20313b;
+  box-shadow: inset 0 -2px #8fb8aa;
+}
+.runtime-page .workflow-studio .icon-button {
+  color: var(--wf-muted);
+  border-radius: 0;
+}
+.runtime-page .workflow-studio .icon-button:hover {
+  background: #20313b;
+}
+.runtime-page .workflow-studio .primary {
+  color: #18252e;
+  background: #c7ac76;
+  border: 1px solid #c7ac76;
+}
+.runtime-page .workflow-studio .secondary {
+  color: var(--wf-ink);
+  background: #20313b;
+  border: 1px solid var(--wf-border);
+}
+.runtime-page .workflow-studio .workflow-save-state {
+  color: #c7ac76;
+}
+.runtime-page .workflow-studio .workflow-save-state.error,
+.runtime-page .workflow-studio .danger,
+.runtime-page .workflow-studio .workflow-validation-error {
+  color: #e09b87;
+}
+.runtime-page
+  .workflow-studio
+  :is(.workflow-new-menu, .workflow-more-menu, .workflow-definition-settings) {
+  border: 1px solid #526b72;
+  border-radius: 0;
+  background: #20313b;
+  color: var(--wf-ink);
+  box-shadow: none;
+}
+.runtime-page .workflow-studio :is(.workflow-new-menu, .workflow-more-menu) button {
+  min-height: 40px;
+  color: var(--wf-ink);
+}
+.runtime-page .workflow-studio :is(.workflow-new-menu, .workflow-more-menu) button:hover {
+  background: #263b46;
+}
+.runtime-page .workflow-studio :is(.workflow-stage-shell, .workflow-canvas-shell) {
+  background: #18252e;
+}
+.runtime-page .workflow-studio .workflow-stage-editor {
+  padding: 28px 24px 48px;
+}
+.runtime-page .workflow-studio .workflow-stage-list {
+  width: min(760px, 100%);
+}
+.runtime-page .workflow-studio .workflow-stage-row {
+  min-height: 64px;
+  border: 1px solid var(--wf-border);
+  background: #20313b;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio .workflow-stage-row:hover {
+  border-color: #526b72;
+}
+.runtime-page .workflow-studio .workflow-stage-list > li.selected .workflow-stage-row {
+  border-color: #8fb8aa;
+  background: #263b46;
+  box-shadow: inset 3px 0 #8fb8aa;
+}
+.runtime-page .workflow-studio .workflow-stage-main {
+  padding: 14px 16px;
+  gap: 6px;
+  color: var(--wf-ink);
+}
+.runtime-page .workflow-studio .workflow-stage-main strong {
+  font-size: 14px;
+}
+.runtime-page .workflow-studio .workflow-stage-main > span:last-child,
+.runtime-page
+  .workflow-studio
+  .workflow-stage-list
+  > li.selected
+  .workflow-stage-main
+  > span:last-child {
+  color: var(--wf-muted);
+  font-size: 12px;
+}
+.runtime-page .workflow-studio .workflow-flow-node {
+  background: #8fb8aa;
+  border-color: #8fb8aa;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio .workflow-stage-insert {
+  min-height: 36px;
+}
+.runtime-page .workflow-studio .workflow-stage-insert > button {
+  background: #18252e;
+  color: var(--wf-muted);
+  border-color: #526b72;
+}
+.runtime-page .workflow-studio :is(.workflow-stage-types, .workflow-flow-branch) {
+  border: 1px solid var(--wf-border);
+  background: #20313b;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio .workflow-stage-types button,
+.runtime-page .workflow-studio .workflow-stage-move {
+  color: var(--wf-ink);
+}
+.runtime-page .workflow-studio .workflow-flow-branch > span {
+  color: #c7ac76;
+  border-color: var(--wf-border);
+}
+.runtime-page .workflow-studio .workflow-flow-branch strong {
+  color: var(--wf-muted);
+  border: 0;
+}
+.runtime-page .workflow-studio .workflow-canvas-viewport {
+  background-color: #18252e;
+  background-image: radial-gradient(#344b57 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.runtime-page .workflow-studio :is(.graph-node, .canvas-controls, .node-palette.open) {
+  background: #20313b;
+  color: var(--wf-ink);
+  border: 1px solid #526b72;
+  border-radius: 0;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio .graph-node {
+  border-left: 3px solid #8fb8aa;
+}
+.runtime-page .workflow-studio .graph-node.node-approval {
+  border-left-color: #c7ac76;
+}
+.runtime-page .workflow-studio .graph-node.node-branch {
+  border-left-color: #a999b9;
+}
+.runtime-page .workflow-studio .graph-node.node-check {
+  border-left-color: #83a7be;
+}
+.runtime-page .workflow-studio .graph-node-head {
+  background: #20313b;
+  color: var(--wf-muted);
+}
+.runtime-page .workflow-studio .graph-node-head em {
+  color: #8fb8aa;
+  background: #20313b;
+  border: 0;
+}
+.runtime-page .workflow-studio .graph-node:is(.selected, .live-current) {
+  outline-color: #c7ac76;
+}
+.runtime-page .workflow-studio .graph-node.live-visited {
+  background: #263b46;
+}
+.runtime-page
+  .workflow-studio
+  :is(.palette-toggle, .palette-node, .node-route-actions button, .canvas-controls button) {
+  color: var(--wf-ink);
+  background: #20313b;
+  border-radius: 0;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio :is(.palette-node, .palette-toggle, .canvas-controls button):hover {
+  background: #263b46;
+}
+.runtime-page .workflow-studio .node-palette.closed {
+  border: 0;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio .node-palette.open .palette-toggle {
+  background: #263b46;
+}
+.runtime-page .workflow-studio .workflow-edge-label {
+  fill: var(--wf-muted);
+  stroke: #18252e;
+}
+.runtime-page .workflow-studio .node-inspector {
+  background: #20313b;
+  color: var(--wf-ink);
+  border: 0;
+  border-left: 1px solid var(--wf-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+.runtime-page .workflow-studio .inspector-heading {
+  background: #20313b;
+  color: var(--wf-ink);
+  border-color: var(--wf-border);
+}
+.runtime-page .workflow-studio :is(.node-inspector label, .field-hint, .node-inspector summary) {
+  color: var(--wf-muted);
+}
+.runtime-page
+  .workflow-studio
+  :is(.node-inspector details, .inspector-actions, .workflow-presentation-binding) {
+  border-color: var(--wf-border);
+}
+.runtime-page .workflow-studio :is(input, select, textarea):not([type='checkbox']) {
+  color: var(--wf-ink);
+  border-color: #526b72;
+  background: #18252e;
+  border-radius: 0;
+}
+.runtime-page .workflow-studio .workflow-selector select {
+  background: #18252e;
+}
+@media (max-width: 760px) {
+  .runtime-page .workflow-studio .workflow-studio-heading {
+    display: flex;
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .runtime-page .workflow-studio .workflow-selector {
+    flex: 1 1 calc(100% - 52px);
+  }
+  .runtime-page .workflow-studio .workflow-selector select {
+    max-width: 100%;
+  }
+  .runtime-page .workflow-studio .workflow-mode {
+    margin-right: auto;
+  }
+  .runtime-page .workflow-studio .workflow-toolbar {
+    width: auto;
+  }
+  .runtime-page .workflow-studio .workflow-stage-editor {
+    padding: 20px 12px 48px;
+  }
+  .runtime-page .workflow-studio .workflow-definition-settings {
+    top: 116px;
+  }
+  .runtime-page .workflow-studio .node-inspector {
+    border-left: 0;
+    border-top: 1px solid #526b72;
+  }
 }
 
-.workflow-studio .workflow-studio-heading .workflow-toolbar {
-  border: 0;
-  background: transparent;
+.runtime-page .workflow-studio .primary:hover {
+  background: #d2b981;
+  border-color: #d2b981;
+}
+.runtime-page .workflow-studio .secondary:hover {
+  background: #263b46;
+  color: #e8e7df;
+  border-color: #526b72;
+}
+.runtime-page .workflow-studio .node-inspector :is(input, textarea, select) {
+  background: #18252e;
+  color: #e8e7df;
+  border-color: #526b72;
   box-shadow: none;
 }
 
-.workflow-workspace-nav {
-  border-color: var(--line);
+.runtime-page .workflow-studio :is(.trigger-editor, .workflow-message, .live-evidence) {
+  background: #20313b;
+  color: #e8e7df;
+  border-color: #344b57;
+  border-radius: 0;
+  box-shadow: none;
 }
-.workflow-workspace-nav button[aria-pressed='true'] {
-  color: #604795;
-  background: #eee8f8;
-  border-color: #d6c8eb;
+.runtime-page .workflow-studio .workflow-message.is-error {
+  color: #e09b87;
+  border-color: #e09b87;
+}
+.runtime-page .workflow-studio .node-inspector fieldset {
+  min-width: 0;
+  border: 1px solid #344b57;
+  background: #20313b;
+}
+.runtime-page .workflow-studio .workflow-stage-types button:hover,
+.runtime-page .workflow-studio .workflow-stage-move:hover,
+.runtime-page .workflow-studio .workflow-stage-insert > button:hover {
+  color: #e8e7df;
+  background: #263b46;
 }
