@@ -13,6 +13,7 @@ const js = ts.transpileModule(source, {
 const {
   independentWorkflowRuns,
   workflowsForProject,
+  workflowOverview,
   workflowForRun,
   currentWorkflowRunDetail,
   workflowRunCommandTarget,
@@ -195,4 +196,65 @@ test('run control display follows explicit lease ownership and terminal state', 
   assert.equal(runAllowsContinue('interrupted'), true);
   assert.equal(runAllowsContinue('waiting_gate'), false);
   assert.equal(runIsTerminal({ ...run, status: 'completed' }), true);
+});
+
+test('overview keeps definitions, drafts and latest runs inside the selected project', () => {
+  const definition = (id, projectId, version) => ({
+    id,
+    projectId,
+    organizationId: 'org',
+    name: id,
+    version,
+  });
+  const fixture = {
+    projects: [
+      { id: 'inventory', organizationId: 'org' },
+      { id: 'publishing', organizationId: 'org' },
+    ],
+    workflows: [
+      definition('restock', 'inventory', 1),
+      definition('restock', 'inventory', 2),
+      definition('release', 'publishing', 4),
+    ],
+    workflowDrafts: {
+      draft: { workflow: definition('count', 'inventory', 0) },
+      other: { workflow: definition('private', 'publishing', 0) },
+    },
+    workflowRuns: [
+      {
+        id: 'old',
+        workflowId: 'restock',
+        projectId: 'inventory',
+        startedAt: '2026-10-01',
+        status: 'completed',
+      },
+      {
+        id: 'latest',
+        workflowId: 'restock',
+        projectId: 'inventory',
+        startedAt: '2026-10-05',
+        status: 'waiting_gate',
+      },
+      {
+        id: 'foreign',
+        workflowId: 'restock',
+        projectId: 'publishing',
+        startedAt: '2026-10-06',
+        status: 'failed',
+      },
+    ],
+  };
+  const inventory = workflowOverview(fixture, 'inventory');
+  assert.deepEqual(
+    inventory.map((row) => row.workflow.id),
+    ['count', 'restock'],
+  );
+  assert.equal(inventory[0].draft, true);
+  assert.equal(inventory[1].workflow.version, 2);
+  assert.equal(inventory[1].latestRun.id, 'latest');
+  assert.deepEqual(
+    workflowOverview(fixture, 'publishing').map((row) => row.workflow.id),
+    ['private', 'release'],
+  );
+  assert.deepEqual(workflowOverview(fixture, 'missing'), []);
 });

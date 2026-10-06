@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import {
   LayoutGrid,
   MessageSquare,
-  Activity,
   Workflow,
   BookOpen,
   Folder,
@@ -25,7 +24,6 @@ type Props = {
   pins: { id: number; title: string }[];
   inspect: (id: number) => void;
   unpin: (id: number) => void;
-  attentionCount: number;
 };
 export function Sidebar({
   page,
@@ -37,7 +35,6 @@ export function Sidebar({
   pins,
   inspect,
   unpin,
-  attentionCount,
 }: Props) {
   const ref = useRef<HTMLElement>(null);
   const [small, setSmall] = useState(() => matchMedia('(max-width:800px)').matches);
@@ -74,7 +71,6 @@ export function Sidebar({
   const primary = [
     ['Project board', 'Projects', LayoutGrid],
     ['Chat', 'Chat', MessageSquare],
-    ['Sessions', 'Live', Activity],
     ['Workflows', 'Workflows', Workflow],
     ['Skills & instructions', 'Library', BookOpen],
     ['Wiki', 'Wiki', BookOpen],
@@ -126,14 +122,6 @@ export function Sidebar({
           >
             <Icon size={17} />
             <span className="nav-label-text">{label}</span>
-            {id === 'Sessions' && attentionCount > 0 && (
-              <span
-                className="sidebar-attention-count"
-                aria-label={`${attentionCount} need attention`}
-              >
-                {attentionCount}
-              </span>
-            )}
           </button>
         ))}
       </nav>

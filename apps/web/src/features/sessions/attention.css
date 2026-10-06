@@ -1,0 +1,103 @@
+.attention-menu {
+  position: relative;
+}
+.attention-menu > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 8px;
+  cursor: pointer;
+  list-style: none;
+  color: #a6b6bb;
+  border: 1px solid transparent;
+}
+.attention-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.attention-menu[open] > summary,
+.attention-menu > summary:hover {
+  color: #e8e7df;
+  border-color: #384e58;
+  background: #20313b;
+}
+.attention-count {
+  background: #c7ac76;
+  color: #15242e;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.attention-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(65dvh, 540px);
+  overflow: auto;
+  background: #20313b;
+  color: #e8e7df;
+  border: 1px solid #526872;
+  box-shadow: 3px 3px 0 #0c1820;
+  font-family: var(--font-system);
+  text-align: left;
+}
+.attention-panel > header {
+  padding: 14px;
+  border-bottom: 1px solid #384e58;
+  font-size: 13px;
+}
+.attention-panel > p {
+  margin: 0;
+  padding: 16px 14px;
+  color: #a6b6bb;
+  font-size: 12px;
+}
+.attention-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.attention-panel li + li {
+  border-top: 1px solid #384e58;
+}
+.app .topbar .attention-panel li > button {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  height: auto;
+  padding: 14px;
+  text-align: left;
+  white-space: normal;
+  color: #e8e7df;
+  background: #20313b;
+  border: 0;
+  border-radius: 0;
+}
+.app .topbar .attention-panel li > button:hover {
+  background: #293e47;
+}
+.attention-panel strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.attention-panel span {
+  color: #c7ac76;
+  font-size: 11px;
+}
+.attention-panel small {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #a6b6bb;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 680px) {
+  .attention-panel {
+    position: fixed;
+    top: 60px;
+    right: 12px;
+  }
+}

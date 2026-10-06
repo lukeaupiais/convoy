@@ -286,8 +286,7 @@ export function ActiveContext({
     <details className="active-context" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary aria-label={`Active context: ${model.authoritativeLabel}`}>
         <span>
-          <small>{model.isManaged ? 'Active context' : 'Local workspace'}</small>
-          <strong>{model.authoritativeLabel}</strong>
+          <strong>{model.projectName ?? model.organizationName ?? model.deploymentName}</strong>
         </span>
         <ChevronDown size={14} aria-hidden="true" />
       </summary>

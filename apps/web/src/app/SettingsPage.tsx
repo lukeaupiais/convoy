@@ -150,12 +150,14 @@ export function SettingsPage({
   workflowReference,
   workflowRunId,
   onCloseReference,
+  onOpenConversation,
 }: {
   view: SettingsView;
   projectId?: string;
   workflowReference?: WorkflowReference;
   workflowRunId?: string;
   onCloseReference?: () => void;
+  onOpenConversation?: (id: string) => void;
 }) {
   const { state, error } = useRuntime();
   const [message, setMessage] = useState('');
@@ -174,7 +176,7 @@ export function SettingsPage({
   }
   return (
     <section className="runtime-page">
-      <h1 className="sr-only">{view}</h1>
+      {view !== 'Workflows' && <h1 className="sr-only">{view}</h1>}
       {error && <p role="alert">{error}</p>}
       {message && <p role="status">{message}</p>}
       {view === 'Runners' && state && <EnvironmentSettings state={state} />}{' '}
@@ -190,7 +192,12 @@ export function SettingsPage({
             onBack={() => onCloseReference?.()}
           />
         ) : (
-          <WorkflowWorkspace state={state} projectId={projectId} workflowRunId={workflowRunId} />
+          <WorkflowWorkspace
+            state={state}
+            projectId={projectId}
+            workflowRunId={workflowRunId}
+            onOpenConversation={onOpenConversation}
+          />
         ))}
       {view === 'Skills & instructions' && state && (
         <CapabilityLibrary state={state} projectId={projectId}>

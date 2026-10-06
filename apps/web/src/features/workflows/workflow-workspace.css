@@ -26,13 +26,13 @@
   padding: 0.45rem 0.75rem;
   color: inherit;
   border: 1px solid transparent;
-  border-radius: 0.4rem;
-  background: transparent;
+  border-radius: 0;
+  background: #18252e;
 }
 
 .workflow-workspace-nav button[aria-pressed='true'] {
   border-color: var(--border, #343a46);
-  background: var(--surface-raised, #202530);
+  background: #263b46;
 }
 
 .workflow-workspace-panel {
@@ -64,4 +64,187 @@
   .workflow-workspace-nav {
     padding: 0.35rem 0.6rem;
   }
+}
+
+.workflow-workspace-nav {
+  align-items: center;
+  flex-wrap: wrap;
+  background: #18252e;
+}
+.workflow-workspace-nav button {
+  min-height: 40px;
+}
+.workflow-workspace-nav .workflow-create {
+  margin-left: auto;
+  background: #c7ac76;
+  color: #18252e;
+}
+.workflow-overview,
+.workflow-automations-pane {
+  width: 100%;
+  overflow: auto;
+  padding: 20px;
+  background: #18252e;
+}
+.workflow-overview-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.workflow-overview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 0.7fr) auto;
+  align-items: center;
+  gap: 24px;
+  padding: 18px 0;
+  border-bottom: 1px solid #344b57;
+}
+.workflow-overview-name,
+.workflow-overview-run {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.workflow-overview-name strong {
+  color: #e8e7df;
+  overflow-wrap: anywhere;
+}
+.workflow-overview-name span,
+.workflow-overview-run time {
+  color: #a6b6bb;
+  font-size: 12px;
+}
+.workflow-overview-status {
+  color: #a6b6bb;
+  text-transform: capitalize;
+  font-size: 13px;
+}
+.workflow-overview-status.is-failed {
+  color: #e09b87;
+}
+.workflow-overview-status.is-waiting {
+  color: #c7ac76;
+}
+.workflow-overview-actions {
+  display: flex;
+  gap: 8px;
+}
+.workflow-overview-actions button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid #344b57;
+  border-radius: 0;
+  background: #20313b;
+  color: #e8e7df;
+}
+.workflow-editor-pane {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.workflow-editor-pane[hidden] {
+  display: none;
+}
+.workflow-editor-pane > .workflow-studio {
+  height: 100%;
+}
+@media (max-width: 760px) {
+  .workflow-overview,
+  .workflow-automations-pane {
+    padding: 12px;
+  }
+  .workflow-overview-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+  .workflow-overview-run {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .workflow-overview-actions {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    flex-direction: column;
+  }
+}
+
+.workflow-workspace .workflow-workspace-nav button {
+  color: #a6b6bb;
+}
+.workflow-workspace .workflow-workspace-nav button[aria-pressed='true'] {
+  color: #e8e7df;
+  border-color: #526b72;
+}
+.workflow-workspace .workflow-workspace-nav .workflow-create {
+  color: #18252e;
+}
+.workflow-overview > p,
+.workflow-automations-pane {
+  color: #e8e7df;
+}
+.workflow-workspace-panel > .workflow-runs {
+  overflow: auto;
+  padding: 16px;
+  color: #e8e7df;
+  background: #18252e;
+}
+
+.workflow-automations-pane .workflow-start-rules {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #18252e;
+  color: #e8e7df;
+}
+.workflow-automations-pane .workflow-start-rules > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.workflow-automations-pane .workflow-start-rules h2 {
+  flex: 1 0 100%;
+  color: #e8e7df;
+  font-size: 14px;
+}
+.workflow-automations-pane .workflow-start-rules button {
+  min-height: 40px;
+  padding: 8px 12px;
+  color: #e8e7df;
+  background: #20313b;
+  border: 1px solid #344b57;
+  border-radius: 0;
+}
+.workflow-automations-pane .workflow-start-rules > div {
+  padding: 12px 0;
+  border-bottom: 1px solid #344b57;
+}
+.workflow-automations-pane .workflow-start-rules > div > span {
+  display: block;
+  margin-top: 6px;
+  color: #a6b6bb;
+  overflow-wrap: anywhere;
+}
+.workflow-automations-pane :is(input, select, textarea) {
+  background: #20313b;
+  color: #e8e7df;
+  border: 1px solid #344b57;
+  border-radius: 0;
+  max-width: 100%;
+}
+.workflow-workspace .workflow-run-list > button,
+.workflow-workspace .workflow-run-detail {
+  border-radius: 0;
+  background: #20313b;
+  border-color: #344b57;
+}
+.workflow-workspace .workflow-run-list > button.is-selected {
+  border-color: #c7ac76;
+  background: #263b46;
+}
+
+.runtime-page .workflow-workspace :is(h2, h3) {
+  color: #e8e7df;
 }

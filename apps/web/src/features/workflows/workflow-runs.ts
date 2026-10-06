@@ -22,6 +22,44 @@ export function workflowsForProject(state: RuntimeState, projectId: string) {
     );
 }
 
+export function workflowOverview(state: RuntimeState, projectId: string) {
+  const project = state.projects.find((value) => value.id === projectId);
+  if (!project) return [];
+  const definitions = new Map<string, WorkflowDefinition>();
+  const rank = (value: WorkflowDefinition) => (value.projectId ? 3 : value.teamId ? 2 : 1);
+  for (const definition of workflowsForProject(state, projectId)) {
+    const previous = definitions.get(definition.id);
+    if (
+      !previous ||
+      rank(definition) > rank(previous) ||
+      (rank(definition) === rank(previous) && (definition.version ?? 0) > (previous.version ?? 0))
+    ) {
+      definitions.set(definition.id, definition);
+    }
+  }
+  const drafts = Object.values(state.workflowDrafts ?? {}).filter(
+    ({ workflow }) =>
+      (workflow.organizationId ?? 'personal') === project.organizationId &&
+      (!workflow.projectId || workflow.projectId === projectId) &&
+      (!workflow.teamId || workflow.teamId === project.teamId),
+  );
+  for (const { workflow } of drafts) {
+    if (!definitions.has(workflow.id)) definitions.set(workflow.id, workflow);
+  }
+  return [...definitions.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((workflow) => {
+      const latestRun = (state.workflowRuns ?? [])
+        .filter((run) => run.projectId === projectId && run.workflowId === workflow.id)
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+      return {
+        workflow,
+        draft: drafts.some((record) => record.workflow.id === workflow.id),
+        latestRun,
+      };
+    });
+}
+
 export function workflowForRun(run: WorkflowRun, workflows: WorkflowDefinition[]) {
   return workflows.find(
     (workflow) => workflow.id === run.workflowId && workflow.version === run.workflowVersion,
