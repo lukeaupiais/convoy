@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { userInfo } from 'node:os';
 import {
   CommandSupervisor,
   TerminalSupervisor,
   driveCommand,
   executeRunner,
   runAgentLoop,
+  skillFiles,
+  watchSkillRoots,
 } from '../../../../../packages/runner/src/index.mjs';
 import { createWorkerDeployment } from './worker-deployment.mjs';
 import { connectWorker } from './worker-client.mjs';
@@ -306,9 +309,50 @@ export function createRunners({
       scheduleIdle(entry.key);
     }
   }
+  async function executionIdentity(runner, signal) {
+    if (closing) throw new Error('Runner adapter is closed.');
+    if (runner.kind === 'local') return `uid:${userInfo().uid}`;
+    if (runner.kind !== 'ssh') throw new Error('Unsupported runner.');
+    const entry = await remoteEntry(runner, 'identity', signal);
+    signal?.throwIfAborted();
+    if (!Number.isInteger(entry.hello.executionIdentity?.uid)) throw new Error('Worker must be rebuilt to report its execution identity.');
+    scheduleIdle(entry.key);
+    return `uid:${entry.hello.executionIdentity.uid}`;
+  }
+  async function executeSkillFiles(runner, request, signal) {
+    if (closing) throw new Error('Runner adapter is closed.');
+    if (runner.kind === 'local') return skillFiles(request, signal);
+    if (runner.kind !== 'ssh') throw new Error('Unsupported runner.');
+    const entry = await remoteEntry(runner, `skill-files:${request.root?.id ?? request.root?.path}`, signal);
+    if (!entry.hello.capabilities?.includes('skill-files-v1')) throw new Error('Worker must be rebuilt for skill filesystem support.');
+    const operationId = randomUUID(); entry.active++;
+    const abort = () => { void entry.worker.call('cancel_operation', { operationId }).catch(() => {}); };
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      signal?.throwIfAborted();
+      const result = await entry.worker.call('skill_files', { ...request, operationId });
+      if (signal?.aborted && ['save','provision'].includes(request.operation)) return { status: 'uncertain', requestId: request.requestId, message: 'Transport interrupted; inspect before retrying.' };
+      signal?.throwIfAborted(); return result;
+    } catch (error) {
+      if (['save','provision'].includes(request.operation)) return { status: 'uncertain', requestId: request.requestId, message: error.message };
+      throw error;
+    } finally { signal?.removeEventListener('abort', abort); entry.active--; scheduleIdle(entry.key); }
+  }
+  const skillWatchers = new Set();
+  function subscribeSkillRoots(runner, roots, onChange) {
+    let disposed = false;
+    const stopped = runner.kind === 'local' ? watchSkillRoots(roots, onChange) : (() => {
+      // Poll through the same SSH protocol, never inspect remote roots on the daemon host.
+      const timer = setInterval(() => { if (!disposed) void Promise.resolve(onChange()).catch(() => {}); }, 1500); timer.unref?.();
+      return () => clearInterval(timer);
+    })();
+    const dispose = () => { disposed = true; stopped(); skillWatchers.delete(dispose); };
+    skillWatchers.add(dispose); return dispose;
+  }
   async function close() {
     if (closing) return;
     closing = true;
+    for (const dispose of [...skillWatchers]) dispose();
     const stopping = [];
     for (const entry of local.values()) {
       clearTimeout(entry.idleTimer);
@@ -330,6 +374,9 @@ export function createRunners({
   }
   return {
     execute,
+    executionIdentity,
+    skillFiles: executeSkillFiles,
+    watchSkillRoots: subscribeSkillRoots,
     runAgent,
     close,
     backgroundCount: (runnerId) =>

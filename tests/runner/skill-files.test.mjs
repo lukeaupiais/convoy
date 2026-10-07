@@ -1,0 +1,153 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { skillFiles, skillPackageDigest, watchSkillRoots, createRpc } from '../../packages/runner/src/index.mjs';
+import { createRunners } from '../../apps/daemon/src/adapters/runners/runners.mjs';
+const file = (path, content, encoding = 'utf8') => ({ path, content, encoding });
+async function fixture(t) {
+  const directory = await mkdtemp(join(tmpdir(), 'convoy-skills-')); t.after(() => rm(directory, { recursive: true, force: true }));
+  const root = { id:'root', path:join(directory,'skills') }; await mkdir(root.path); Object.assign(root, await skillFiles({operation:'approve',root})); return {directory,root};
+}
+const content = [file('SKILL.md', '---\nname: review\ndescription: Review implementation\n---\nReview carefully.'),file('assets/icon.bin',Buffer.from([0,255,128,10]).toString('base64'),'base64')];
+const create = (root, relativePath = 'review', files = content) => skillFiles({operation:'save',root,relativePath,files,expectedDigest:null,requestId:'create'});
+test('inspection recovers a lost first-create reply at an approved missing root without creating files',async t=>{
+  const {directory}=await fixture(t);
+  const root={path:join(directory,'not-created','skills')};Object.assign(root,await skillFiles({operation:'approve',root}));
+  const request={root,relativePath:'review',requestId:'lost-create',expectedDigest:null};
+  assert.deepEqual(await skillFiles({...request,operation:'inspect'}),{status:'observed',current:null});
+  assert.deepEqual(await skillFiles({...request,operation:'reconcile'}),{status:'observed',current:null});
+  await assert.rejects(readFile(join(root.path,'review','SKILL.md')),error=>error.code==='ENOENT');
+  const elsewhere=join(directory,'elsewhere');await mkdir(elsewhere);await symlink(elsewhere,join(directory,'not-created'));
+  await assert.rejects(skillFiles({...request,operation:'inspect'}),/symlinks|canonical target/);
+});
+test('complete stable capture includes exact binary and BOM bytes; resource edits change digest', async t => {
+  const {root} = await fixture(t); const saved = await create(root); assert.equal(saved.status,'saved');
+  const snapshot = await skillFiles({operation:'capture',root,relativePath:'review'});
+  assert.equal(snapshot.digest, skillPackageDigest(content)); assert.deepEqual(snapshot.files,content.sort((a,b)=>a.path < b.path ? -1:1));
+  await writeFile(join(root.path,'review','SKILL.md'),'\ufeff'+content[0].content);
+  const bom = await skillFiles({operation:'capture',root,relativePath:'review'}); assert.ok(bom.files.find(f=>f.path==='SKILL.md').content.startsWith('\ufeff')); assert.notEqual(bom.digest,snapshot.digest);
+  await writeFile(join(root.path,'review','assets','icon.bin'),Buffer.from([0,255,128,11]));
+  assert.notEqual((await skillFiles({operation:'capture',root,relativePath:'review'})).digest,bom.digest);
+});
+test('conditional multi-file saves preserve outside edits and reject traversal and symlink escapes',async t=>{
+  const {root,directory} = await fixture(t); const original = await create(root);
+  await writeFile(join(root.path,'review','SKILL.md'),'outside edit');
+  const conflict = await skillFiles({operation:'save',root,relativePath:'review',expectedDigest:original.digest,requestId:'edit',files:content});
+  assert.equal(conflict.status,'conflict'); assert.equal(await readFile(join(root.path,'review','SKILL.md'),'utf8'),'outside edit');
+  await assert.rejects(create(root,'../escape'),/relative/);
+  const outside = join(directory,'outside'); await mkdir(outside); await symlink(outside,join(root.path,'escape'));
+  await assert.rejects(create(root,'escape/nested'),/escape|Symlink/); assert.deepEqual(await import('node:fs/promises').then(fs=>fs.readdir(outside)),[]);
+});
+test('discovery isolates invalid packages, bounds symlinks, deduplicates physical aliases and does not run scripts',async t=>{
+  const {root,directory} = await fixture(t); await create(root);
+  await mkdir(join(root.path,'bad')); await writeFile(join(root.path,'bad','SKILL.md'),Buffer.from([255]));
+  await symlink(join(root.path,'review'),join(root.path,'alias')); await symlink(directory,join(root.path,'escape'));
+  const observed = await skillFiles({operation:'discover',root:{...root,allowSymlinks:true}});
+  assert.equal(observed.packages.length,1); assert.ok(observed.diagnostics.some(d=>d.code==='invalid_metadata')); assert.ok(observed.diagnostics.some(d=>d.code==='denied'));
+});
+test('reconciliation detects newly created roots and resource-only changes within two seconds',async t=>{
+  const {root,directory} = await fixture(t); const missing = {id:'new',path:join(directory,'new-root')};
+  let observed = null;
+  const dispose = watchSkillRoots([missing],async()=>{ observed = await skillFiles({operation:'discover',root:missing}); }); t.after(dispose);
+  await create(missing,'inventory',[file('SKILL.md','Inventory analysis')]);
+  const deadline = Date.now()+2100;
+  while (!observed?.packages.length && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
+  assert.equal(observed.packages.length,1);
+  const before = observed.packages[0].digest;
+  await writeFile(join(missing.path,'inventory','reference.txt'),'New reference');
+  const secondDeadline = Date.now()+2100;
+  while (observed.packages[0].digest === before && Date.now()<secondDeadline) await new Promise(r=>setTimeout(r,20));
+  assert.notEqual(observed.packages[0].digest,before);
+});
+test('portable worker protocol returns identical capture and saves; lost mutation reply is uncertain',async t=>{
+  const {root} = await fixture(t); await create(root);
+  const workers=[];
+  const runners=createRunners({deployment:{ensure:async()=>({})},connect:()=>{
+    const child=spawn(process.execPath,['apps/worker/src/worker.mjs'],{stdio:['pipe','pipe','pipe']}); workers.push(child); child.stderr.on('data',data=>process.stderr.write(data));
+    const rpc=createRpc(child.stdout,child.stdin); child.on('exit',()=>rpc.close()); return {call:rpc.call,close:()=>{rpc.close();child.kill();}};
+  }}); t.after(async()=>{await runners.close();for(const child of workers) child.kill();});
+  assert.equal(await runners.executionIdentity({kind:'ssh',id:'remote',host:'fixture'}), await runners.executionIdentity({kind:'local',id:'local'}));
+  const request={operation:'capture',root,relativePath:'review'};
+  assert.deepEqual(await runners.skillFiles({kind:'ssh',id:'remote',host:'fixture'},request),await runners.skillFiles({kind:'local',id:'local'},request));
+  const remote=await runners.skillFiles({kind:'ssh',id:'remote',host:'fixture'},{operation:'save',root,relativePath:'inventory',files:[file('SKILL.md','Inventory')],expectedDigest:null,requestId:'remote-create'}); assert.equal(remote.status,'saved');
+  const broken=createRunners({deployment:{ensure:async()=>({})},connect:()=>({call:async method=>method==='hello'?{protocol:1,capabilities:['session-commands-v1','skill-files-v1']}:Promise.reject(new Error('Worker disconnected')),close(){}})}); t.after(()=>broken.close());
+  assert.equal((await broken.skillFiles({kind:'ssh',id:'broken',host:'fixture'},{operation:'save',root,relativePath:'new',files:content,expectedDigest:null,requestId:'lost'})).status,'uncertain');
+});
+test('nested canonical roots retain directory relevance and never scan arbitrary hidden content',async t=>{
+  const {root,directory} = await fixture(t);
+  const repository=join(directory,'repository'); await mkdir(repository);
+  const registered={id:'project',path:join(repository,'.agents','skills'),repositoryPath:repository};
+  Object.assign(registered,await skillFiles({operation:'approve',root:registered}));
+  await skillFiles({operation:'save',root:registered,relativePath:'.agents/skills/review',files:[file('SKILL.md','Code review')],expectedDigest:null,requestId:'top'});
+  await skillFiles({operation:'save',root:registered,relativePath:'packages/inventory/.agents/skills/analyze',files:[file('SKILL.md','Inventory analysis')],expectedDigest:null,requestId:'nested'});
+  await mkdir(join(repository,'ordinary'),{recursive:true}); await writeFile(join(repository,'ordinary','SKILL.md'),'Not a configured root');
+  const observed=await skillFiles({operation:'discover',root:registered});
+  assert.deepEqual(observed.packages.map(p=>[p.relativeDirectory,p.relevanceBoundary]),[['.agents/skills/review',''],['packages/inventory/.agents/skills/analyze','packages/inventory']]);
+  assert.equal((await skillFiles({operation:'capture',root:registered,relativePath:'packages/inventory/.agents/skills/analyze'})).files[0].content,'Inventory analysis');
+  await assert.rejects(skillFiles({operation:'capture',root:registered,relativePath:'ordinary'}),/configured/);
+  const outside=join(directory,'external'); await mkdir(outside); await symlink(outside,join(repository,'escaped'));
+  const guarded=await skillFiles({operation:'discover',root:{...registered,allowSymlinks:true}}); assert.ok(guarded.diagnostics.some(d=>d.code==='denied'));
+});
+test('uncertain mutation gates survive restart and require exact inspected digest before reconciliation',async t=>{
+  const {root} = await fixture(t); const original=await create(root);
+  const { createHash } = await import('node:crypto');
+  const lock=join(root.path,`.convoy-skill-${createHash('sha256').update('review').digest('hex')}.lock`);
+  await writeFile(lock,JSON.stringify({requestId:'interrupted',relativePath:'review',expectedDigest:original.digest}));
+  assert.equal((await skillFiles({operation:'save',root,relativePath:'review',expectedDigest:original.digest,requestId:'retry',files:content})).status,'uncertain');
+  const inspection=await skillFiles({operation:'inspect',root,relativePath:'review'}); assert.equal(inspection.status,'uncertain'); assert.equal(inspection.current.digest,original.digest);
+  assert.equal((await skillFiles({operation:'reconcile',root,relativePath:'review',requestId:'interrupted',expectedDigest:'0'.repeat(64)})).status,'conflict');
+  assert.equal((await skillFiles({operation:'reconcile',root,relativePath:'review',requestId:'interrupted',expectedDigest:original.digest})).status,'observed');
+  assert.equal((await skillFiles({operation:'save',root,relativePath:'review',expectedDigest:original.digest,requestId:'reviewed-save',files:content})).status,'saved');
+});
+test('capture records actual stable Git revision independently for different worktrees', async t => {
+  const {directory} = await fixture(t);
+  const {processRun} = await import('../../packages/runner/src/index.mjs');
+  const repository = join(directory,'git-repository');
+  await mkdir(repository);
+  const git = async(path,args)=>{ const result=await processRun('git',['-C',path,...args]); assert.equal(result.code,0,result.output); return result.output.trim(); };
+  await git(repository,['init','-q']);
+  await git(repository,['config','user.name','Fixture']); await git(repository,['config','user.email','fixture@example.invalid']);
+  await mkdir(join(repository,'.agents','skills','review'),{recursive:true});
+  await writeFile(join(repository,'.agents','skills','review','SKILL.md'),'First revision');
+  await git(repository,['add','.']); await git(repository,['commit','-qm','First']);
+  const first=await git(repository,['rev-parse','HEAD']);
+  const worktree=join(directory,'git-worktree'); await git(repository,['worktree','add','--detach',worktree,first]);
+  await writeFile(join(repository,'.agents','skills','review','SKILL.md'),'Second revision');
+  await git(repository,['add','.']); await git(repository,['commit','-qm','Second']);
+  const second=await git(repository,['rev-parse','HEAD']);
+  const captureAt=path=>skillFiles({operation:'capture',root:{id:'same-source',path:join(path,'.agents','skills'),repositoryPath:path},relativePath:'.agents/skills/review'});
+  const a=await captureAt(repository), b=await captureAt(worktree);
+  assert.equal(a.repositoryRevision,second); assert.equal(b.repositoryRevision,first); assert.notEqual(a.digest,b.digest);
+  const catalogue=await skillFiles({operation:'discover',root:{id:'same-source',path:join(repository,'.agents','skills'),repositoryPath:repository}});
+  assert.equal(catalogue.repositoryRevision,second); assert.equal(catalogue.packages[0].repositoryRevision,second);
+});
+test('root approvals bind symlink targets and reject later root or ancestor retargeting', async t => {
+  const {root,directory} = await fixture(t); await create(root);
+  const external=join(directory,'external'); await mkdir(external);
+  const alias=join(directory,'alias'); await symlink(root.path,alias);
+  await assert.rejects(skillFiles({operation:'approve',root:{path:alias}}),/symlinks/i);
+  const registered={path:alias,allowSymlinks:true}; Object.assign(registered,await skillFiles({operation:'approve',root:registered}));
+  assert.equal((await skillFiles({operation:'capture',root:registered,relativePath:'review'})).digest,skillPackageDigest(content));
+  await rm(alias); await symlink(external,alias);
+  await assert.rejects(skillFiles({operation:'capture',root:registered,relativePath:'review'}),/approved canonical/);
+  await assert.rejects(skillFiles({operation:'save',root:registered,relativePath:'new',expectedDigest:null,requestId:'blocked',files:content}),/approved canonical/);
+  assert.deepEqual(await import('node:fs/promises').then(fs=>fs.readdir(external)),[]);
+  const parent=join(directory,'parent'); await mkdir(parent);
+  const absent={path:join(parent,'missing','skills')}; Object.assign(absent,await skillFiles({operation:'approve',root:absent}));
+  await rm(parent,{recursive:true}); await symlink(external,parent);
+  await assert.rejects(create(absent),/symlinks|approved canonical/); assert.deepEqual(await import('node:fs/promises').then(fs=>fs.readdir(external)),[]);
+  const absentAllowed={path:join(alias,'yet-missing','skills'),allowSymlinks:true}; Object.assign(absentAllowed,await skillFiles({operation:'approve',root:absentAllowed}));
+  await rm(alias); await symlink(root.path,alias);
+  await assert.rejects(create(absentAllowed),/approved canonical/);
+});
+test('registered nested relevance limits repository discovery and direct capture to that subtree', async t => {
+  const {directory} = await fixture(t); const repository=join(directory,'repo'); await mkdir(repository);
+  const root={path:join(repository,'.agents','skills'),repositoryPath:repository}; Object.assign(root,await skillFiles({operation:'approve',root}));
+  for (const rel of ['pkg/.agents/skills/local','other/pkg/.agents/skills/unrelated']) await skillFiles({operation:'save',root,relativePath:rel,files:[file('SKILL.md',rel)],expectedDigest:null,requestId:rel.startsWith('other')?'other':'local'});
+  const nested={path:join(repository,'pkg','.agents','skills'),repositoryPath:repository,discoveryBasePath:join(repository,'pkg'),skillRootPaths:['.agents/skills']}; Object.assign(nested,await skillFiles({operation:'approve',root:nested}));
+  const observed=await skillFiles({operation:'discover',root:nested}); assert.deepEqual(observed.packages.map(pkg=>pkg.relativeDirectory),['pkg/.agents/skills/local']);
+  await assert.rejects(skillFiles({operation:'capture',root:nested,relativePath:'other/pkg/.agents/skills/unrelated'}),/directory relevance/);
+});

@@ -56,6 +56,7 @@ export type WorkerRequest =
   | (WorkspaceRequest &
       ExecutionAccess & {
         action: 'tool';
+        workingDirectory?: string;
         name:
           | 'read_file'
           | 'list_files'
@@ -69,6 +70,7 @@ export type WorkerRequest =
       })
   | (WorkspaceRequest & {
       action: 'extension';
+      workingDirectory?: string;
       extension: { id: string; revision: string; hash: string };
       adapter: string;
       tool: string;
@@ -77,6 +79,7 @@ export type WorkerRequest =
   | (WorkspaceRequest &
       ExecutionAccess & {
         action: 'command_start';
+        workingDirectory?: string;
         command: string;
         launchId: string;
         timeoutMs?: number;
@@ -88,6 +91,7 @@ export type WorkerRequest =
   | (WorkspaceRequest &
       ExecutionAccess & {
         action: 'terminal_start';
+        workingDirectory?: string;
         command?: string;
         cols?: number;
         rows?: number;

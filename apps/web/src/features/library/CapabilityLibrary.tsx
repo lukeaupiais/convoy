@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   command,
   owns,
@@ -14,12 +14,15 @@ import type {
   EffectiveCapabilities,
   ProfileRef,
   SkillRevision,
+  SkillSelection,
 } from '../../../../../packages/contracts/src';
 import { Select } from '../../shared/ui/Select';
 import './capabilities.css';
 import { KnowledgePicker } from '../knowledge';
 import type { KnowledgeSelection } from '../../../../../packages/contracts/src';
 import { toolDescription } from './ToolLibrary';
+import { SkillSettings } from './SkillSettings';
+import { ProfileSkillSources } from './ProfileSkillSources';
 
 export type {
   CapabilityProfile,
@@ -28,6 +31,7 @@ export type {
   EffectiveCapabilities,
   ProfileRef,
   SkillRevision,
+  SkillSelection,
 };
 const key = (p: ProfileRef) => `${p.id}@${p.version}`;
 function download(name: string, value: unknown) {
@@ -205,11 +209,26 @@ export function SessionCapabilities({
       {!!s.effectiveCapabilities?.skills.length && (
         <div className="capability-list">
           {s.effectiveCapabilities.skills.map((k) => (
-            <div key={k.name}>
+            <div key={k.snapshotId ?? k.name}>
               <span>
-                {k.name} · v{k.version}
+                {k.name}
+                {k.sourceId ? ' · Captured source' : ` · v${k.version}`}
               </span>
               <small>{k.active ? 'Loaded' : 'Available on demand'}</small>
+              {k.sourceId &&
+                state.capabilities?.skillCatalogue?.sources
+                  .find((source) => source.id === k.sourceId)
+                  ?.instances.some(
+                    (instance) =>
+                      instance.runnerId === k.runnerId &&
+                      instance.workspaceId === k.workspaceId &&
+                      instance.digest &&
+                      instance.digest !== k.hash,
+                  ) && (
+                  <small role="status">
+                    Source changed · This session keeps its captured files
+                  </small>
+                )}
             </div>
           ))}
         </div>
@@ -218,32 +237,16 @@ export function SessionCapabilities({
   );
 }
 
-const example =
-  '---\nname: implementation-review\ndescription: Review an implementation against its acceptance criteria.\n---\n\nCheck the requested scope, inspect the changes, and report verification evidence and unresolved risks.\n';
 export function canLeaveAgents() {
   return window.dispatchEvent(new Event('convoy-agents-leave', { cancelable: true }));
 }
 
 export function AgentSettings({ state }: { state: RuntimeState }) {
   const [tab, setTab] = useState('Profiles');
-  const [skillEditorOpen, setSkillEditorOpen] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
-  const [files, setFiles] = useState<Record<string, string>>({ 'SKILL.md': example });
-  const [source, setSource] = useState('UI editor');
-  const [initialSkill, setInitialSkill] = useState(
-    JSON.stringify({ files: { 'SKILL.md': example }, source: 'UI editor' }),
-  );
-  const [preview, setPreview] = useState<{
-    name: string;
-    hash: string;
-    description: string;
-    warnings: string[];
-    baseVersion: number;
-  } | null>(null);
-  const [trusted, setTrusted] = useState(false);
   const [profileId, setProfileId] = useState('');
   const [profileName, setProfileName] = useState('');
   const [loadWorkspaceAgentsMd, setLoadWorkspaceAgentsMd] = useState(false);
@@ -251,12 +254,18 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
   const [baseVersion, setBaseVersion] = useState(0);
   const [tools, setTools] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
+  const [skillSelections, setSkillSelections] = useState<SkillSelection[]>([]);
   const [initialProfile, setInitialProfile] = useState('');
   const [customId, setCustomId] = useState(false);
   const [toolQuery, setToolQuery] = useState('');
   const [browsing, setBrowsing] = useState({ tools: false, skills: false, extensions: false });
-  const importInput = useRef<HTMLInputElement>(null);
   const [extensions, setExtensions] = useState<CapabilityProfile['extensions']>([]);
+  useEffect(() => {
+    setProfileEditorOpen(false);
+    setSkills([]);
+    setSkillSelections([]);
+    setMessage('');
+  }, [state.activeContext?.organizationId, state.currentUser?.id, state.activeContext?.projectId]);
   const profileDraft = JSON.stringify({
     profileId,
     profileName,
@@ -264,11 +273,11 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
     knowledge,
     tools,
     skills,
+    skillSelections,
     extensions,
   });
   const profileDirty = profileDraft !== initialProfile;
-  const skillDirty = JSON.stringify({ files, source }) !== initialSkill;
-  const unsavedDraft = (profileEditorOpen && profileDirty) || (skillEditorOpen && skillDirty);
+  const unsavedDraft = profileEditorOpen && profileDirty;
   useEffect(() => {
     if (!unsavedDraft && !busy) return;
     const leave = (event: Event) => {
@@ -336,6 +345,7 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
         knowledge: p?.knowledge ?? { collectionIds: [] },
         tools: p?.tools.map((t) => t.id) ?? [],
         skills: p?.skills.map((s) => `${s.name}@${s.version}`) ?? [],
+        skillSelections: p?.skillSelections ?? [],
         extensions: p?.extensions ?? [],
       }),
     );
@@ -347,35 +357,10 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
     setBaseVersion(p?.version ?? 0);
     setTools(p?.tools.map((t) => t.id) ?? []);
     setSkills(p?.skills.map((s) => `${s.name}@${s.version}`) ?? []);
+    setSkillSelections(p?.skillSelections ?? []);
     setExtensions(p?.extensions ?? []);
   }
-  async function importFiles(list: FileList | null) {
-    if (!list?.length) return;
-    try {
-      if (list.length > 50) throw new Error('Choose at most 50 text files.');
-      let entries: Record<string, string> = {};
-      let size = 0;
-      for (const f of Array.from(list)) {
-        size += f.size;
-        if (size > 200000) throw new Error('Skill bundles are limited to 200 KB.');
-        const relative = f.webkitRelativePath;
-        const path = relative ? relative.split('/').slice(1).join('/') : f.name;
-        entries[path] = await f.text();
-      }
-      if (list.length === 1 && list[0].name.endsWith('.json')) {
-        const bundle = JSON.parse(await list[0].text());
-        entries = bundle.files;
-      }
-      setInitialSkill('');
-      setFiles(entries);
-      setSource(list[0].webkitRelativePath.split('/')[0] || list[0].name);
-      setPreview(null);
-      setTrusted(false);
-      setMessage('Imported for review. Nothing has been published.');
-    } catch (e) {
-      setMessage((e as Error).message);
-    }
-  }
+
   return (
     <section className="capability-library" aria-label="Agent configuration">
       <nav className="capability-tabs" aria-label="Agent sections">
@@ -385,9 +370,8 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
             aria-pressed={tab === t}
             disabled={busy}
             onClick={() => {
-              if (unsavedDraft && !confirm('Discard unsaved agent changes?')) return;
+              if (tab === t || !canLeaveAgents()) return;
               setProfileEditorOpen(false);
-              setSkillEditorOpen(false);
               setTab(t);
               setQuery('');
               setMessage('');
@@ -398,234 +382,20 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
         ))}
       </nav>
       {message && <p role="status">{message}</p>}
-      <div
-        className="library-toolbar"
-        hidden={(tab === 'Skills' && skillEditorOpen) || (tab === 'Profiles' && profileEditorOpen)}
-      >
-        <input
-          className="capability-search"
-          aria-label={`Find ${tab.toLowerCase()}`}
-          placeholder={`Find ${tab.toLowerCase()}…`}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {tab === 'Skills' && (
-          <>
-            <button
-              className="primary"
-              onClick={() => {
-                setFiles({ 'SKILL.md': example });
-                setSource('UI editor');
-                setInitialSkill(
-                  JSON.stringify({ files: { 'SKILL.md': example }, source: 'UI editor' }),
-                );
-                setPreview(null);
-                setTrusted(false);
-                setMessage('');
-                setSkillEditorOpen(true);
-              }}
-            >
-              New skill
-            </button>
-            <button className="secondary" onClick={() => importInput.current?.click()}>
-              Import
-            </button>
-          </>
-        )}
-        {tab === 'Profiles' && (
+      {tab === 'Skills' && <SkillSettings state={state} />}
+      {tab === 'Profiles' && (
+        <div className="library-toolbar" hidden={profileEditorOpen}>
+          <input
+            className="capability-search"
+            aria-label="Find profiles"
+            placeholder="Find profiles…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
           <button className="primary" onClick={() => editProfile()}>
             New profile
           </button>
-        )}
-      </div>
-      <input
-        ref={importInput}
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => {
-          if (e.target.files?.length) {
-            setSkillEditorOpen(true);
-            void importFiles(e.target.files);
-          }
-          e.target.value = '';
-        }}
-      />
-      {tab === 'Skills' && (
-        <>
-          <div className="capability-cards" hidden={skillEditorOpen}>
-            {!latestSkills.some((s) => matches(s.name, s.description)) && (
-              <p>{query ? 'No matching skills.' : 'No skills yet.'}</p>
-            )}
-            {latestSkills
-              .filter((s) => matches(s.name, s.description))
-              .map((s) => (
-                <details key={s.name}>
-                  <summary>
-                    <strong>{s.name}</strong>
-                    <span className="library-description">{s.description}</span>
-                  </summary>
-                  <small>{s.resources.length} files</small>
-                  <details>
-                    <summary>Revision details</summary>
-                    <small>
-                      Version {s.version} · {s.hash.slice(0, 12)}
-                    </small>
-                  </details>
-                  <div className="runtime-toolbar">
-                    <button
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        void perform('exportSkill', { name: s.name, version: s.version })
-                          .then((bundle) => {
-                            setSkillEditorOpen(true);
-                            setFiles(bundle.files);
-                            setSource(bundle.source);
-                            setInitialSkill(
-                              JSON.stringify({ files: bundle.files, source: bundle.source }),
-                            );
-                            setPreview(null);
-                            setTrusted(false);
-                          })
-                          .catch(() => {})
-                      }
-                    >
-                      Edit skill
-                    </button>
-                    <button
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        void perform('exportSkill', { name: s.name, version: s.version })
-                          .then((bundle) => download(`${s.name}-v${s.version}.json`, bundle))
-                          .catch(() => {})
-                      }
-                    >
-                      Export bundle
-                    </button>
-                  </div>
-                </details>
-              ))}
-          </div>
-          <div className="capability-editor" hidden={!skillEditorOpen}>
-            <header className="library-editor-heading">
-              <strong>Skill editor</strong>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => {
-                  if (!skillDirty || confirm('Discard unsaved skill changes?'))
-                    setSkillEditorOpen(false);
-                }}
-              >
-                Close
-              </button>
-            </header>
-            <div className="runtime-toolbar">
-              <label className="secondary">
-                Import files
-                <input type="file" multiple onChange={(e) => void importFiles(e.target.files)} />
-              </label>
-              <label className="secondary">
-                Import folder
-                <input
-                  type="file"
-                  multiple
-                  {...{ webkitdirectory: '' }}
-                  onChange={(e) => void importFiles(e.target.files)}
-                />
-              </label>
-            </div>
-            <label>
-              SKILL.md
-              <textarea
-                aria-label="Skill source"
-                rows={12}
-                value={files?.['SKILL.md'] ?? ''}
-                onChange={(e) => {
-                  setFiles({ ...files, 'SKILL.md': e.target.value });
-                  setPreview(null);
-                  setTrusted(false);
-                }}
-              />
-            </label>
-            <small>
-              {Object.keys(files ?? {}).length} bundled files · Text resources only in this release.
-              Scripts are not installed or executed.
-            </small>
-            <div className="runtime-toolbar">
-              <button
-                className="secondary"
-                disabled={busy}
-                onClick={() =>
-                  void perform('validateSkill', { files })
-                    .then((p) => {
-                      setPreview({
-                        ...p,
-                        baseVersion:
-                          data.skills.filter((s) => s.name === p.name).at(-1)?.version ?? 0,
-                      });
-                      setMessage(
-                        'Valid skill. Review the source and resources before trusting it.',
-                      );
-                    })
-                    .catch(() => {})
-                }
-              >
-                Validate
-              </button>
-            </div>
-            {preview && (
-              <>
-                <p>
-                  {preview.name} · {preview.description}
-                </p>
-                {preview.warnings.map((w) => (
-                  <p key={w}>{w}</p>
-                ))}
-                <details>
-                  <summary>Review bundled resources</summary>
-                  {Object.entries(files).map(([path, content]) => (
-                    <details key={path}>
-                      <summary>{path}</summary>
-                      <pre>{content}</pre>
-                    </details>
-                  ))}
-                </details>
-                <label className="capability-check">
-                  <input
-                    type="checkbox"
-                    checked={trusted}
-                    onChange={(e) => setTrusted(e.target.checked)}
-                  />
-                  I reviewed and trust these instructions and resources.
-                </label>
-                <button
-                  className="primary"
-                  disabled={busy || !trusted}
-                  onClick={() =>
-                    void perform('publishSkill', {
-                      files,
-                      source,
-                      trusted,
-                      baseVersion: preview.baseVersion,
-                    })
-                      .then(() => {
-                        setPreview(null);
-                        setTrusted(false);
-                        setSkillEditorOpen(false);
-                        setMessage('Skill saved.');
-                      })
-                      .catch(() => {})
-                  }
-                >
-                  Publish revision
-                </button>
-              </>
-            )}
-          </div>
-        </>
+        </div>
       )}
       {tab === 'Profiles' && (
         <>
@@ -637,7 +407,8 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
                   <button type="button" className="profile-row-open" onClick={() => editProfile(p)}>
                     <strong>{p.name}</strong>
                     <span className="library-description">
-                      {p.tools.length} tools · {p.skills.length} skills
+                      {p.tools.length} tools · {p.skills.length + (p.skillSelections?.length ?? 0)}{' '}
+                      skills
                       {p.extensions.length > 0 && ` · ${p.extensions.length} extensions`}
                     </span>
                   </button>
@@ -719,6 +490,7 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
                   baseVersion,
                   tools,
                   extensions,
+                  skillSelections,
                   skills: skills.map((v) => {
                     const i = v.lastIndexOf('@');
                     return { name: v.slice(0, i), version: Number(v.slice(i + 1)) };
@@ -962,10 +734,10 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
               </details>
               <details className="profile-section">
                 <summary>
-                  Skills <span>{skills.length} selected</span>
+                  Skills <span>{skills.length + skillSelections.length} selected</span>
                 </summary>
                 <div>
-                  {data.skills.length > 0 && (
+                  {
                     <div className="capability-section-actions">
                       <button
                         type="button"
@@ -979,11 +751,18 @@ export function AgentSettings({ state }: { state: RuntimeState }) {
                         {browsing.skills ? 'Done' : 'Add'}
                       </button>
                     </div>
-                  )}
-                  {!skills.length && data.skills.length > 0 && !browsing.skills && (
-                    <p className="muted">No skills selected.</p>
-                  )}
-                  {!data.skills.length && <p>Import a skill to select it here.</p>}
+                  }
+                  {!skills.length &&
+                    !skillSelections.length &&
+                    data.skills.length > 0 &&
+                    !browsing.skills && <p className="muted">No skills selected.</p>}
+                  <ProfileSkillSources
+                    state={state}
+                    selections={skillSelections}
+                    onChange={setSkillSelections}
+                    browsing={browsing.skills}
+                    disabled={busy}
+                  />
                   {latestSkills
                     .filter(
                       (skill) =>

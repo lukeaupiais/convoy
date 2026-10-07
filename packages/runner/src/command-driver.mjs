@@ -49,6 +49,7 @@ export async function driveCommand(
     action: 'command_start',
     launchId: randomUUID(),
     workspace: request.workspace,
+    ...(request.workingDirectory ? {workingDirectory:request.workingDirectory} : {}),
     command: request.args.command,
     timeoutMs,
     lifetime,

@@ -32,3 +32,13 @@ test('configuration rejects runner selection before it changes session placement
   await assert.rejects(configuration.apply(session, { runnerId: 'blocked' }), /disabled/);
   assert.deepEqual(session.placement, { mode: 'none' });
 });
+
+test('working directory changes cannot leave active processes in a different execution context',()=>{
+  const configuration=createSessionConfiguration({engine:{active:()=>false},execution:{},workflows:{},refreshInstructions(){},event(){},save:async()=>{}});
+  for(const context of [{commands:[{state:'running'}]},{commands:[{state:'stopping'}]},{terminals:[{state:'running'}]},{assignment:{state:'uncertain'}},{skillSnapshots:[{snapshotId:'captured'}]}]){
+    const session={workingDirectory:'first',...context};
+    assert.throws(()=>configuration.plan(session,{workingDirectory:'second'}),/Stop or reconcile|already captured/);
+    assert.equal(session.workingDirectory,'first');
+  }
+  assert.doesNotThrow(()=>configuration.plan({commands:[{state:'completed'}],terminals:[{state:'exited'}]},{workingDirectory:'second'}));
+});

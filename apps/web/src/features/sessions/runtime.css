@@ -265,3 +265,20 @@
     min-width: 0;
   }
 }
+
+.session-working-directory {
+  min-width: 0;
+}
+.session-working-directory > summary {
+  cursor: pointer;
+}
+.session-working-directory label {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.session-working-directory input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}

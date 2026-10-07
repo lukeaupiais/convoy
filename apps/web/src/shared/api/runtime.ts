@@ -14,6 +14,17 @@ export type * from '../../../../../packages/contracts/src';
 export const client = newId();
 let contextGeneration = 0;
 
+export class RuntimeApiError extends Error {
+  readonly code?: string;
+  readonly status?: number;
+  constructor(message: string, code?: string, status?: number) {
+    super(message);
+    this.name = 'RuntimeApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
 export async function api<T = unknown>(path: string, input?: object): Promise<T> {
   const response = await fetch(
     path,
@@ -25,8 +36,16 @@ export async function api<T = unknown>(path: string, input?: object): Promise<T>
         }
       : { headers: { 'X-Convoy-Client': client } },
   );
-  const value = await response.json();
-  if (!response.ok) throw new Error(value.error || 'Request failed');
+  let value;
+  try {
+    value = await response.json();
+  } catch (error) {
+    if (!response.ok && response.status < 500 && response.status !== 409)
+      throw new RuntimeApiError('Request failed.', undefined, response.status);
+    throw error;
+  }
+  if (!response.ok)
+    throw new RuntimeApiError(value?.error || 'Request failed', value?.code, response.status);
   return value as T;
 }
 
@@ -34,11 +53,39 @@ export async function command<Action extends RuntimeAction>(
   action: Action,
   input: RuntimeCommandInputMap[Action],
 ) {
-  const result = await api<CommandEnvelope<RuntimeCommandResultMap[Action]>>('/api/runtime', {
-    action,
-    client,
-    ...input,
-  });
+  const fileMutation = [
+    'saveSkillSource',
+    'createSkillSource',
+    'provisionSkillSnapshot',
+    'saveStoredSkillToFolder',
+  ].includes(action);
+  let result: CommandEnvelope<RuntimeCommandResultMap[Action]>;
+  try {
+    result = await api<CommandEnvelope<RuntimeCommandResultMap[Action]>>('/api/runtime', {
+      action,
+      client,
+      ...input,
+    });
+    if (fileMutation && result?.result == null)
+      throw new RuntimeApiError(
+        'Save outcome is uncertain. Inspect the destination before retrying.',
+        'UNCERTAIN',
+      );
+  } catch (error) {
+    // A lost or unreadable reply cannot establish whether the runner committed files.
+    // Known rejections retain their normal handling; never replay an unknown outcome.
+    if (
+      fileMutation &&
+      (!(error instanceof RuntimeApiError) ||
+        (error.status !== undefined && error.status >= 500) ||
+        (error.status === 409 && !['CONFLICT', 'UNCERTAIN'].includes(error.code ?? '')))
+    )
+      throw new RuntimeApiError(
+        'Save outcome is uncertain. Inspect the destination before retrying.',
+        'UNCERTAIN',
+      );
+    throw error;
+  }
   if (action === 'selectActiveContext') {
     contextGeneration++;
     window.dispatchEvent(new Event('convoy-context-changed'));
@@ -57,7 +104,9 @@ export function useRuntime(taskId?: number, overview = false, enabled = true) {
     const poll = async () => {
       const generation = contextGeneration;
       try {
-        const value = await api<RuntimeState>(`/api/runtime${taskId ? `/${taskId}` : overview ? '?view=overview' : ''}`);
+        const value = await api<RuntimeState>(
+          `/api/runtime${taskId ? `/${taskId}` : overview ? '?view=overview' : ''}`,
+        );
         if (live && generation === contextGeneration) {
           setState(value);
           setError('');

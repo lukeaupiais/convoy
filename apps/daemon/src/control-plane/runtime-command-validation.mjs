@@ -14,6 +14,19 @@ const session = (required = [], optional = []) => contract(required, optional);
  * drift before orchestration begins.
  */
 export const runtimeCommandContracts = {
+  registerSkillRoot: contract(['scope', 'runnerId', 'path', 'executionIdentity', 'writable'], ['projectId', 'repositoryId', 'relevancePath', 'allowSymlinks', 'provenance', 'trusted']),
+  unregisterSkillRoot: contract(['rootId', 'expectedRevision']),
+  updateSkillRoot: contract(['rootId','expectedRevision'],['readable','writable','trusted']),
+  catalogueSkills: contract([], ['scope', 'runnerId', 'workspaceId', 'projectId', 'workingDirectory']),
+  refreshSkills: contract([], ['scope', 'runnerId', 'workspaceId', 'projectId', 'workingDirectory']),
+  readSkillSource: contract(['sourceId'], ['runnerId', 'workspaceId']),
+  saveSkillSource: contract(['sourceId', 'expectedDigest', 'files'], ['runnerId', 'workspaceId', 'requestId', 'trusted']),
+  createSkillSource: contract(['rootId', 'relativeDirectory', 'files', 'trusted'], ['requestId']),
+  captureSkillSelections: contract(['selections'], ['runnerId', 'workspaceId', 'workingDirectory']),
+  provisionSkillSnapshot: contract(['snapshotId', 'targetRootId', 'relativeDirectory', 'trusted', 'requestId']),
+  saveStoredSkillToFolder: contract(['name', 'version', 'rootId', 'relativeDirectory', 'trusted'], ['requestId']),
+  inspectSkillMutation: contract([], ['sourceId', 'rootId', 'relativeDirectory', 'runnerId', 'workspaceId']),
+  reconcileSkillMutation: contract(['requestId', 'expectedDigest'], ['sourceId', 'rootId', 'relativeDirectory', 'runnerId', 'workspaceId']),
   updateKnowledgeCollection: contract(['collectionId', 'expectedRevision', 'name', 'description', 'startPageIds', 'pageOrder']),
   createKnowledgeCollection: contract(['projectId', 'name']),
   setKnowledgeCollectionState: contract(['collectionId', 'expectedRevision', 'state']),
@@ -115,7 +128,7 @@ export const runtimeCommandContracts = {
   revokeRunnerEnrollment: contract(['id', 'organizationId', 'revision']),
   rotateRunnerIdentity: contract(['runnerId', 'organizationId', 'revision']),
   revokeRunnerIdentity: contract(['runnerId', 'organizationId', 'revision']),
-  configure: session([], ['runnerId', 'workflow']),
+  configure: session([], ['runnerId', 'workflow', 'workingDirectory']),
   connectRemote: contract(['host', 'repository', 'projectIds']),
   continueWorkflow: session(['instance']),
   createBoardFromTemplate: contract(['templateId', 'name', 'projectIds']),
@@ -187,7 +200,7 @@ export const runtimeCommandContracts = {
   publishExtension: contract(['manifest', 'trusted'], ['organizationId', 'projectId']),
   publishProfile: contract(
     ['name', 'tools', 'skills'],
-    ['organizationId', 'projectId', 'id', 'baseVersion', 'extensions', 'loadWorkspaceAgentsMd', 'knowledge'],
+    ['organizationId', 'projectId', 'id', 'baseVersion', 'extensions', 'loadWorkspaceAgentsMd', 'knowledge', 'skillSelections'],
   ),
   publishSkill: contract(
     ['files', 'trusted'],
@@ -454,6 +467,23 @@ const primitiveShapes = {
   lifecycle: 'string',
   registration: 'string',
   draining: 'boolean',
+  rootId: 'string',
+  targetRootId: 'string',
+  sourceId: 'string',
+  snapshotId: 'string',
+  workspaceId: 'string',
+  expectedDigest: 'string',
+  relativeDirectory: 'string',
+  executionIdentity: 'string',
+  repositoryId: 'string',
+  relevancePath: 'string',
+  provenance: 'string',
+  writable: 'boolean',
+  readable: 'boolean',
+  workingDirectory: 'string',
+  allowSymlinks: 'boolean',
+  selections: 'array',
+  skillSelections: 'array',
 };
 
 function matches(value, expected) {
@@ -480,10 +510,16 @@ export function validateRuntimeCommand(input) {
     (key) => !Object.hasOwn(input, key) || input[key] === undefined,
   );
   if (missing) throw new Error(`Missing field for ${input.action}: ${missing}.`);
+  if (['saveSkillSource', 'createSkillSource'].includes(input.action) && !Array.isArray(input.files))
+    throw new Error('Source files must be an array.');
   for (const [key, expected] of Object.entries(primitiveShapes)) {
+    if (key === 'expectedDigest' && input.action === 'reconcileSkillMutation' && input[key] === null) continue;
     if (input[key] !== undefined && !matches(input[key], expected))
       throw new Error(`Invalid field for ${input.action}: ${key}.`);
   }
+  if (['inspectSkillMutation','reconcileSkillMutation'].includes(input.action) &&
+      !(Boolean(input.sourceId) !== Boolean(input.rootId && input.relativeDirectory)))
+    throw new Error('Choose a skill source or an exact registered destination.');
   if (
     input.action === 'attachContext' &&
     input.path === undefined &&

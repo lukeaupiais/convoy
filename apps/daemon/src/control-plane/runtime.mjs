@@ -68,6 +68,7 @@ import {
 } from './module-command-registry.mjs';
 import { createSessionConfiguration } from './session-configuration.mjs';
 import { createCommandAuthorization } from './command-authorization.mjs';
+import { createSkillSourceCoordinator, skillSourceCommands } from './skill-sources.mjs';
 
 const text = (value, max = 12000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max)
@@ -86,6 +87,7 @@ const clientId = (value) => {
 };
 const now = () => new Date().toISOString();
 const orchestrationCommands = [
+  ...skillSourceCommands,
   'querySecurityAudit',
   'exportSecurityAudit',
   'advance',
@@ -803,6 +805,56 @@ export async function createRuntime({
     event,
   });
   const capabilities = library.capabilities;
+  async function authorizeSkillCommand(command, actor = localPrincipal) {
+    await identity.assertPrincipalActive(actor);
+    const resourceSource = command.sourceId ? state.skillSources?.find(value => value.id === command.sourceId) : undefined;
+    const resourceRoot = state.skillRoots?.find(value => value.id === (command.rootId ?? command.targetRootId ?? resourceSource?.rootId));
+    const resourceSnapshot = command.snapshotId ? state.skillSnapshots?.find(value => value.id === command.snapshotId) : undefined;
+    const selected = contextFor(command.client, actor);
+    const requestedProjectId = resourceRoot?.projectId ?? resourceSnapshot?.projectId ?? command.projectId ?? selected?.projectId;
+    const project = requestedProjectId ? state.projects.find(value => value.id === requestedProjectId) : undefined;
+    const organizationId = resourceRoot?.organizationId ?? resourceSnapshot?.organizationId ?? project?.organizationId ?? selected?.organizationId;
+    if (!organizationId || (!command.execution && !command.background && selected?.organizationId !== organizationId)) throw new Error('Not authorized.');
+    const available = await organizations.listAvailableContexts(actor);
+    const projectIds = available.filter(value => value.organizationId === organizationId).map(value => value.projectId).filter(Boolean);
+    const projectId = requestedProjectId ?? projectIds[0];
+    const contextProject = state.projects.find(value=>value.id===projectId);
+    const context = await organizations.resolveContext(actor, { organizationId, projectId, ...(contextProject?.teamId ? {teamId:contextProject.teamId} : {}) });
+    await organizations.requireOrganizationPermission(actor, organizationId, 'organization.read');
+    if (projectId) await requireProjectPermission(projectId, command.execution ? 'project.execute' : 'project.read', actor);
+    let canManageOrganization = false, canWriteProject = false;
+    try { await organizations.requireOrganizationPermission(actor, organizationId, 'organization.manage'); canManageOrganization = true; } catch {}
+    if (projectId) try { await requireProjectPermission(projectId, 'project.write', actor); canWriteProject = true; } catch {}
+    const runnerId = command.runnerId ?? resourceRoot?.runnerId;
+    const runner = runnerId ? state.runners.find(value => value.id === runnerId && value.organizationId === organizationId) : undefined;
+    if (runnerId && (!runner || !runner.enabled)) throw new Error('Skill runner unavailable or denied.');
+    const registration = command.action === 'registerSkillRoot';
+    let executionIdentity;
+    if (runner) {
+      const environment = state.environments.find(value => value.id === runner.environmentId && value.organizationId === organizationId);
+      if (!environment?.enabled) throw new Error('Skill environment unavailable.');
+      if (registration) {
+        await organizations.requireOrganizationPermission(actor, organizationId, 'environment.manage');
+        if (!runners.executionIdentity) throw new Error('Runner execution identity verification is unavailable.');
+        executionIdentity = await runners.executionIdentity(runner);
+        if (command.executionIdentity !== executionIdentity) throw new Error(`Choose the verified runner execution identity: ${executionIdentity}.`);
+      }
+      else {
+        await organizations.requireOrganizationPermission(actor, organizationId, 'environment.use');
+        const decision = execution.access.authorize(context, environment, 'use', { repository:runner.repository });
+        if (!decision.allowed) throw new Error(decision.reason);
+      }
+    }
+    return { organizationId, userId:actor.kind === 'user' ? actor.userId : undefined, principal:structuredClone(actor), projectId, projectIds,
+      runnerId, workspaceId:command.workspaceId, canManageOrganization, canWriteProject,
+      workingDirectory:command.workingDirectory,
+      executionIdentities:registration && runner ? [{runnerId:runner.id,executionIdentity}] : [],
+      scope:command.scope };
+  }
+  const skillSources = createSkillSourceCoordinator({
+    state, sources:library.skillSources, capabilities, runners, authorize:authorizeSkillCommand,
+    save:()=>store.save(), enqueue:work=>{const result=queue.catch(()=>{}).then(work);queue=result;return result;},
+  });
   const steering = createSteering(event);
   function makeSession(id, title) {
     return {
@@ -1271,6 +1323,7 @@ export async function createRuntime({
       if (entry?.operation && entryDescriptor?.resources.location === 'runner' && placement.effective(session).mode === 'none')
         throw new Error('This legacy workflow activity requires a configured runner placement.');
       capabilities.pin(session, capabilities.resolveForWorkflow(session, session.workflow, options));
+      delete session.skillSnapshots;
       verification.pin(session);
     },
     sealEvidence: (s, evidence, artifacts) => verification.seal(s, evidence, artifacts),
@@ -1555,6 +1608,8 @@ export async function createRuntime({
           verificationAttempted = true;
           await verification.prepare(s, controller.signal);
         }
+        s.skillUserId = executionPrincipal.kind === 'user' ? executionPrincipal.userId : undefined;
+        await skillSources.captureSession(s, executionPrincipal, controller.signal);
         delete s.queueReason;
         delete s.queuedInput;
         if (s.runnerId && !s.environmentInstructionsPinned) {
@@ -1987,6 +2042,7 @@ export async function createRuntime({
       sessionActions: sessionCommands.actions(),
     },
   );
+  skillSources.restore();
   async function tickWorkflowEvents() {
     const result = queue.catch(() => {}).then(async () => {
       const due = await workflows.processDue(eventNow(), { limit: 100 });
@@ -2073,8 +2129,18 @@ export async function createRuntime({
       const selected = contextFor(client, actor);
       if (!selected) return { organizationId: undefined, projectIds: [] };
       const available = await organizations.listAvailableContexts(actor);
+      const projectWriteIds=[];
+      for(const value of available.filter(value=>value.organizationId===selected.organizationId)) {
+        try {await requireProjectPermission(value.projectId,'project.write',actor);projectWriteIds.push(value.projectId);}catch{}
+      }
+      let canManageOrganization=false;
+      try {await organizations.requireOrganizationPermission(actor,selected.organizationId,'organization.manage');canManageOrganization=true;}catch{}
       return {
         organizationId: selected.organizationId,
+        userId: actor.kind === 'user' ? actor.userId : undefined,
+        projectId: selected.projectId,
+        projectWriteIds,
+        canManageOrganization,
         includeUnowned: principalKey(actor) === principalKey(localPrincipal),
         projectIds: available
           .filter((context) => context.organizationId === selected.organizationId)
@@ -2828,6 +2894,10 @@ export async function createRuntime({
       );
     }
     await commandAuthorization.authorize(command, actor);
+    if (skillSourceCommands.includes(action)) return skillSources.command(command, actor);
+    if (action === 'publishProfile' && command.skillSelections)
+      command = { ...command, skillScope:await authorizeSkillCommand({ ...command, action:'captureSkillSelections' }, actor) };
+    if (action === 'saveWorkflow') command = await skillSources.pinWorkflow(command, actor);
     if (moduleCommands.handles(action))
       return moduleCommands.execute(command, { validateClient: clientId, principal: actor });
     if (action === 'runTicket') return runTicket(command, actor);
@@ -3280,6 +3350,7 @@ export async function createRuntime({
       return (closePromise ??= (async () => {
         closing = true;
         clearInterval(dispatchTimer);
+        skillSources.close();
         for (const job of jobs.values()) job.controller.abort();
         await Promise.allSettled([...jobs.values()].map((j) => j.promise));
         await runners?.close?.();

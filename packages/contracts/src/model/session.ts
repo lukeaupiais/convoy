@@ -109,6 +109,7 @@ export type SessionEvent = {
   reason?: string;
 };
 export type Session = {
+  workingDirectory?: string;
   contextUsage?: {
     model: string;
     agentSessionId: string;
@@ -245,7 +246,13 @@ export type Session = {
       sourceSubmissionRef?: { nodeId: string; instance: string; revision: number };
       submission: WorkflowSubmission;
     };
-    actionResult?: { awaitingDelivery?: boolean; replyRequestId?: string; deliveryStatus?: string; message?: string; [key: string]: unknown };
+    actionResult?: {
+      awaitingDelivery?: boolean;
+      replyRequestId?: string;
+      deliveryStatus?: string;
+      message?: string;
+      [key: string]: unknown;
+    };
     history?: {
       nodeId: string;
       instance?: string;

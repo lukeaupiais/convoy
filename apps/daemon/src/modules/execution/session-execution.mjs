@@ -281,6 +281,7 @@ export function createSessionExecution({
           ? {
               action: 'extension',
               workspace: session.workspace.path,
+              workingDirectory: session.workingDirectory,
               extension: extension.extension,
               adapter: extension.extension.adapter,
               tool: extension.id,
@@ -289,6 +290,7 @@ export function createSessionExecution({
           : {
               action: 'tool',
               workspace: session.workspace.path,
+              workingDirectory: session.workingDirectory,
               name,
               args,
               accessMode: access.accessMode,
@@ -364,6 +366,7 @@ export function createSessionExecution({
         const result = await runners.execute(runner, {
           action: 'terminal_start',
           workspace: session.workspace.path,
+          workingDirectory: session.workingDirectory,
           command: terminalCommand,
           cols: input.cols ?? 120,
           rows: input.rows ?? 36,

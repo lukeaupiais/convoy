@@ -1,4 +1,5 @@
 import { createCapabilities, migrateLibraryState } from './capabilities.mjs';
+import { createSkillSources } from './skill-sources.mjs';
 import { createInstructionLibrary } from './instructions.mjs';
 
 const commands = [
@@ -32,7 +33,8 @@ export function createLibrary({
   event,
 }) {
   migrateLibraryState(state);
-  const capabilities = createCapabilities({ state, executionPolicy, validateKnowledge });
+  const skillSources = createSkillSources({state});
+  const capabilities = createCapabilities({ state, executionPolicy, validateKnowledge, skillSources });
   const instructions = createInstructionLibrary({
     state,
     save,
@@ -47,13 +49,14 @@ export function createLibrary({
     commands,
     sessionCommands,
     capabilities,
+    skillSources,
     snapshot({ scope } = {}) {
       return {
-        capabilities: capabilities.snapshot(scope),
+        capabilities: {...capabilities.snapshot(scope),skillCatalogue:skillSources.catalogue(scope),skillSnapshots:state.skillSnapshots.filter(s=>{try{skillSources.snapshot({snapshotId:s.id},scope);return true;}catch{return false;}}).map(({files,body,...s})=>s)},
         instructions: state.instructions.filter(
           (instruction) =>
-            !scope?.organizationId ||
-            (instruction.organizationId ?? 'personal') === scope.organizationId,
+            scope === undefined ||
+            (!!scope.organizationId && (instruction.organizationId ?? 'personal') === scope.organizationId),
         ),
         instructionOwners: state.instructionOwners,
       };

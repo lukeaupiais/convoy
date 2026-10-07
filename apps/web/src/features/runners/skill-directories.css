@@ -1,0 +1,56 @@
+.skill-directories {
+  display: grid;
+  gap: 16px;
+  margin-top: 28px;
+}
+.skill-directory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.skill-directory-list {
+  display: grid;
+  gap: 8px;
+}
+.skill-directory-list > details {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: 12px;
+}
+.skill-directory-list summary {
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.skill-directory-list dl {
+  display: grid;
+  gap: 8px;
+}
+.skill-directory-list dl > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+}
+.skill-directory-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.skill-directory-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.skill-directory-check input {
+  width: auto;
+}
+@media (max-width: 600px) {
+  .skill-directory-list dl > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+.skill-directory-policy {
+  margin-bottom: 16px;
+}
+.skill-directory-policy .skill-directory-actions {
+  margin-top: 12px;
+}

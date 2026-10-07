@@ -1,6 +1,6 @@
 import { useRuntime } from '../shared/api/runtime';
 import { AgentSettings } from '../features/library';
-import { EnvironmentSettings } from '../features/runners/EnvironmentSettings';
+import { EnvironmentSettings } from '../features/runners';
 import { WorkflowReferenceView, WorkflowWorkspace } from '../features/workflows/index';
 import type { WorkflowReference } from '../shared/api/runtime';
 import { ProviderSettings } from '../features/providers';

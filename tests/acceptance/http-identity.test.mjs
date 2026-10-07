@@ -274,3 +274,60 @@ test('personal loopback transport remains compatible without deployment login', 
   assert.equal((await call('/api/status')).status, 200);
   assert.deepEqual(calls[0], [undefined, undefined, undefined]);
 });
+
+test('file-backed skill source commands accept complete packages above the ordinary command limit', async t => {
+  const identity=identityFixture();
+  const received=[];
+  const call=await serve(t,{
+    runtime:{snapshot:async()=>({auth:{connected:true},models:[]}),command:async(payload,principal)=>{received.push({payload,principal});return {accepted:true};}},
+    auth:{},identitySessions:identity.port,access:remoteAccess,
+  });
+  const login=await call('/auth/session',{method:'POST',body:{deviceId:'skills-editor'}});
+  const headers={Authorization:`Bearer ${login.json().accessToken}`,Origin:'https://convoy.example'};
+  const files=[
+    {path:'SKILL.md',encoding:'utf8',content:'---\nname: implementation-review\ndescription: Review implementation evidence.\n---\nReview the supporting references.'},
+    {path:'references/checks.md',encoding:'utf8',content:'Reference evidence\n'.repeat(32_768)},
+  ];
+  assert.ok(Buffer.byteLength(JSON.stringify(files))>250_000);
+  assert.ok(files.reduce((size,file)=>size+Buffer.byteLength(file.content),0)<4*1024*1024);
+  for(const payload of [
+    {action:'createSkillSource',client:'skills-editor',rootId:'registered-root',relativeDirectory:'implementation-review',files,trusted:true,requestId:'create-package'},
+    {action:'saveSkillSource',client:'skills-editor',sourceId:'registered-source',expectedDigest:'observed-digest',files,requestId:'save-package'},
+  ]) {
+    const response=await call('/api/runtime',{method:'POST',headers,body:payload});
+    assert.equal(response.status,200);
+    assert.deepEqual(response.json(),{ok:true,result:{accepted:true}});
+    assert.deepEqual(received.at(-1),{payload,principal:{kind:'user',userId:'usr_ada'}});
+  }
+  const ordinary=await call('/api/runtime',{method:'POST',headers,body:{action:'heartbeat',client:'skills-editor',unrelatedPayload:files[1].content}});
+  assert.equal(ordinary.status,413);
+  assert.equal(received.length,2,'Large ordinary commands must not reach the control plane.');
+});
+
+test('skill save conflict and uncertain outcomes preserve structured recovery codes over HTTP', async t => {
+  const identity=identityFixture();
+  const call=await serve(t,{
+    runtime:{
+      snapshot:async()=>({auth:{connected:true},models:[]}),
+      command:async payload=>{
+        if(payload.requestId==='conflict')throw Object.assign(new Error('Source changed. Reload before saving.'),{code:'CONFLICT'});
+        if(payload.requestId==='uncertain')throw Object.assign(new Error('Save outcome is uncertain. Inspect before retrying.'),{code:'UNCERTAIN'});
+        throw Object.assign(new Error('Unsupported skill request.'),{code:'INVALID'});
+      },
+    },auth:{},identitySessions:identity.port,access:remoteAccess,
+  });
+  const login=await call('/auth/session',{method:'POST',body:{deviceId:'skills-editor'}});
+  const headers={Authorization:`Bearer ${login.json().accessToken}`,Origin:'https://convoy.example'};
+  for(const [requestId,code,message] of [
+    ['conflict','CONFLICT','Source changed. Reload before saving.'],
+    ['uncertain','UNCERTAIN','Save outcome is uncertain. Inspect before retrying.'],
+  ]) {
+    const response=await call('/api/runtime',{method:'POST',headers,body:{action:'saveSkillSource',client:'skills-editor',sourceId:'registered-source',expectedDigest:'observed-digest',files:[],requestId}});
+    assert.equal(response.status,409);
+    assert.deepEqual(response.json(),{error:message,code});
+    assert.equal(response.headers['cache-control'],'no-store');
+  }
+  const invalid=await call('/api/runtime',{method:'POST',headers,body:{action:'saveSkillSource',client:'skills-editor',sourceId:'registered-source',requestId:'invalid'}});
+  assert.equal(invalid.status,400);
+  assert.deepEqual(invalid.json(),{error:'Unsupported skill request.'});
+});

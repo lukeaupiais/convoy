@@ -184,7 +184,7 @@ export function createApp({
         try {
           if (req.url === '/api/runtime') {
             if (
-              !['attachContext', 'attachTicketFile'].includes(value.action) &&
+              !['attachContext', 'attachTicketFile', 'createSkillSource', 'saveSkillSource'].includes(value.action) &&
               Buffer.byteLength(body) > 250000
             )
               return json(413, { error: 'Request too large.' });
@@ -246,7 +246,8 @@ export function createApp({
           if (!method) return json(404, { error: 'Not found.' });
           return json(200, await auth[method]());
         } catch (error) {
-          return json(400, { error: error.message });
+          const recoverable=['CONFLICT','UNCERTAIN'].includes(error.code);
+          return json(recoverable ? 409 : 400, { error: error.message, ...(recoverable ? {code:error.code} : {}) });
         }
       }
       if (req.url === '/identity' && req.method === 'GET') {

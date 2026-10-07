@@ -8,7 +8,10 @@ test('overview loads the work catalog without session history; detail reads reta
   const state = { sessions: { 1: session }, approvalRules: [], modelChecks: {} };
   const snapshot = createSnapshotQuery({
     state, getSession: () => session, jobs: new Map(),
-    capabilities: { preview: () => ({ tools: [], skills: [] }) },
+    capabilities: {
+      filterSessionPreview: () => ({ tools: [], skills: [] }),
+      sessionSkillProjection: value => ({ events: value.events }),
+    },
     moduleSnapshots: [{ snapshot: () => ({ tickets: [{ id: 1, title: 'Edition review', projectId: 'publication' }], boards: [{ id: 'editorial', projectIds: ['publication'], tickets: [{ ticketId: 1, columnId: 'received' }], columns: [], filters: {} }], projects: [] }) }],
     canMessage: () => true, auth: { status: async () => ({ connected: false }) }, models: [], provider: { id: 'fixture', capabilities: [] },
     accessScope: async () => ({ projectIds: ['publication'] }),

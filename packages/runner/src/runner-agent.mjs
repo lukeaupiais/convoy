@@ -1,6 +1,6 @@
 import { probeVerificationRuntime, prepareVerificationRuntime, runtimeCommand, runtimeTool, runtimeLifecycle } from './verification-runtime.mjs';
 import { runInspectionProbe } from './inspection-probe.mjs';
-import { tmpdir } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { bindInspection, assertInspectionBinding } from './execution-binding.mjs';
 import { readWorkspaceGuidance, seedWorkspaceGuidance } from './workspace-guidance.mjs';
 // This exact module runs locally or over SSH. No provider credentials are sent to runners.
@@ -153,6 +153,7 @@ async function sandboxArgs(
   inspect = false,
   probe = false,
   probeControl = false,
+  workingDirectory = '',
 ) {
   const args = [
     '--unshare-all',
@@ -182,7 +183,7 @@ async function sandboxArgs(
     root,
     '/workspace',
     '--chdir',
-    '/workspace',
+    workingDirectory ? `/workspace/${workingDirectory}` : '/workspace',
     '--clearenv',
     '--setenv',
     'PATH',
@@ -226,8 +227,9 @@ async function sandbox(
   inspect = false,
   probe = false,
   probeControl = false,
+  workingDirectory = '',
 ) {
-  const args = await sandboxArgs(root, command, false, inspect, probe, probeControl);
+  const args = await sandboxArgs(root, command, false, inspect, probe, probeControl, workingDirectory);
   const filter = inspect && !probeControl ? openInspectionFilter() : null;
   try {
     if (supervisor)
@@ -280,8 +282,9 @@ async function executeCommand(
   lifetime,
   accessMode,
   execution,
+  workingDirectory = '',
 ) {
-  if (execution?.grant.profileId === 'verify') return runtimeCommand(root, execution, command, {signal, timeoutMs, launchId}, supervisor);
+  if (execution?.grant.profileId === 'verify') return runtimeCommand(root, execution, command, {signal, timeoutMs, launchId, workingDirectory}, supervisor);
   if (executionAccess(accessMode) === 'contained')
     return sandbox(
       root,
@@ -292,12 +295,13 @@ async function executeCommand(
       launchId,
       lifetime,
       execution?.grant.profileId === 'inspect',
+      false, false, workingDirectory,
     );
   const env = trustedEnvironment();
   if (supervisor)
     return {
       commandId: supervisor.start('/bin/sh', ['-c', command], {
-        cwd: root,
+        cwd: workingDirectory ? join(root,workingDirectory) : root,
         env,
         signal,
         timeoutMs,
@@ -306,7 +310,7 @@ async function executeCommand(
         lifetime,
       }),
     };
-  return processRun('/bin/sh', ['-c', command], { cwd: root, env, signal, timeout: timeoutMs });
+  return processRun('/bin/sh', ['-c', command], { cwd: workingDirectory ? join(root,workingDirectory) : root, env, signal, timeout: timeoutMs });
 }
 const git = (root, args, signal) =>
   processRun(
@@ -337,15 +341,16 @@ const runnerContracts = {
   diff: { required: ['workspace'], optional: ['operationId', 'ignoreArtifact', 'execution'] },
   tool: {
     required: ['workspace', 'name', 'args'],
-    optional: ['operationId', 'accessMode', 'execution', 'executionProfile'],
+    optional: ['operationId', 'accessMode', 'execution', 'executionProfile', 'workingDirectory'],
   },
   extension: {
     required: ['workspace', 'extension', 'adapter', 'tool', 'args'],
-    optional: ['operationId'],
+    optional: ['operationId', 'workingDirectory'],
   },
   command_start: {
     required: ['workspace', 'command', 'launchId'],
     optional: [
+      'workingDirectory',
       'operationId',
       'timeoutMs',
       'lifetime',
@@ -367,6 +372,7 @@ const runnerContracts = {
   terminal_start: {
     required: ['workspace'],
     optional: [
+      'workingDirectory',
       'operationId',
       'command',
       'cols',
@@ -959,6 +965,7 @@ export function validateRunnerRequest(request) {
     )
       throw new Error('Invalid extension request.');
   }
+  if(request.workingDirectory!==undefined && (typeof request.workingDirectory!=='string'||request.workingDirectory.length>500||isAbsolute(request.workingDirectory)||/[\\\x00-\x1f]/.test(request.workingDirectory)||(request.workingDirectory&&request.workingDirectory.split('/').some(part=>!part||['.','..'].includes(part)))))throw new Error('Invalid session working directory.');
   return request;
 }
 export async function executeRunner(
@@ -1065,6 +1072,7 @@ export async function executeRunner(
       } catch {}
     return {
       repository: root,
+      executionIdentity: `uid:${userInfo().uid}`,
       platform: process.platform,
       arch: process.arch,
       node: process.version,
@@ -1166,8 +1174,10 @@ export async function executeRunner(
     };
   }
   const root = await realpath(request.workspace);
+  const workingRoot=request.workingDirectory ? await checkedPath(root,request.workingDirectory) : root;
+  if(!(await lstat(workingRoot)).isDirectory())throw new Error('Session working directory must be an existing directory.');
   if (action === 'verification') return request.operation === 'prepare' ? prepareVerificationRuntime(root, request.execution, signal) : runtimeLifecycle(root, request.execution, request.operation, request.files);
-  if (request.execution?.grant.profileId === 'verify' && action === 'tool' && nameNotCommand(request.name)) return runtimeTool(root, request.execution, request.name, request.args);
+  if (request.execution?.grant.profileId === 'verify' && action === 'tool' && nameNotCommand(request.name)) return runtimeTool(root, request.execution, request.name, request.workingDirectory&&typeof request.args.path==='string'&&!request.args.path.startsWith('/') ? {...request.args,path:`${request.workingDirectory}/${request.args.path}`} : request.args);
   if (request.execution?.grant.profileId === 'verify' && action === 'diff') return {status:'',diff:'',digest:request.execution.grant.runtime.definition.digest,truncated:false};
   if (action === 'workspace_guidance') return readWorkspaceGuidance(root);
   if (request.action.startsWith('terminal_')) {
@@ -1184,9 +1194,9 @@ export async function executeRunner(
     const invocation =
       accessMode === 'trusted'
         ? { command: '/bin/sh', args: ['-c', command], env: trustedEnvironment() }
-        : { command: 'bwrap', args: await sandboxArgs(root, command, true), env: safeEnv };
+        : { command: 'bwrap', args: await sandboxArgs(root, command, true, false, false, false, request.workingDirectory), env: safeEnv };
     return terminals.start(invocation.command, invocation.args, {
-      cwd: root,
+      cwd: workingRoot,
       env: invocation.env,
       owner: root,
       cols: request.cols,
@@ -1220,6 +1230,7 @@ export async function executeRunner(
       request.lifetime,
       request.accessMode,
       request.execution,
+      request.workingDirectory,
     );
   }
   if (action === 'diff') {
@@ -1278,14 +1289,15 @@ export async function executeRunner(
       tool: request.tool,
       args: structuredClone(request.args),
       workspace: root,
+      workingDirectory: workingRoot,
       signal,
     });
   }
   const { name, args } = request;
-  if (name === 'read_file') return readPage(root, args);
-  if (name === 'list_files') return listFiles(root, args, signal);
-  if (name === 'search_files') return searchFiles(root, args, signal);
-  if (name === 'inspect_repository') return inspectRepository(root, args, signal);
+  if (name === 'read_file') return readPage(workingRoot, args);
+  if (name === 'list_files') return listFiles(workingRoot, args, signal);
+  if (name === 'search_files') return searchFiles(workingRoot, args, signal);
+  if (name === 'inspect_repository') return inspectRepository(workingRoot, args, signal);
   if (name === 'write_file') {
     if (
       typeof args.content !== 'string' ||
@@ -1293,7 +1305,7 @@ export async function executeRunner(
       typeof args.expectedHash !== 'string'
     )
       throw new Error('Write requires content and expectedHash (empty for a new file).');
-    const path = await checkedPath(root, args.path, true);
+    const path = await checkedPath(workingRoot, args.path, true);
     let old = '';
     let mode = 0o600;
     try {
@@ -1305,12 +1317,12 @@ export async function executeRunner(
     if (old !== args.expectedHash)
       throw new Error('File changed since it was read. Read it again before editing.');
     await mkdir(dirname(path), { recursive: true });
-    await checkedPath(root, args.path, true);
+    await checkedPath(workingRoot, args.path, true);
     await atomicWrite(path, args.content, mode, signal);
     return { path: args.path, sha256: digest(args.content) };
   }
   if (name === 'apply_patch') {
-    return applyPatch(root, args, signal);
+    return applyPatch(workingRoot, args, signal);
   }
   if (name === 'shell') {
     validateShellCommand(args.command);
@@ -1324,6 +1336,7 @@ export async function executeRunner(
       undefined,
       request.accessMode,
       request.execution,
+      request.workingDirectory,
     );
   }
   throw new Error('Unsupported runner operation.');

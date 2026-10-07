@@ -58,6 +58,10 @@ export function createSnapshotQuery({
         moduleSnapshots.map((module) => module.snapshot({ id, client, principal, scope })),
       )),
     );
+    const publicWorkflow = (workflow) => workflow && ({...workflow,...(workflow.skillSnapshots ? {skillSnapshots:workflow.skillSnapshots.filter(ref=>
+      capabilities.sessionSkillProjection({skillSnapshots:[ref]},scope).skillSnapshots.length)} : {})});
+    if(moduleState.workflows)moduleState.workflows=moduleState.workflows.map(publicWorkflow);
+    if(moduleState.workflowDrafts)moduleState.workflowDrafts=Object.fromEntries(Object.entries(moduleState.workflowDrafts).map(([id,draft])=>[id,{...draft,workflow:publicWorkflow(draft.workflow)}]));
     const includeSessionDetails = id !== undefined || view !== 'overview';
     const sessions = (includeSessionDetails ? (id ? [getSession(id)] : Object.values(state.sessions)) : []).filter(
       (session) => !scope || scope.projectIds.includes(session.projectId),
@@ -72,6 +76,7 @@ export function createSnapshotQuery({
         if (publicFlow) session.flow = publicFlow;
         const publicPastRuns = (pastRuns ?? []).slice(-50).map(run => {
           const value = structuredClone(run);
+          if(value.workflow)value.workflow=publicWorkflow(value.workflow);
           for (const history of value.history ?? []) delete history.activityReservation;
           return value;
         });
@@ -85,6 +90,7 @@ export function createSnapshotQuery({
             : undefined;
         return {
           ...session,
+          ...capabilities.sessionSkillProjection(session,scope),
           lease: publicLease,
           workflowRunId: workflowRunId ?? flow?.id,
           pastRuns: publicPastRuns,
@@ -100,14 +106,14 @@ export function createSnapshotQuery({
             stopping: Boolean(session.stopRequested),
             canMessage: canMessage(session),
           },
-          effectiveCapabilities: capabilities.preview(session, activeAgentStep),
+          effectiveCapabilities: capabilities.filterSessionPreview(session,scope,activeAgentStep),
           agentSessions: Object.values(agentSessions ?? {}).map(
             ({ messages: agentMessages, ...record }) => ({
               ...record,
               messageCount: agentMessages.length,
             }),
           ),
-          events: session.events.slice(-500),
+          events: capabilities.sessionSkillProjection(session,scope).events.slice(-500),
         };
       },
     );

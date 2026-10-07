@@ -521,7 +521,7 @@ async function commandStart(workspace, execution, command, options, supervisor) 
   const argv = [
     'exec',
     '--workdir',
-    '/source',
+    options.workingDirectory ? `/source/${options.workingDirectory}` : '/source',
     r.container,
     '/usr/bin/timeout',
     '--signal=KILL',
