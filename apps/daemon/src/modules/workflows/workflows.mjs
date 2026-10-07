@@ -441,6 +441,16 @@ export function normalizeWorkflow(input, { publishing = false } = {}) {
       throw new Error('Invalid workflow capability profile revision.');
     value.capabilityProfile = { id: ref.id, version: ref.version };
   }
+  if(input.capabilityProfilePinned !== undefined) {
+    if(typeof input.capabilityProfilePinned !== 'boolean')throw new Error('Invalid workflow capability dependency pin.');
+    value.capabilityProfilePinned=input.capabilityProfilePinned;
+  }
+  if (input.skillSnapshots !== undefined) {
+    if (!Array.isArray(input.skillSnapshots) || input.skillSnapshots.length > 30 || input.skillSnapshots.some(ref =>
+      !ref || typeof ref.snapshotId !== 'string' || !/^[a-f0-9]{64}$/.test(ref.snapshotId) || typeof ref.digest !== 'string' || !/^[a-f0-9]{64}$/.test(ref.digest) || typeof ref.sourceId !== 'string'))
+      throw new Error('Invalid pinned workflow skill dependencies.');
+    value.skillSnapshots = input.skillSnapshots.map(ref => ({snapshotId:ref.snapshotId,digest:ref.digest,sourceId:ref.sourceId}));
+  }
   if (!safeId(value.id)) throw new Error('Invalid workflow ID.');
   if (!Number.isInteger(value.maxRevisions) || value.maxRevisions < 0 || value.maxRevisions > 20) throw new Error('maxRevisions must be an integer from 0 to 20.');
   const ids = new Set(); const sessions = new Set(['main']);

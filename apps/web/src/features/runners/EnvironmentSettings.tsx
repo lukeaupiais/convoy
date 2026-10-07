@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SkillDirectories } from './SkillDirectories';
 import { command, type RuntimeAction } from '../../shared/api/runtime';
 import type { Environment, RuntimeState } from '../../shared/api/runtime';
 const split = (v: FormDataEntryValue | null) =>
@@ -65,6 +66,7 @@ export function EnvironmentSettings({ state }: { state: RuntimeState }) {
           </button>
         </form>
       </details>
+      <SkillDirectories state={state} />
       <h2>Environments</h2>
       <details className="runtime-details">
         <summary>Add environment</summary>

@@ -3,6 +3,14 @@ import type {
   ExtensionManifest,
   ProfileRef,
   SkillRevision,
+  SkillCatalogue,
+  SkillRoot,
+  SkillSource,
+  SkillSourceInstance,
+  SkillFile,
+  SkillSelection,
+  SkillSnapshot,
+  SkillScope,
 } from './model/capabilities';
 import type {
   Environment,
@@ -39,7 +47,11 @@ import type {
   Ticket,
   TicketConnection,
 } from './model/work';
-import type { WorkflowDefinition, AutomationRule, WorkflowCompositionLimits } from './model/workflows';
+import type {
+  WorkflowDefinition,
+  AutomationRule,
+  WorkflowCompositionLimits,
+} from './model/workflows';
 
 type SessionTarget = { sessionId?: string; taskId?: string | number };
 type RequestIdentity = { requestId: string };
@@ -80,7 +92,14 @@ type BoardTemplateDefinition = Pick<BoardTemplate, 'name' | 'columns'> &
   >;
 
 export type RuntimeCommandInputMap = {
-  updateKnowledgeCollection: { collectionId: string; expectedRevision: number; name: string; description: string; startPageIds: string[]; pageOrder: string[] };
+  updateKnowledgeCollection: {
+    collectionId: string;
+    expectedRevision: number;
+    name: string;
+    description: string;
+    startPageIds: string[];
+    pageOrder: string[];
+  };
   createKnowledgeCollection: { projectId: string; name: string };
   setKnowledgeCollectionState: {
     collectionId: string;
@@ -126,7 +145,11 @@ export type RuntimeCommandInputMap = {
   advance: SessionTarget;
   refreshWorkspaceGuidance: SessionTarget & { captureId: string | null };
   answerQuestion: SessionTarget & { questionId: string; answer: string };
-  approveGate: SessionTarget & { instance: string; activityReservationId?: string; activityReservationDigest?: string };
+  approveGate: SessionTarget & {
+    instance: string;
+    activityReservationId?: string;
+    activityReservationDigest?: string;
+  };
   attachContext: SessionTarget & ({ path: string } | { name: string; mime: string; data: string });
   attachTicketFile: {
     taskId: number;
@@ -303,7 +326,11 @@ export type RuntimeCommandInputMap = {
   revokeRunnerEnrollment: { id: string; organizationId: string; revision: number };
   rotateRunnerIdentity: { runnerId: string; organizationId: string; revision: number };
   revokeRunnerIdentity: { runnerId: string; organizationId: string; revision: number };
-  configure: SessionTarget & { runnerId?: string; workflow?: string | true };
+  configure: SessionTarget & {
+    runnerId?: string;
+    workflow?: string | true;
+    workingDirectory?: string;
+  };
   connectRemote: { host: string; repository: string; projectIds: string[] };
   continueWorkflow: SessionTarget & { instance: string };
   createBoardFromTemplate: { templateId: string; name: string; projectIds: string[] };
@@ -398,6 +425,89 @@ export type RuntimeCommandInputMap = {
   diff: SessionTarget;
   discardMessage: SessionTarget & RequestIdentity;
   ensure: { taskId: string | number; title?: string; description?: string };
+  inspectSkillMutation: ({ sourceId: string } | { rootId: string; relativeDirectory: string }) & {
+    runnerId?: string;
+    workspaceId?: string;
+  };
+  reconcileSkillMutation: ({ sourceId: string } | { rootId: string; relativeDirectory: string }) & {
+    runnerId?: string;
+    workspaceId?: string;
+    requestId: string;
+    expectedDigest: string | null;
+  };
+  registerSkillRoot: {
+    scope: SkillScope;
+    runnerId: string;
+    path: string;
+    executionIdentity: string;
+    writable: boolean;
+    projectId?: string;
+    repositoryId?: string;
+    relevancePath?: string;
+    allowSymlinks?: boolean;
+    provenance?: SkillRoot['provenance'];
+    trusted?: boolean;
+  };
+  updateSkillRoot: {
+    rootId: string;
+    expectedRevision: number;
+    readable?: boolean;
+    writable?: boolean;
+    trusted?: boolean;
+  };
+  unregisterSkillRoot: { rootId: string; expectedRevision: number };
+  catalogueSkills: {
+    scope?: SkillScope;
+    runnerId?: string;
+    workspaceId?: string;
+    projectId?: string;
+    workingDirectory?: string;
+  };
+  refreshSkills: {
+    scope?: SkillScope;
+    runnerId?: string;
+    workspaceId?: string;
+    projectId?: string;
+    workingDirectory?: string;
+  };
+  readSkillSource: { sourceId: string; runnerId?: string; workspaceId?: string };
+  saveSkillSource: {
+    sourceId: string;
+    runnerId?: string;
+    workspaceId?: string;
+    expectedDigest: string;
+    files: SkillFile[];
+    requestId?: string;
+    trusted?: boolean;
+  };
+  createSkillSource: {
+    rootId: string;
+    relativeDirectory: string;
+    files: SkillFile[];
+    trusted: boolean;
+    requestId?: string;
+  };
+  captureSkillSelections: {
+    selections: SkillSelection[];
+    runnerId?: string;
+    workspaceId?: string;
+    workingDirectory?: string;
+  };
+  provisionSkillSnapshot: {
+    snapshotId: string;
+    targetRootId: string;
+    relativeDirectory: string;
+    trusted: boolean;
+    requestId: string;
+  };
+  saveStoredSkillToFolder: {
+    name: string;
+    version: number;
+    rootId: string;
+    relativeDirectory: string;
+    trusted: boolean;
+    requestId?: string;
+  };
   exportSkill: { name: string; version?: number; organizationId?: string };
   heartbeat: SessionTarget;
   importTickets: {
@@ -424,6 +534,7 @@ export type RuntimeCommandInputMap = {
     content: string;
   };
   publishProfile: {
+    skillSelections?: SkillSelection[];
     knowledge?: import('./model/knowledge').KnowledgeSelection;
     loadWorkspaceAgentsMd?: boolean;
     organizationId?: string;
@@ -561,7 +672,12 @@ export type RuntimeCommandInputMap = {
     expected?: ProfileReference | null;
   };
   setScheduler: { organizationId?: string; maxConcurrent: number };
-  setWorkflowCompositionPolicy: { organizationId: string; projectId?: string; baseRevision: number; limits: WorkflowCompositionLimits };
+  setWorkflowCompositionPolicy: {
+    organizationId: string;
+    projectId?: string;
+    baseRevision: number;
+    limits: WorkflowCompositionLimits;
+  };
   setToolEnabled: {
     organizationId?: string;
     projectId?: string;
@@ -570,25 +686,99 @@ export type RuntimeCommandInputMap = {
   };
   start: SessionTarget & RequestIdentity & { text: string; model: string };
   startWorkflow: SessionTarget;
-  startWorkflowRun: { projectId: string; workflowId: string; workflowVersion: number; activeTicketId?: number; runInput?: Record<string, unknown> };
+  startWorkflowRun: {
+    projectId: string;
+    workflowId: string;
+    workflowVersion: number;
+    activeTicketId?: number;
+    runInput?: Record<string, unknown>;
+  };
   prepareWorkflowActivity: { workflowRunId: string; gateInstance: string; targetNodeId: string };
-  submitWorkflowHumanResponse: { workflowRunId: string; instance: string; values: Record<string, unknown> };
-  prepareWorkflowHumanReview: { workflowRunId: string; instance: string; responseId: string; outcomeId: string; targetNodeId?: string };
-  captureWorkflowEvidence: { workflowRunId: string; instance: string; producer: 'document' | 'api_snapshot' | 'activity_receipt'; name: string; mime: string; data: string; nodeId?: string; attemptInstance?: string };
-  captureWorkflowActivityReceipt: { workflowRunId: string; nodeId: string; attemptInstance: string };
+  submitWorkflowHumanResponse: {
+    workflowRunId: string;
+    instance: string;
+    values: Record<string, unknown>;
+  };
+  prepareWorkflowHumanReview: {
+    workflowRunId: string;
+    instance: string;
+    responseId: string;
+    outcomeId: string;
+    targetNodeId?: string;
+  };
+  captureWorkflowEvidence: {
+    workflowRunId: string;
+    instance: string;
+    producer: 'document' | 'api_snapshot' | 'activity_receipt';
+    name: string;
+    mime: string;
+    data: string;
+    nodeId?: string;
+    attemptInstance?: string;
+  };
+  captureWorkflowActivityReceipt: {
+    workflowRunId: string;
+    nodeId: string;
+    attemptInstance: string;
+  };
   readWorkflowEvidence: { workflowRunId: string; evidenceId: string };
   getWorkflowRun: { workflowRunId: string; compositionOffset?: number };
   getWorkflowRunResult: { workflowRunId: string };
-  reconcileWorkflowRun: { workflowRunId: string; instance: string; effectKey: string; resolution: 'applied' | 'not_applied'; result?: Record<string, unknown> };
+  reconcileWorkflowRun: {
+    workflowRunId: string;
+    instance: string;
+    effectKey: string;
+    resolution: 'applied' | 'not_applied';
+    result?: Record<string, unknown>;
+  };
   claimWorkflowRun: { workflowRunId: string; label?: string };
   releaseWorkflowRun: { workflowRunId: string };
-  decideWorkflowRun: { workflowRunId: string; instance: string; decision?: 'approve' | 'requestChanges' | 'request_changes'; outcomeId?: string; responseId?: string; reviewedMaterialDigest?: string; feedback?: string; activityReservationId?: string; activityReservationDigest?: string };
+  decideWorkflowRun: {
+    workflowRunId: string;
+    instance: string;
+    decision?: 'approve' | 'requestChanges' | 'request_changes';
+    outcomeId?: string;
+    responseId?: string;
+    reviewedMaterialDigest?: string;
+    feedback?: string;
+    activityReservationId?: string;
+    activityReservationDigest?: string;
+  };
   continueWorkflowRun: { workflowRunId: string; instance: string };
   cancelWorkflowRun: { workflowRunId: string };
-  submitWorkflowEvent: { descriptorId: string; descriptorRevision?: number; idempotencyKey: string; payload: Record<string, unknown>; projectId?: string; resourceRef?: { kind: string; id: string } };
+  submitWorkflowEvent: {
+    descriptorId: string;
+    descriptorRevision?: number;
+    idempotencyKey: string;
+    payload: Record<string, unknown>;
+    projectId?: string;
+    resourceRef?: { kind: string; id: string };
+  };
   retryWorkflowEventDecision: { decisionKey: string };
-  saveWorkflowSchedule: { id?: string; revision?: number; name: string; projectId: string; workflowId: string; workflowVersion: number; runInput?: Record<string, unknown>; schedule: Record<string, unknown>; missedFirePolicy: 'skip' | 'coalesce_once' | { catchUp: { maxFirings: number } }; enabled: boolean };
-  saveWorkflowWebhookBinding: { id?: string; revision?: number; name: string; descriptorId: string; descriptorRevision: number; projectId: string; servicePrincipalId: string; eventIdPath: string; fieldMap: { targetPath: string; sourcePath: string }[]; enabled: boolean };
+  saveWorkflowSchedule: {
+    id?: string;
+    revision?: number;
+    name: string;
+    projectId: string;
+    workflowId: string;
+    workflowVersion: number;
+    runInput?: Record<string, unknown>;
+    schedule: Record<string, unknown>;
+    missedFirePolicy: 'skip' | 'coalesce_once' | { catchUp: { maxFirings: number } };
+    enabled: boolean;
+  };
+  saveWorkflowWebhookBinding: {
+    id?: string;
+    revision?: number;
+    name: string;
+    descriptorId: string;
+    descriptorRevision: number;
+    projectId: string;
+    servicePrincipalId: string;
+    eventIdPath: string;
+    fieldMap: { targetPath: string; sourcePath: string }[];
+    enabled: boolean;
+  };
   revokeWorkflowWebhookBinding: { id: string; revision: number };
   stop: SessionTarget;
   stopCommand: SessionTarget & { commandId: string };
@@ -683,6 +873,36 @@ type RuntimeCommandKnownResults = {
   importExternalTickets: { imported: number; updated: number };
   saveTicketImportBinding: import('./model/work').TicketImportBinding;
   syncTicketImportBinding: { imported: number; updated: number; complete: boolean; pages: number };
+  inspectSkillMutation: {
+    status: 'observed' | 'uncertain';
+    pending?: { requestId: string };
+    current?: { digest: string; files: SkillFile[] } | null;
+    diagnostic?: string;
+  };
+  reconcileSkillMutation: { status: string; digest?: string };
+  registerSkillRoot: SkillRoot;
+  updateSkillRoot: SkillRoot;
+  unregisterSkillRoot: { removed: boolean };
+  catalogueSkills: SkillCatalogue;
+  refreshSkills: SkillCatalogue;
+  readSkillSource: {
+    source: SkillSource;
+    instance: SkillSourceInstance;
+    files: SkillFile[];
+    digest: string;
+    writable: boolean;
+  };
+  saveSkillSource: {
+    source: SkillSource;
+    instance: SkillSourceInstance;
+    files: SkillFile[];
+    digest: string;
+    writable: boolean;
+  };
+  createSkillSource: SkillSource;
+  captureSkillSelections: SkillSnapshot[];
+  provisionSkillSnapshot: SkillSource;
+  saveStoredSkillToFolder: SkillSource;
   exportSkill: { files: Record<string, string>; source: string };
   importTickets: { imported: number; conflicts: number[] };
   openTicketConversation: Conversation;

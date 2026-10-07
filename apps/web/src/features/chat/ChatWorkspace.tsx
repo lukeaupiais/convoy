@@ -14,6 +14,7 @@ export function ChatWorkspace({
   openTicket,
   openWorkflowRun,
   openProviders,
+  openAgents,
 }: {
   state: RuntimeState;
   selectedId: string;
@@ -22,6 +23,7 @@ export function ChatWorkspace({
   openTicket: (id: number) => void;
   openWorkflowRun?: (runId: string) => void;
   openProviders: () => void;
+  openAgents?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [headerTarget, setHeaderTarget] = useState<HTMLDivElement | null>(null);
@@ -201,6 +203,7 @@ export function ChatWorkspace({
               openConversation={select}
               openWorkflowRun={openWorkflowRun}
               openProviders={openProviders}
+              openAgents={openAgents}
             />
           </>
         )}

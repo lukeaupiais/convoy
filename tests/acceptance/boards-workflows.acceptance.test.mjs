@@ -196,7 +196,13 @@ test('acceptance: imported support starts once and approved escalation starts li
     assert.equal(supportRun.status, 'waiting_gate');
     await f.act('claimWorkflowRun', { workflowRunId: supportRun.id });
     await f.act('decideWorkflowRun', { workflowRunId: supportRun.id, instance: supportRun.instance, decision: 'approve' });
-    state = await until(async () => { const snapshot = await f.snapshot(); return snapshot.ticketRelations?.length === 1 ? snapshot : null; });
+    // The relation is recorded before its durable event starts the next workflow.
+    state = await until(async () => {
+        const snapshot = await f.snapshot();
+        const developmentStarted = snapshot.workflowEventDecisions?.items?.some(value =>
+            value.workflowId === 'development-review' && value.status === 'started');
+        return snapshot.ticketRelations?.length === 1 && developmentStarted ? snapshot : null;
+    });
     const development = state.tickets.find(value => value.workType === 'development' && value.projectId === project.id);
     assert.equal(state.ticketRelations[0].sourceTicketId, support.id);
     assert.equal(state.ticketRelations[0].targetTicketId, development.id);

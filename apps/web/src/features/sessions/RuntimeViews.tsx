@@ -25,6 +25,7 @@ export function SessionControls({
   openRecovery = false,
   onOpenTicketMessages,
   onOpenWorkflowRun,
+  onManageAgents,
 }: {
   session: Session;
   state: RuntimeState;
@@ -37,10 +38,12 @@ export function SessionControls({
   openRecovery?: boolean;
   onOpenTicketMessages?: () => void;
   onOpenWorkflowRun?: (runId: string) => void;
+  onManageAgents?: () => void;
 }) {
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
   const [runnerId, setRunnerId] = useState(s.runnerId ?? '');
+  const [workingDirectory, setWorkingDirectory] = useState(s.workingDirectory ?? '');
   const [workflow, setWorkflow] = useState(s.workflow?.id ?? '');
   const [answer, setAnswer] = useState('');
   const busy = ['running', 'waiting_approval', 'waiting_question'].includes(s.status);
@@ -179,6 +182,24 @@ export function SessionControls({
           ))}
         </select>
       </label>
+      {(runnerId || s.assignment?.runnerId || s.workspace) && (
+        <details className="session-working-directory">
+          <summary>Working directory</summary>
+          <label>
+            Directory
+            <input
+              aria-label="Session working directory"
+              placeholder="Repository root"
+              value={workingDirectory}
+              disabled={
+                busy || working || (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
+              }
+              onChange={(event) => setWorkingDirectory(event.target.value)}
+            />
+          </label>
+          <p className="muted">Relative to the workspace. Applies when starting new work.</p>
+        </details>
+      )}
       <button
         className="secondary"
         disabled={
@@ -193,7 +214,7 @@ export function SessionControls({
             ? 'Configuration is locked while this workflow is active'
             : undefined
         }
-        onClick={() => act('configure', { runnerId, workflow })}
+        onClick={() => act('configure', { runnerId, workflow, workingDirectory })}
       >
         {settingsOnly ? 'Apply' : 'Apply configuration'}
       </button>
@@ -205,6 +226,7 @@ export function SessionControls({
         state={state}
         session={s}
         acquireControl={compact ? ensureControl : undefined}
+        onManageAgents={onManageAgents}
       />
       <details className="runtime-details">
         <summary>

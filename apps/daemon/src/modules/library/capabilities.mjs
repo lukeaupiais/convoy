@@ -40,7 +40,7 @@ const safePath = (path) =>
         !p.startsWith('.env'),
     ) &&
   !/[\x00-\x1f]/.test(path);
-const refKey = (r) => `${r.name}@${r.version}`;
+const refKey = (r) => r.snapshotId ?? `${r.name}@${r.version}`;
 const toolHash = (t) => digest(JSON.stringify(t));
 
 // Pure, bounded parser. Importing a skill never evaluates scripts or resolves links.
@@ -142,7 +142,7 @@ export function migrateLibraryState(state) {
     }
 }
 
-export function createCapabilities({ state, executionPolicy, validateKnowledge }) {
+export function createCapabilities({ state, executionPolicy, validateKnowledge, skillSources }) {
   migrateLibraryState(state);
   const organizationForProject = (projectId) =>
     state.projects?.find((project) => project.id === projectId)?.organizationId ?? 'personal';
@@ -203,8 +203,14 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
   }
   function selectedSkills(s, step) {
     const organizationId = organizationForSession(s);
-    return (selection(s)?.skills ?? [])
-      .map((ref) => skill(ref, organizationId))
+    const legacy = (selection(s)?.skills ?? []).map((ref) => skill(ref, organizationId));
+    const captured = (s.skillSnapshots ?? []).map(ref => {
+      if (!skillSources) throw new Error('Skill source support unavailable.');
+      const snapshot = skillSources.snapshot(ref, {organizationId,userId:s.userId ?? s.ownerUserId ?? s.skillUserId,projectId:s.projectId});
+      return {...snapshot, snapshotId:snapshot.id, version:0, hash:snapshot.digest,
+        files:Object.fromEntries(snapshot.files.map(f=>[f.path,f.encoding==='utf8'?f.content:{encoding:f.encoding,content:f.content}]))};
+    });
+    return [...legacy, ...captured]
       .filter((k) => !step?.skills?.length || step.skills.includes(k.name));
   }
   function entries(s, step) {
@@ -303,7 +309,7 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
   function validateWorkflowSkills(workflow, selected) {
     for (const node of workflow.nodes ?? []) {
       for (const name of node.skills ?? []) {
-        if (!selected?.skills.some((value) => value.name === name))
+        if (!selected?.skills.some((value) => value.name === name) && !selected?.skillSelections?.length)
           throw new Error(`${node.name}: capability profile is missing skill ${name}.`);
       }
     }
@@ -311,9 +317,9 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
   function resolveForWorkflow(session, workflow, options = {}) {
     const ref = Object.hasOwn(options, 'profile')
       ? options.profile
-      : (workflow.capabilityProfile ??
-        session.capabilityProfile ??
-        state.projectProfiles[session.projectId]);
+      : workflow.capabilityProfilePinned === true
+        ? (workflow.capabilityProfile ?? null)
+        : (workflow.capabilityProfile ?? session.capabilityProfile ?? state.projectProfiles[session.projectId]);
     const selected = ref ? structuredClone(profile(ref, organizationForSession(session))) : null;
     // Historical workflows without a selected profile retain their legacy tool set.
     if (selected || workflow.capabilityProfile) {
@@ -325,32 +331,34 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
   return {
     snapshot(scope) {
       const organizationId = scope?.organizationId;
+      const organizationVisible = value => scope === undefined || (!!organizationId && (value.organizationId ?? 'personal') === organizationId);
       return {
         tools: toolRegistry,
         skills: state.skills
           .filter(
-            (value) => !organizationId || (value.organizationId ?? 'personal') === organizationId,
+            organizationVisible,
           )
           .map(({ files, body, ...s }) => ({
             ...s,
+            organizationId: s.organizationId ?? 'personal',
             resources: Object.keys(files),
           })),
         profiles: state.capabilityProfiles.filter(
-          (value) => !organizationId || (value.organizationId ?? 'personal') === organizationId,
+          (value) => organizationVisible(value) && (scope === undefined || !value.skillSelections?.length || skillSources?.canInspectSelections(value.skillSelections,scope)),
         ),
         extensions: state.extensions.filter(
-          (value) => !organizationId || (value.organizationId ?? 'personal') === organizationId,
+          organizationVisible,
         ),
         projectProfiles: Object.fromEntries(
           Object.entries(state.projectProfiles).filter(
             ([projectId]) =>
-              !organizationId || organizationForProject(projectId) === organizationId,
+              scope === undefined || (!!organizationId && organizationForProject(projectId) === organizationId),
           ),
         ),
         disabledTools: [
-          ...(organizationId === 'personal' || !organizationId ? state.disabledTools : []),
+          ...(organizationId === 'personal' || scope === undefined ? state.disabledTools : []),
           ...state.toolPolicies
-            .filter((value) => !organizationId || value.organizationId === organizationId)
+            .filter(organizationVisible)
             .filter((value) => value.enabled === false)
             .map((value) => value.toolId),
         ],
@@ -360,13 +368,57 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
       return {
         profile: selection(s),
         tools: entries(s, step),
-        skills: selectedSkills(s, step).map(({ name, version, description, hash }) => ({
+        skills: selectedSkills(s, step).map(({ name, version, description, hash, sourceId, snapshotId, runnerId, workspaceId }) => ({
+          ...(sourceId ? {sourceId,snapshotId,runnerId,workspaceId} : {}),
           name,
           version,
           description,
           hash,
-          active: s.activeSkills?.includes(`${name}@${version}`) ?? false,
+          active: s.activeSkills?.includes(snapshotId ?? `${name}@${version}`) ?? false,
         })),
+      };
+    },
+    filterSessionPreview(session, scope, step) {
+      const skillSnapshots=(session.skillSnapshots??[]).filter(ref=>{
+        try { skillSources?.snapshot(ref,scope);return !!skillSources; } catch { return false; }
+      });
+      const value=this.preview({...session,skillSnapshots},step);
+      const profileAllowed=!value.profile?.skillSelections?.length||skillSources?.canInspectSelections(value.profile.skillSelections,scope);
+      return {...value,profile:profileAllowed?value.profile:null,skills:value.skills.filter(skill=>!skill.snapshotId||skillSources?.canInspectSelections([{mode:'snapshot-pinned',snapshotId:skill.snapshotId}],scope))};
+    },
+    sessionSkillProjection(session, scope) {
+      const inspect = ref => skillSources?.canInspectSelections([{mode:'snapshot-pinned',snapshotId:ref.snapshotId}],scope);
+      const profileAllowed=!session.capabilityProfile?.skillSelections?.length||skillSources?.canInspectSelections(session.capabilityProfile.skillSelections,scope);
+      const skillSnapshots=(session.skillSnapshots??[]).filter(inspect);
+      const capturedIds=new Set(skillSnapshots.map(ref=>ref.snapshotId));
+      const legacyAllowed=scope?.organizationId===organizationForSession(session);
+      const legacyKeys=new Set(legacyAllowed ? (session.capabilityProfile?.skills??[]).map(ref=>refKey(ref)) : []);
+      const privateSnapshots=(state.skillSnapshots??[]).filter(snapshot=>snapshot.organizationId===organizationForSession(session)&&!inspect({snapshotId:snapshot.id}));
+      const privateDigests=new Set(privateSnapshots.map(snapshot=>snapshot.digest));
+      const privateNames=new Set(privateSnapshots.flatMap(snapshot=>[snapshot.id,snapshot.sourceId,snapshot.name]));
+      const isSkillTool=tool=>['load_skill','read_skill_resource'].includes(tool);
+      const privateResult=output=>output && (privateDigests.has(output.hash)||(!output.hash&&privateNames.has(output.name)));
+      const privateCalls=new Set((session.events??[]).filter(event=>isSkillTool(event.tool)&&(
+        privateResult(event.output)||(event.type==='tool_requested'&&privateNames.has(event.args?.name))
+      )).map(event=>event.callId).filter(Boolean));
+      const events=(session.events??[]).map(event=>{
+        const result=structuredClone(event);
+        if(isSkillTool(event.tool)&&(privateCalls.has(event.callId)||privateResult(event.output))) {
+          if(Object.hasOwn(result,'output'))result.output={unavailable:true,message:'Skill content is private.'};
+          if(Object.hasOwn(result,'args'))result.args={unavailable:true};
+        }
+        if(event.type==='profile_applied'&&event.profile){
+          const applied=state.capabilityProfiles.find(profile=>profile.id===event.profile.id&&profile.version===event.profile.version&&(profile.organizationId??'personal')===organizationForSession(session));
+          if(applied?.skillSelections?.length&&!skillSources?.canInspectSelections(applied.skillSelections,scope))result.profile=null;
+        }
+        return result;
+      });
+      return {
+        capabilityProfile:profileAllowed?session.capabilityProfile:null,
+        skillSnapshots,
+        activeSkills:(session.activeSkills??[]).filter(value=>capturedIds.has(value)||legacyKeys.has(value)),
+        events,
+        ...(session.workflow ? {workflow:{...structuredClone(session.workflow),skillSnapshots:(session.workflow.skillSnapshots??[]).filter(inspect)}} : {}),
       };
     },
     declaredTools() {
@@ -399,6 +451,7 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
       return tool ? structuredClone(tool) : null;
     },
     resolveForWorkflow,
+    profileSelections(ref, organizationId = 'personal') { return structuredClone(profile(ref, organizationId).skillSelections ?? []); },
     validateWorkflow(workflow) {
       if (!workflow.capabilityProfile) return;
       const selected = profile(workflow.capabilityProfile, workflow.organizationId ?? 'personal');
@@ -408,12 +461,16 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
       return structuredClone(profile(ref, ref?.organizationId ?? 'personal'));
     },
     pin(s, ref) {
+      const changed = s.capabilityProfile?.id !== ref?.id || s.capabilityProfile?.version !== ref?.version;
+      if(changed) delete s.skillSnapshots;
       s.capabilityProfile = ref ? structuredClone(profile(ref, organizationForSession(s))) : null;
       s.activeSkills = [];
     },
     pinDefault(s) {
       if (s.capabilityProfile !== undefined) return;
       const ref = state.projectProfiles[s.projectId];
+      const changed = s.capabilityProfile?.id !== ref?.id || s.capabilityProfile?.version !== ref?.version;
+      if(changed) delete s.skillSnapshots;
       s.capabilityProfile = ref ? structuredClone(profile(ref, organizationForSession(s))) : null;
       s.activeSkills = [];
     },
@@ -429,7 +486,7 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
       return (
         policy +
         '\n\nAvailable skills (call load_skill before use; importing or activating never grants permission):\n' +
-        JSON.stringify(list.map(({ name, description }) => ({ name, description }))) +
+        JSON.stringify(list.map(({ name, description, sourceId, snapshotId }) => ({ name, description, ...(sourceId ? {sourceId,snapshotId} : {}) }))) +
         list
           .filter((k) => s.activeSkills?.includes(refKey(k)))
           .map(
@@ -440,13 +497,15 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
       );
     },
     load(s, step, name, path) {
-      const k = selectedSkills(s, step).find((k) => k.name === name);
+      const matches = selectedSkills(s, step).filter(k=>k.name===name || k.snapshotId===name || k.sourceId===name);
+      if(matches.length>1)throw new Error('Skill name is ambiguous; use the explicit source or snapshot identity.');
+      const k=matches[0];
       if (!k) throw new Error('Skill is not selected for this step.');
       if (path !== undefined) {
         if (!s.activeSkills?.includes(refKey(k))) throw new Error('Activate the skill first.');
         if (!safePath(path) || !Object.hasOwn(k.files, path))
           throw new Error('Resource not found in pinned skill.');
-        return { name, version: k.version, path, content: k.files[path], hash: k.hash };
+        return { name, version: k.version, path, ...(typeof k.files[path] === 'string' ? {content:k.files[path]} : k.files[path]), hash:k.hash };
       }
       s.activeSkills ??= [];
       if (!s.activeSkills.includes(refKey(k))) s.activeSkills.push(refKey(k));
@@ -544,6 +603,8 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
         });
         if (new Set(skills.map((k) => k.name)).size !== skills.length)
           throw new Error('Choose one revision per skill.');
+        const skillSelections = c.skillSelections === undefined ? undefined : skillSources?.validateSelections(c.skillSelections,c.skillScope ?? {organizationId,userId:c.userId,projectId:c.projectId});
+        if(c.skillSelections!==undefined && !skillSelections)throw new Error('Skill sources unavailable.');
         const knowledge = c.knowledge === undefined ? undefined : validateKnowledge?.(c.knowledge, organizationId);
         if (c.knowledge !== undefined && !knowledge) throw new Error('Knowledge selection unavailable.');
         const p = {
@@ -555,11 +616,12 @@ export function createCapabilities({ state, executionPolicy, validateKnowledge }
           loadWorkspaceAgentsMd,
           tools,
           skills,
+          ...(skillSelections ? {skillSelections} : {}),
           extensions,
           at: new Date().toISOString(),
         };
         p.hash = digest(
-          JSON.stringify({ id, name, tools, skills, extensions, loadWorkspaceAgentsMd, ...(knowledge ? { knowledge } : {}) }),
+          JSON.stringify({ id, name, tools, skills, ...(skillSelections ? {skillSelections} : {}), extensions, loadWorkspaceAgentsMd, ...(knowledge ? { knowledge } : {}) }),
         );
         state.capabilityProfiles.push(p);
         return p;

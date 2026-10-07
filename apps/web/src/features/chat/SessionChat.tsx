@@ -88,6 +88,7 @@ export function SessionChat({
   openConversation,
   openWorkflowRun,
   openProviders,
+  openAgents,
   headerTarget,
   settingsRequest = 0,
 }: {
@@ -98,6 +99,7 @@ export function SessionChat({
   openConversation: (id: string) => void;
   openWorkflowRun?: (runId: string) => void;
   openProviders: () => void;
+  openAgents?: () => void;
 }) {
   const key = `convoy.chat.v1.${taskId}`;
   const [local, setLocal] = useState(() => load(key));
@@ -338,6 +340,7 @@ export function SessionChat({
         </header>
         {session && state && (
           <SessionControls
+            onManageAgents={openAgents}
             session={session}
             state={state}
             inlineChat
@@ -671,6 +674,7 @@ export function SessionChat({
             </button>
             {workflowOpen && (
               <SessionControls
+                onManageAgents={openAgents}
                 session={session}
                 state={state}
                 inlineChat

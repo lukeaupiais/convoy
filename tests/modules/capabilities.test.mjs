@@ -131,7 +131,7 @@ test('workflow executes an explicitly selected ticket tool only after approval, 
   const f=await fixture(t,(_input,n)=>n===1?call('create_ticket',{requestKey:'followup',projectId:'agent-platform',title:'Follow-up',description:'Independent work'}):call('submit_step',{summary:'Recorded follow-up',artifacts:[]}));
   const p=await f.act('publishProfile',{id:'coordinate',name:'Coordinate',tools:['convoy.create_ticket'],skills:[]});
   await f.act('setCapabilityProfile',{sessionId:f.c.sessionId,profile:p});
-  await f.act('saveWorkflow',{workflow:{id:'record',name:'Record',nodes:[{id:'record',kind:'agent',name:'Record follow-up',prompt:'Create a follow-up ticket and submit.',permissions:'read-write'}]}});
+  await f.act('saveWorkflow',{workflow:{id:'record',name:'Record',capabilityProfile:{id:p.id,version:p.version},nodes:[{id:'record',kind:'agent',name:'Record follow-up',prompt:'Create a follow-up ticket and submit.',permissions:'read-write'}]}});
   await f.act('configure',{sessionId:f.c.sessionId,runnerId:'',workflow:'record'});
   await f.act('startWorkflow',{sessionId:f.c.sessionId});
   const s=await until(async()=>{const s=await f.session();return s.pending?s:null;});assert.equal((await f.runtime.snapshot()).tickets.length,0);
@@ -181,4 +181,23 @@ test('structured submission schemas are revision-scoped without mutating legacy 
   assert.deepEqual(c.modelTools(session, {permissions: 'none'}).find(t => t.name === 'submit_step'), legacy);
   c.validate(session, step, 'submit_step', {outcome: 'publish', summary: 'Done', artifacts: [], details: {audience: 'Readers'}, references: []});
   assert.throws(() => c.validate(session, step, 'submit_step', {summary: 'Done', artifacts: []}), /Choose an exact workflow outcome/);
+});
+
+test('stored skill catalogue exposes organization ownership without leaking private content or other organizations',()=>{
+  const {c,state}=catalog();
+  const north=files('North review');
+  const south=files('South inventory review');
+  c.command({action:'publishSkill',organizationId:'north',files:north,trusted:true});
+  c.command({action:'publishSkill',organizationId:'south',files:south,trusted:true});
+  const visible=c.snapshot({organizationId:'north'}).skills;
+  assert.equal(visible.length,1);
+  assert.equal(visible[0].organizationId,'north');
+  assert(!Object.hasOwn(visible[0],'files'));
+  assert(!Object.hasOwn(visible[0],'body'));
+  c.command({action:'publishSkill',files:files(),trusted:true});
+  delete state.skills.at(-1).organizationId;
+  const legacy=c.snapshot({organizationId:'personal'}).skills;
+  assert.equal(legacy.length,1);
+  assert.equal(legacy[0].organizationId,'personal');
+  assert.equal(c.command({action:'exportSkill',organizationId:'north',name:'review-work',version:1}).files['SKILL.md'],north['SKILL.md']);
 });

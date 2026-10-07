@@ -1,24 +1,48 @@
-export type WorkflowNodeKind = 'agent' | 'human' | 'check' | 'action' | 'branch' | 'wait' | 'child' | 'parallel' | 'map';
+export type WorkflowNodeKind =
+  'agent' | 'human' | 'check' | 'action' | 'branch' | 'wait' | 'child' | 'parallel' | 'map';
 
 export type WorkflowHumanOutcome = { id: string; label: string; effect?: 'approve_activity' };
 export type WorkflowHumanTask = {
   outcomes: WorkflowHumanOutcome[];
-  form?: { fields: Array<{
-    id: string; label: string; type: 'text' | 'number' | 'boolean' | 'choice' | 'date';
-    required?: boolean; options?: Array<{ value: string; label: string }>;
-    minLength?: number; maxLength?: number; minimum?: number; maximum?: number;
-  }> };
+  form?: {
+    fields: Array<{
+      id: string;
+      label: string;
+      type: 'text' | 'number' | 'boolean' | 'choice' | 'date';
+      required?: boolean;
+      options?: Array<{ value: string; label: string }>;
+      minLength?: number;
+      maxLength?: number;
+      minimum?: number;
+      maximum?: number;
+    }>;
+  };
   reviewerPolicy?: { userIds?: string[]; permission?: 'project.execute' | 'project.write' };
   dueAfterSeconds?: number;
 };
 export type WorkflowHumanResponse = {
-  id: string; runId: string; workflowId: string; workflowVersion: number;
-  nodeId: string; instance: string; values: Record<string, unknown>;
-  digest: string; at: string; evidenceIds?: string[];
+  id: string;
+  runId: string;
+  workflowId: string;
+  workflowVersion: number;
+  nodeId: string;
+  instance: string;
+  values: Record<string, unknown>;
+  digest: string;
+  at: string;
+  evidenceIds?: string[];
 };
 export type WorkflowEvidenceRef = {
-  id: string; digest: string; mediaType: string; byteLength: number;
-  name: string; source: { nodeId: string; attemptInstance: string; producer: 'document' | 'api_snapshot' | 'activity_receipt' | 'legacy_artifact' };
+  id: string;
+  digest: string;
+  mediaType: string;
+  byteLength: number;
+  name: string;
+  source: {
+    nodeId: string;
+    attemptInstance: string;
+    producer: 'document' | 'api_snapshot' | 'activity_receipt' | 'legacy_artifact';
+  };
 };
 export type WorkflowHumanReview = {
   response: WorkflowHumanResponse;
@@ -61,7 +85,10 @@ export type WorkflowCompositionLimits = {
 export type WorkflowCompositionPolicySnapshot = {
   defaults: WorkflowCompositionLimits;
   organizations: Record<string, { revision: number; limits: WorkflowCompositionLimits }>;
-  projects: Record<string, { organizationId: string; revision: number; limits: WorkflowCompositionLimits }>;
+  projects: Record<
+    string,
+    { organizationId: string; revision: number; limits: WorkflowCompositionLimits }
+  >;
 };
 export type WorkflowCompositionSlot = {
   slotId: string;
@@ -85,9 +112,18 @@ export type WorkflowCompositionAttempt = {
   join?: 'all' | 'first_success';
   deadlineAt?: string;
   winnerSlotId?: string;
-  forwardOutcome?: { trigger: 'failure' | 'cancelled'; status: 'failed' | 'cancelled'; at: string; message?: string };
+  forwardOutcome?: {
+    trigger: 'failure' | 'cancelled';
+    status: 'failed' | 'cancelled';
+    at: string;
+    message?: string;
+  };
   compensationStatus?: string;
-  policy: { organizationRevision: number; projectRevision: number; limits: WorkflowCompositionLimits };
+  policy: {
+    organizationRevision: number;
+    projectRevision: number;
+    limits: WorkflowCompositionLimits;
+  };
   slots: WorkflowCompositionSlot[];
   compensations?: (WorkflowCompositionSlot & { id: string; trigger: 'failure' | 'cancelled' })[];
   slotsTruncated?: boolean;
@@ -96,7 +132,15 @@ export type WorkflowCompositionAttempt = {
 export type WorkflowActivityReservation = {
   id: string;
   digest: string;
-  preview?: { activity: string; input: unknown; intent: unknown; resources?: { model?: string }; action?: string; summary?: string; body?: string };
+  preview?: {
+    activity: string;
+    input: unknown;
+    intent: unknown;
+    resources?: { model?: string };
+    action?: string;
+    summary?: string;
+    body?: string;
+  };
 };
 export type WorkflowRun = {
   id: string;
@@ -122,7 +166,16 @@ export type WorkflowRun = {
   humanTaskDueAt?: string;
   humanTaskDue?: boolean;
   humanTaskReviewerEligible?: boolean;
-  activityReservations?: (WorkflowActivityReservation & { gateNodeId: string; gateInstance: string; targetNodeId: string; targetInstance: string; activityRef: WorkflowActivityRef; inputDigest: string; intentDigest: string; consumedAt?: string })[];
+  activityReservations?: (WorkflowActivityReservation & {
+    gateNodeId: string;
+    gateInstance: string;
+    targetNodeId: string;
+    targetInstance: string;
+    activityRef: WorkflowActivityRef;
+    inputDigest: string;
+    intentDigest: string;
+    consumedAt?: string;
+  })[];
   attempt?: WorkflowActivityAttempt;
   activityAttempts?: WorkflowActivityAttempt[];
   compositions?: WorkflowCompositionAttempt[];
@@ -141,7 +194,16 @@ export type WorkflowRun = {
   }[];
   historyTotal?: number;
   historyTruncated?: boolean;
-  decisions?: { instance: string; decision: string; outcomeId?: string; responseId?: string; materialDigest?: string; actor: string; principal: Record<string, unknown>; at: string }[];
+  decisions?: {
+    instance: string;
+    decision: string;
+    outcomeId?: string;
+    responseId?: string;
+    materialDigest?: string;
+    actor: string;
+    principal: Record<string, unknown>;
+    at: string;
+  }[];
   decisionsTotal?: number;
   decisionsTruncated?: boolean;
   lease: null | {
@@ -274,7 +336,13 @@ export type WorkflowActivityDescriptor = {
 export type WorkflowDecisionOutcome = 'approved' | 'changes_requested';
 export type WorkflowDecisionLabels = Partial<Record<WorkflowDecisionOutcome, string>>;
 export type WorkflowActionOperation =
-  'inspect_changes' | 'create_ticket' | 'create_related_ticket' | 'update_ticket' | 'move_ticket' | 'set_external_status' | 'send_external_reply';
+  | 'inspect_changes'
+  | 'create_ticket'
+  | 'create_related_ticket'
+  | 'update_ticket'
+  | 'move_ticket'
+  | 'set_external_status'
+  | 'send_external_reply';
 export type WorkflowConditionSource = 'ticket' | 'submission' | 'actionResult' | 'context';
 export type WorkflowCondition = {
   source: WorkflowConditionSource;
@@ -369,6 +437,8 @@ export type WorkflowStep = {
 };
 export type WorkflowEdge = { id: string; from: string; to: string; outcome: string };
 export type WorkflowDefinition = {
+  capabilityProfilePinned?: boolean;
+  skillSnapshots?: { snapshotId: string; digest: string; sourceId: string; name?: string }[];
   runtime?: import('./execution').RuntimeSelection;
   capabilityProfile?: import('./capabilities').ProfileRef;
   id: string;
@@ -410,7 +480,15 @@ export type AutomationDecisionFailure = {
   at?: string;
 };
 export type AutomationDecision = AutomationDecisionFailure & {
-  status: 'pending' | 'reserved' | 'started' | 'failed' | 'held' | 'conflict' | 'blocked_active' | 'coalesced';
+  status:
+    | 'pending'
+    | 'reserved'
+    | 'started'
+    | 'failed'
+    | 'held'
+    | 'conflict'
+    | 'blocked_active'
+    | 'coalesced';
   ruleId?: string;
   ruleRevision?: number;
   activeSessionId?: string;

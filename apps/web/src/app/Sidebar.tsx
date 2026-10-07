@@ -3,6 +3,7 @@ import {
   LayoutGrid,
   MessageSquare,
   Workflow,
+  Bot,
   BookOpen,
   Folder,
   Server,
@@ -72,10 +73,10 @@ export function Sidebar({
     ['Project board', 'Projects', LayoutGrid],
     ['Chat', 'Chat', MessageSquare],
     ['Workflows', 'Workflows', Workflow],
-    ['Skills & instructions', 'Library', BookOpen],
     ['Wiki', 'Wiki', BookOpen],
   ] as const;
   const settings = [
+    ['Agents', 'Agents', Bot],
     ['Project settings', 'Project settings', Folder],
     ['Integrations', 'Integrations', Plug],
     ['Providers', 'Providers', Cable],

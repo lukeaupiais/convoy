@@ -1,4 +1,4 @@
-import { hostname, homedir } from 'node:os';
+import { hostname, homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, open } from 'node:fs/promises';
 import {
@@ -8,6 +8,7 @@ import {
   createRpc,
   executeRunner,
   runAgentLoop,
+  skillFiles,
 } from '../../../packages/runner/src/index.mjs';
 
 if (process.argv.includes('--inspection-probe')) {
@@ -48,14 +49,22 @@ const rpc = createRpc(
         'command-lifecycle-v1',
         'session-commands-v1',
         'atomic-patch-v1',
+        'skill-files-v1',
         ...((await terminals.available()) ? ['native-terminal-v1'] : []),
       ],
+      executionIdentity: { uid: userInfo().uid, username: userInfo().username },
       hostname: hostname(),
       platform: process.platform,
       arch: process.arch,
       pid: process.pid,
       execution: 'worker',
     }),
+    skill_files: async (request) => {
+      if (!/^[a-f0-9-]{36}$/.test(request.operationId ?? '')) throw new Error('Invalid operation ID.');
+      const operation = new AbortController(); operations.set(request.operationId, operation);
+      try { return await skillFiles(request, operation.signal); }
+      finally { operations.delete(request.operationId); }
+    },
     execute: async (request) => {
       if (!/^[a-f0-9-]{36}$/.test(request.operationId ?? ''))
         throw new Error('Invalid operation ID.');
