@@ -1,5 +1,4 @@
-import { ChevronRight } from 'lucide-react';
-import type { ApprovalRule, CapabilityTool } from '../../../../../packages/contracts/src';
+import type { CapabilityTool } from '../../../../../packages/contracts/src';
 
 const descriptions: Record<string, { title: string; brief: string; how: string }> = {
   read_file: {
@@ -104,101 +103,8 @@ const descriptions: Record<string, { title: string; brief: string; how: string }
   },
 };
 
-export function ToolLibrary({
-  tools,
-  disabledTools,
-  query,
-  busy,
-  onToggle,
-  approvalRules,
-  onRemoveRule,
-}: {
-  tools: CapabilityTool[];
-  disabledTools: string[];
-  query: string;
-  busy: boolean;
-  onToggle: (tool: CapabilityTool) => void;
-  approvalRules: ApprovalRule[];
-  onRemoveRule: (rule: ApprovalRule) => void;
-}) {
-  const matches = tools.filter((t) =>
-    [t.name, t.description, descriptions[t.name]?.title, descriptions[t.name]?.brief]
-      .join(' ')
-      .toLowerCase()
-      .includes(query.toLowerCase()),
-  );
+export function toolDescription(tool: CapabilityTool) {
   return (
-    <div className="tool-library">
-      {!matches.length && <p className="muted">No matching tools.</p>}
-      {matches.map((tool) => {
-        const copy = descriptions[tool.name] ?? {
-          title: tool.name,
-          brief: tool.description,
-          how: tool.description,
-        };
-        const disabled = disabledTools.includes(tool.id);
-        return (
-          <details className="tool-node" key={tool.id}>
-            <summary>
-              <ChevronRight className="tool-chevron" size={16} aria-hidden="true" />
-              <span className="tool-overview">
-                <strong>{copy.title}</strong>
-                <span>{copy.brief}</span>
-              </span>
-              <span className="tool-badges">
-                <small>Built-in</small>
-                {disabled && <small>Disabled</small>}
-              </span>
-            </summary>
-            <div className="tool-node-body">
-              <p>{copy.how}</p>
-              <dl className="tool-facts">
-                <div>
-                  <dt>Runs in</dt>
-                  <dd>
-                    {tool.executor === 'runner' ? 'Assigned workspace · local or remote' : 'Convoy'}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Approval</dt>
-                  <dd>
-                    {tool.approval === 'ask' ? 'Ask unless a scoped rule matches' : 'Not required'}
-                  </dd>
-                </div>
-              </dl>
-              {!!approvalRules.filter((rule) => rule.tool === tool.name).length && (
-                <div className="tool-rules">
-                  <small>Saved rules</small>
-                  {approvalRules
-                    .filter((rule) => rule.tool === tool.name)
-                    .map((rule) => (
-                      <div key={rule.id}>
-                        <span>
-                          {rule.label} · {rule.scope.kind}
-                        </span>
-                        <button
-                          className="secondary"
-                          disabled={busy}
-                          onClick={() => onRemoveRule(rule)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              )}
-              <details className="tool-technical">
-                <summary>Technical details</summary>
-                <code>{tool.name}</code>
-                <pre>{JSON.stringify(tool.inputSchema, null, 2)}</pre>
-              </details>
-              <button className="secondary" disabled={busy} onClick={() => onToggle(tool)}>
-                {disabled ? 'Enable tool' : 'Disable tool'}
-              </button>
-            </div>
-          </details>
-        );
-      })}
-    </div>
+    descriptions[tool.name] ?? { title: tool.name, brief: tool.description, how: tool.description }
   );
 }

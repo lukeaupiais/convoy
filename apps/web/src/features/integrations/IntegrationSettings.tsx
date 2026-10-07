@@ -6,6 +6,7 @@ import {
   type TicketSourceManifest,
 } from '../../shared/api/runtime';
 import './integrations.css';
+import { ExtensionSettings } from './ExtensionSettings';
 
 const starterManifest = `{
   "apiVersion": "convoy.dev/v1alpha1",
@@ -238,14 +239,21 @@ function ConnectionCard({
             </span>
             <label>
               Sync interval
-              <select value={pollIntervalMinutes} onChange={(event) => setPollIntervalMinutes(Number(event.target.value))}>
+              <select
+                value={pollIntervalMinutes}
+                onChange={(event) => setPollIntervalMinutes(Number(event.target.value))}
+              >
                 <option value={0}>Manual</option>
                 <option value={5}>Every 5 minutes</option>
                 <option value={15}>Every 15 minutes</option>
                 <option value={60}>Hourly</option>
               </select>
             </label>
-            {pollIntervalMinutes !== (binding.pollIntervalMinutes ?? 0) && <button className="secondary" disabled={working} onClick={() => void saveBinding()}>Save interval</button>}
+            {pollIntervalMinutes !== (binding.pollIntervalMinutes ?? 0) && (
+              <button className="secondary" disabled={working} onClick={() => void saveBinding()}>
+                Save interval
+              </button>
+            )}
             <button
               className="secondary"
               disabled={working || !binding.enabled || !connection.enabled}
@@ -293,7 +301,10 @@ function ConnectionCard({
             </label>
             <label>
               Sync interval
-              <select value={pollIntervalMinutes} onChange={(event) => setPollIntervalMinutes(Number(event.target.value))}>
+              <select
+                value={pollIntervalMinutes}
+                onChange={(event) => setPollIntervalMinutes(Number(event.target.value))}
+              >
                 <option value={0}>Manual</option>
                 <option value={5}>Every 5 minutes</option>
                 <option value={15}>Every 15 minutes</option>
@@ -391,6 +402,7 @@ function ConnectionCard({
 }
 
 export function IntegrationSettings({ state }: { state: RuntimeState }) {
+  const [section, setSection] = useState('connections');
   const organizationId = state.activeContext?.organizationId ?? state.projects[0]?.organizationId;
   const connections = (state.ticketConnections ?? []).filter(
     (connection) => connection.organizationId === organizationId,
@@ -444,10 +456,25 @@ export function IntegrationSettings({ state }: { state: RuntimeState }) {
   }
   return (
     <div className="integration-settings">
-      <div className="integration-heading">
-        <h2>Integrations</h2>
-      </div>
-      <div className="integration-workspace">
+      <nav className="integration-sections" aria-label="Integration sections">
+        <button
+          type="button"
+          aria-pressed={section === 'connections'}
+          onClick={() => setSection('connections')}
+        >
+          Connections
+        </button>
+        <button
+          type="button"
+          aria-pressed={section === 'extensions'}
+          onClick={() => setSection('extensions')}
+        >
+          Plugins & MCP
+        </button>
+      </nav>
+      {section === 'extensions' && <ExtensionSettings state={state} />}
+
+      <div className="integration-workspace" hidden={section !== 'connections'}>
         <div className="integration-list">
           {connections.map((connection) => (
             <ConnectionCard key={connection.id} connection={connection} state={state} />

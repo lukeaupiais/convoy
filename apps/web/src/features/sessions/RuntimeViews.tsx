@@ -25,6 +25,7 @@ export function SessionControls({
   openRecovery = false,
   onOpenTicketMessages,
   onOpenWorkflowRun,
+  onManageAgents,
 }: {
   session: Session;
   state: RuntimeState;
@@ -37,6 +38,7 @@ export function SessionControls({
   openRecovery?: boolean;
   onOpenTicketMessages?: () => void;
   onOpenWorkflowRun?: (runId: string) => void;
+  onManageAgents?: () => void;
 }) {
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
@@ -205,6 +207,7 @@ export function SessionControls({
         state={state}
         session={s}
         acquireControl={compact ? ensureControl : undefined}
+        onManageAgents={onManageAgents}
       />
       <details className="runtime-details">
         <summary>

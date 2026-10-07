@@ -181,3 +181,117 @@
     margin-left: 17px;
   }
 }
+
+.runtime-page .integration-settings {
+  color: #e8e7df;
+  width: 100%;
+  --ink: #e8e7df;
+  --muted: #a6b6bb;
+  --surface: #20313b;
+  --line: #344b57;
+  --accent: #c7ac76;
+  color-scheme: dark;
+}
+.integration-settings [hidden] {
+  display: none;
+}
+.integration-sections {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #344b57;
+}
+.runtime-page .integration-settings .integration-sections button {
+  padding: 12px 8px;
+  color: #a6b6bb;
+  background: #18252e;
+  border: 0;
+  border-bottom: 2px solid transparent;
+}
+.runtime-page .integration-settings .integration-sections button[aria-pressed='true'] {
+  color: #e8e7df;
+  border-bottom-color: #8fb8aa;
+}
+.runtime-page .integration-settings :is(.integration-card, .integration-add) {
+  background: #20313b;
+  color: #e8e7df;
+  border: 1px solid #344b57;
+  border-radius: 0;
+  box-shadow: none;
+}
+.runtime-page .integration-settings :is(input, select, textarea):not([type='checkbox']) {
+  background: #18252e;
+  color: #e8e7df;
+  border: 1px solid #526b72;
+  border-radius: 0;
+  box-shadow: none;
+  max-width: 100%;
+}
+.runtime-page .integration-settings :is(.primary, .secondary) {
+  color: #e8e7df;
+  background: #20313b;
+  border: 1px solid #526b72;
+  border-radius: 0;
+  min-height: 40px;
+  box-shadow: none;
+}
+.runtime-page .integration-settings .primary {
+  color: #18252e;
+  background: #c7ac76;
+  border-color: #c7ac76;
+}
+.runtime-page .integration-settings :is(label, summary, h3, strong) {
+  color: #e8e7df;
+}
+.extension-settings {
+  display: grid;
+  gap: 16px;
+}
+.extension-settings > p {
+  margin: 0;
+  color: #a6b6bb;
+  line-height: 1.6;
+}
+.extension-settings pre {
+  overflow: auto;
+  max-height: 300px;
+}
+.extension-editor {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  max-width: 760px;
+}
+.extension-editor label {
+  display: grid;
+  gap: 8px;
+}
+.extension-editor textarea {
+  width: 100%;
+  padding: 12px;
+}
+.extension-editor .extension-trust {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.extension-editor input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+.extension-editor > button {
+  justify-self: start;
+}
+.runtime-page .integration-settings .extension-editor .extension-trust {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.runtime-page .integration-settings .extension-editor .extension-trust input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  min-height: 17px;
+  flex-shrink: 0;
+  margin: 0;
+}

@@ -10,6 +10,7 @@ import { NewChatDialog } from '../features/chat/ChatWorkspaceContext';
 import { RuntimeSessions } from '../features/sessions/RuntimeViews';
 import { AttentionMenu } from '../features/sessions';
 import { Wiki, parseWikiLocation, wikiHref } from '../features/knowledge';
+import { canLeaveAgents } from '../features/library';
 import { SettingsPage } from './SettingsPage';
 import {
   command,
@@ -117,18 +118,25 @@ function App() {
   const [saving, setSaving] = useState(false);
   const createRequest = useRef('');
   function setPage(value: string) {
-    if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return;
+    if (value === page) return true;
+    if (!canLeaveAgents()) return false;
+    if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return false;
     if (value !== 'Wiki' && parseWikiLocation(window.location.hash))
       window.history.pushState(null, '', window.location.pathname + window.location.search);
     if (value !== 'Workflows') setWorkflowRunId(undefined);
     setPageState(value);
+    return true;
   }
   const routeProjects = (liveRuntime?.projects ?? [])
     .map((p) => `${p.id}:${p.organizationId}`)
     .join('|');
   useEffect(() => {
     const followWikiLink = (event?: Event) => {
-      if (event && !window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) {
+      if (
+        event &&
+        (!canLeaveAgents() ||
+          !window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true })))
+      ) {
         if (event instanceof HashChangeEvent) window.history.replaceState(null, '', event.oldURL);
         return;
       }
@@ -181,6 +189,7 @@ function App() {
   } | null>(null);
   const [toast, setToast] = useState('');
   async function selectContext(context: ContextRef) {
+    if (!canLeaveAgents()) return;
     if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return;
     try {
       await command('selectActiveContext', { context });
@@ -325,7 +334,7 @@ function App() {
   }
   function navigate(next: string) {
     if (ticketMenuCommandActiveRef.current) return;
-    setPage(next);
+    if (!setPage(next)) return;
     setSelected(null);
     setMobile(false);
   }
@@ -360,7 +369,6 @@ function App() {
         'Project board': 'Board',
         Sessions: 'Live',
         'Project settings': 'Projects',
-        'Skills & instructions': 'Library',
         Runners: 'Environments',
       } as Record<string, string>
     )[page] ?? page;
@@ -485,7 +493,7 @@ function App() {
           </p>
         )}
 
-        {['Project settings', 'Skills & instructions', 'Wiki'].includes(page) && (
+        {['Project settings', 'Wiki'].includes(page) && (
           <label className="page-project-scope">
             Project
             <Select
@@ -506,7 +514,7 @@ function App() {
         )}
         {page === 'Project settings' && project && liveRuntime && (
           <section className="runtime-page">
-            <ProjectSettings key={project.id} project={project} state={liveRuntime} />
+            <ProjectSettings key={project.id} project={project} state={liveRuntime} onManageAgents={() => navigate('Agents')} />
             <div>
               <h2>Create another project</h2>
               <form
@@ -589,6 +597,7 @@ function App() {
             openTicket={setSelected}
             openWorkflowRun={openWorkflowRun}
             openProviders={() => navigate('Providers')}
+            openAgents={() => navigate('Agents')}
           />
         )}
         {page === 'Workflows' && (
@@ -610,10 +619,10 @@ function App() {
             <Wiki key={project?.id ?? 'wiki'} state={liveRuntime} projectId={project?.id} />
           </React.Suspense>
         )}
-        {page === 'Skills & instructions' && (
+        {page === 'Agents' && (
           <SettingsPage
-            key={project?.id ?? 'instruction-settings'}
-            view="Skills & instructions"
+            key={project?.id ?? 'agent-settings'}
+            view="Agents"
             projectId={project?.id}
           />
         )}

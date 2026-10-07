@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   command,
   owns,
@@ -19,7 +19,7 @@ import { Select } from '../../shared/ui/Select';
 import './capabilities.css';
 import { KnowledgePicker } from '../knowledge';
 import type { KnowledgeSelection } from '../../../../../packages/contracts/src';
-import { ToolLibrary } from './ToolLibrary';
+import { toolDescription } from './ToolLibrary';
 
 export type {
   CapabilityProfile,
@@ -81,10 +81,12 @@ export function SessionCapabilities({
   state,
   session: s,
   acquireControl,
+  onManageAgents,
 }: {
   state: RuntimeState;
   session: Session;
   acquireControl?: () => Promise<void>;
+  onManageAgents?: () => void;
 }) {
   const [value, setValue] = useState(s.capabilityProfile ? key(s.capabilityProfile) : '');
   const [error, setError] = useState('');
@@ -106,6 +108,11 @@ export function SessionCapabilities({
         {s.capabilityProfile && ` · ${s.capabilityProfile.name} v${s.capabilityProfile.version}`}
       </summary>
       <div className="runtime-toolbar">
+        {onManageAgents && (
+          <button type="button" className="secondary" onClick={onManageAgents}>
+            Manage profiles
+          </button>
+        )}
         <ProfilePicker state={state} value={value} onChange={setValue} disabled={locked} />
         <button
           className="secondary"
@@ -213,22 +220,22 @@ export function SessionCapabilities({
 
 const example =
   '---\nname: implementation-review\ndescription: Review an implementation against its acceptance criteria.\n---\n\nCheck the requested scope, inspect the changes, and report verification evidence and unresolved risks.\n';
-export function CapabilityLibrary({
-  state,
-  projectId,
-  children,
-}: {
-  state: RuntimeState;
-  projectId?: string;
-  children: ReactNode;
-}) {
-  const [tab, setTab] = useState('Tools');
-  const [skillEditorOpen, setSkillEditorOpen] = useState(true);
+export function canLeaveAgents() {
+  return window.dispatchEvent(new Event('convoy-agents-leave', { cancelable: true }));
+}
+
+export function AgentSettings({ state }: { state: RuntimeState }) {
+  const [tab, setTab] = useState('Profiles');
+  const [skillEditorOpen, setSkillEditorOpen] = useState(false);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [files, setFiles] = useState<Record<string, string>>({ 'SKILL.md': example });
   const [source, setSource] = useState('UI editor');
+  const [initialSkill, setInitialSkill] = useState(
+    JSON.stringify({ files: { 'SKILL.md': example }, source: 'UI editor' }),
+  );
   const [preview, setPreview] = useState<{
     name: string;
     hash: string;
@@ -244,9 +251,60 @@ export function CapabilityLibrary({
   const [baseVersion, setBaseVersion] = useState(0);
   const [tools, setTools] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
+  const [initialProfile, setInitialProfile] = useState('');
+  const [customId, setCustomId] = useState(false);
+  const [toolQuery, setToolQuery] = useState('');
+  const [browsing, setBrowsing] = useState({ tools: false, skills: false, extensions: false });
+  const importInput = useRef<HTMLInputElement>(null);
+  const [extensions, setExtensions] = useState<CapabilityProfile['extensions']>([]);
+  const profileDraft = JSON.stringify({
+    profileId,
+    profileName,
+    loadWorkspaceAgentsMd,
+    knowledge,
+    tools,
+    skills,
+    extensions,
+  });
+  const profileDirty = profileDraft !== initialProfile;
+  const skillDirty = JSON.stringify({ files, source }) !== initialSkill;
+  const unsavedDraft = (profileEditorOpen && profileDirty) || (skillEditorOpen && skillDirty);
+  useEffect(() => {
+    if (!unsavedDraft && !busy) return;
+    const leave = (event: Event) => {
+      if (busy || !confirm('Discard unsaved agent changes?')) event.preventDefault();
+    };
+    const unload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('convoy-agents-leave', leave);
+    window.addEventListener('beforeunload', unload);
+    return () => {
+      window.removeEventListener('convoy-agents-leave', leave);
+      window.removeEventListener('beforeunload', unload);
+    };
+  }, [unsavedDraft, busy]);
   const data = state.capabilities;
   if (!data) return <p>Restart the daemon to load the capability library.</p>;
-  const latestSkills = [...new Map(data.skills.map((s) => [s.name, s])).values()];
+  const latestSkills = [
+    ...new Map(
+      [...data.skills].sort((a, b) => a.version - b.version).map((s) => [s.name, s]),
+    ).values(),
+  ];
+  const latestProfiles = [
+    ...new Map(
+      [...data.profiles].sort((a, b) => a.version - b.version).map((p) => [p.id, p]),
+    ).values(),
+  ];
+  function cancelProfile() {
+    if (!profileDirty || confirm('Discard unsaved profile changes?')) {
+      setProfileEditorOpen(false);
+      setMessage('');
+    }
+  }
+  const matches = (...values: (string | undefined)[]) =>
+    values.join(' ').toLowerCase().includes(query.toLowerCase());
   async function perform<Action extends RuntimeAction>(
     action: Action,
     input: RuntimeCommandInputMap[Action],
@@ -266,6 +324,22 @@ export function CapabilityLibrary({
   const toggle = (values: string[], v: string) =>
     values.includes(v) ? values.filter((x) => x !== v) : [...values, v];
   function editProfile(p?: CapabilityProfile) {
+    setMessage('');
+    setCustomId(false);
+    setToolQuery('');
+    setBrowsing({ tools: false, skills: false, extensions: false });
+    setInitialProfile(
+      JSON.stringify({
+        profileId: p?.id ?? '',
+        profileName: p?.name ?? '',
+        loadWorkspaceAgentsMd: p?.loadWorkspaceAgentsMd === true,
+        knowledge: p?.knowledge ?? { collectionIds: [] },
+        tools: p?.tools.map((t) => t.id) ?? [],
+        skills: p?.skills.map((s) => `${s.name}@${s.version}`) ?? [],
+        extensions: p?.extensions ?? [],
+      }),
+    );
+    setProfileEditorOpen(true);
     setProfileId(p?.id ?? '');
     setProfileName(p?.name ?? '');
     setLoadWorkspaceAgentsMd(p?.loadWorkspaceAgentsMd === true);
@@ -273,6 +347,7 @@ export function CapabilityLibrary({
     setBaseVersion(p?.version ?? 0);
     setTools(p?.tools.map((t) => t.id) ?? []);
     setSkills(p?.skills.map((s) => `${s.name}@${s.version}`) ?? []);
+    setExtensions(p?.extensions ?? []);
   }
   async function importFiles(list: FileList | null) {
     if (!list?.length) return;
@@ -291,6 +366,7 @@ export function CapabilityLibrary({
         const bundle = JSON.parse(await list[0].text());
         entries = bundle.files;
       }
+      setInitialSkill('');
       setFiles(entries);
       setSource(list[0].webkitRelativePath.split('/')[0] || list[0].name);
       setPreview(null);
@@ -301,100 +377,151 @@ export function CapabilityLibrary({
     }
   }
   return (
-    <section className="capability-library" aria-label="Capability library">
-      <nav className="capability-tabs" aria-label="Library sections">
-        {['Tools', 'Skills', 'Profiles', 'Instructions'].map((t) => (
-          <button key={t} aria-pressed={tab === t} onClick={() => setTab(t)}>
+    <section className="capability-library" aria-label="Agent configuration">
+      <nav className="capability-tabs" aria-label="Agent sections">
+        {['Profiles', 'Skills'].map((t) => (
+          <button
+            key={t}
+            aria-pressed={tab === t}
+            disabled={busy}
+            onClick={() => {
+              if (unsavedDraft && !confirm('Discard unsaved agent changes?')) return;
+              setProfileEditorOpen(false);
+              setSkillEditorOpen(false);
+              setTab(t);
+              setQuery('');
+              setMessage('');
+            }}
+          >
             {t}
           </button>
         ))}
       </nav>
       {message && <p role="status">{message}</p>}
-      {tab === 'Tools' && (
-        <>
-          <input
-            className="capability-search"
-            aria-label="Find tools"
-            placeholder="Find a tool…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <ToolLibrary
-            tools={data.tools}
-            disabledTools={data.disabledTools}
-            query={query}
-            busy={busy}
-            approvalRules={state.approvalRules}
-            onRemoveRule={(rule) => {
-              if (confirm(`Remove saved approval rule “${rule.label}”?`))
-                void perform('removeApprovalRule', { ruleId: rule.id }).catch(() => {});
-            }}
-            onToggle={(t) => {
-              if (
-                confirm(
-                  `${data.disabledTools.includes(t.id) ? 'Enable' : 'Disable'} ${t.name} for all sessions? Pending calls will be rechecked.`,
-                )
-              )
-                void perform('setToolEnabled', {
-                  id: t.id,
-                  enabled: data.disabledTools.includes(t.id),
-                }).catch(() => {});
-            }}
-          />
-        </>
-      )}
+      <div
+        className="library-toolbar"
+        hidden={(tab === 'Skills' && skillEditorOpen) || (tab === 'Profiles' && profileEditorOpen)}
+      >
+        <input
+          className="capability-search"
+          aria-label={`Find ${tab.toLowerCase()}`}
+          placeholder={`Find ${tab.toLowerCase()}…`}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {tab === 'Skills' && (
+          <>
+            <button
+              className="primary"
+              onClick={() => {
+                setFiles({ 'SKILL.md': example });
+                setSource('UI editor');
+                setInitialSkill(
+                  JSON.stringify({ files: { 'SKILL.md': example }, source: 'UI editor' }),
+                );
+                setPreview(null);
+                setTrusted(false);
+                setMessage('');
+                setSkillEditorOpen(true);
+              }}
+            >
+              New skill
+            </button>
+            <button className="secondary" onClick={() => importInput.current?.click()}>
+              Import
+            </button>
+          </>
+        )}
+        {tab === 'Profiles' && (
+          <button className="primary" onClick={() => editProfile()}>
+            New profile
+          </button>
+        )}
+      </div>
+      <input
+        ref={importInput}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          if (e.target.files?.length) {
+            setSkillEditorOpen(true);
+            void importFiles(e.target.files);
+          }
+          e.target.value = '';
+        }}
+      />
       {tab === 'Skills' && (
         <>
-          <div className="capability-cards">
-            {latestSkills.map((s) => (
-              <details key={s.name}>
-                <summary>
-                  <strong>{s.name}</strong>
-                  <small>v{s.version}</small>
-                </summary>
-                <p>{s.description}</p>
-                <small>
-                  {s.resources.length} files · {s.hash.slice(0, 12)}
-                </small>
-                <div className="runtime-toolbar">
-                  <button
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() =>
-                      void perform('exportSkill', { name: s.name, version: s.version })
-                        .then((bundle) => {
-                          setSkillEditorOpen(true);
-                          setFiles(bundle.files);
-                          setSource(bundle.source);
-                          setPreview(null);
-                          setTrusted(false);
-                        })
-                        .catch(() => {})
-                    }
-                  >
-                    Edit next revision
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={busy}
-                    onClick={() =>
-                      void perform('exportSkill', { name: s.name, version: s.version })
-                        .then((bundle) => download(`${s.name}-v${s.version}.json`, bundle))
-                        .catch(() => {})
-                    }
-                  >
-                    Export bundle
-                  </button>
-                </div>
-              </details>
-            ))}
+          <div className="capability-cards" hidden={skillEditorOpen}>
+            {!latestSkills.some((s) => matches(s.name, s.description)) && (
+              <p>{query ? 'No matching skills.' : 'No skills yet.'}</p>
+            )}
+            {latestSkills
+              .filter((s) => matches(s.name, s.description))
+              .map((s) => (
+                <details key={s.name}>
+                  <summary>
+                    <strong>{s.name}</strong>
+                    <span className="library-description">{s.description}</span>
+                  </summary>
+                  <small>{s.resources.length} files</small>
+                  <details>
+                    <summary>Revision details</summary>
+                    <small>
+                      Version {s.version} · {s.hash.slice(0, 12)}
+                    </small>
+                  </details>
+                  <div className="runtime-toolbar">
+                    <button
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        void perform('exportSkill', { name: s.name, version: s.version })
+                          .then((bundle) => {
+                            setSkillEditorOpen(true);
+                            setFiles(bundle.files);
+                            setSource(bundle.source);
+                            setInitialSkill(
+                              JSON.stringify({ files: bundle.files, source: bundle.source }),
+                            );
+                            setPreview(null);
+                            setTrusted(false);
+                          })
+                          .catch(() => {})
+                      }
+                    >
+                      Edit skill
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        void perform('exportSkill', { name: s.name, version: s.version })
+                          .then((bundle) => download(`${s.name}-v${s.version}.json`, bundle))
+                          .catch(() => {})
+                      }
+                    >
+                      Export bundle
+                    </button>
+                  </div>
+                </details>
+              ))}
           </div>
-          <details
-            className="capability-editor"
-            open={skillEditorOpen}
-            onToggle={(e) => setSkillEditorOpen(e.currentTarget.open)}
-          >
-            <summary>Create or import a skill</summary>
+          <div className="capability-editor" hidden={!skillEditorOpen}>
+            <header className="library-editor-heading">
+              <strong>Skill editor</strong>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  if (!skillDirty || confirm('Discard unsaved skill changes?'))
+                    setSkillEditorOpen(false);
+                }}
+              >
+                Close
+              </button>
+            </header>
             <div className="runtime-toolbar">
               <label className="secondary">
                 Import files
@@ -485,11 +612,10 @@ export function CapabilityLibrary({
                       baseVersion: preview.baseVersion,
                     })
                       .then(() => {
-                        setMessage(
-                          'Skill published. Existing profiles keep their pinned revision.',
-                        );
                         setPreview(null);
                         setTrusted(false);
+                        setSkillEditorOpen(false);
+                        setMessage('Skill saved.');
                       })
                       .catch(() => {})
                   }
@@ -498,171 +624,502 @@ export function CapabilityLibrary({
                 </button>
               </>
             )}
-          </details>
+          </div>
         </>
       )}
       {tab === 'Profiles' && (
         <>
-          <div className="runtime-toolbar">
-            <Select
-              aria-label="Edit profile"
-              value={profileId && baseVersion ? `${profileId}@${baseVersion}` : ''}
-              onChange={(e) => editProfile(data.profiles.find((p) => key(p) === e.target.value))}
-            >
-              <option value="">New profile</option>
-              {data.profiles.map((p) => (
-                <option key={key(p)} value={key(p)}>
-                  {p.name} · v{p.version}
-                </option>
+          <div className="capability-cards" hidden={profileEditorOpen}>
+            {latestProfiles
+              .filter((p) => matches(p.name, p.id))
+              .map((p) => (
+                <article className="profile-row" key={p.id}>
+                  <button type="button" className="profile-row-open" onClick={() => editProfile(p)}>
+                    <strong>{p.name}</strong>
+                    <span className="library-description">
+                      {p.tools.length} tools · {p.skills.length} skills
+                      {p.extensions.length > 0 && ` · ${p.extensions.length} extensions`}
+                    </span>
+                  </button>
+                  <details className="profile-row-menu">
+                    <summary aria-label={`Actions for ${p.name}`}>•••</summary>
+                    <div>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => download(`${p.id}-v${p.version}.json`, p)}
+                      >
+                        Export
+                      </button>
+                      {data.profiles.some(
+                        (value) => value.id === p.id && value.version !== p.version,
+                      ) && (
+                        <details>
+                          <summary>Revision history</summary>
+                          {data.profiles
+                            .filter((value) => value.id === p.id && value.version !== p.version)
+                            .map((value) => (
+                              <button
+                                type="button"
+                                className="secondary"
+                                key={key(value)}
+                                onClick={() => editProfile(value)}
+                              >
+                                Revision {value.version}
+                              </button>
+                            ))}
+                        </details>
+                      )}
+                    </div>
+                  </details>
+                </article>
               ))}
-            </Select>
-            {profileId && baseVersion > 0 && (
-              <button
-                className="secondary"
-                onClick={() =>
-                  download(
-                    `${profileId}-v${baseVersion}.json`,
-                    data.profiles.find((p) => p.id === profileId && p.version === baseVersion),
-                  )
-                }
-              >
-                Export profile
-              </button>
+            {!latestProfiles.some((p) => matches(p.name, p.id)) && (
+              <p>{query ? 'No matching profiles.' : 'No profiles yet.'}</p>
             )}
           </div>
-          <form
-            className="capability-editor"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void perform('publishProfile', {
-                id: profileId,
-                name: profileName,
-                loadWorkspaceAgentsMd,
-                knowledge,
-                baseVersion,
-                tools,
-                skills: skills.map((v) => {
-                  const i = v.lastIndexOf('@');
-                  return { name: v.slice(0, i), version: Number(v.slice(i + 1)) };
-                }),
-              })
-                .then((p) => {
-                  editProfile(p);
-                  setMessage(
-                    'Profile published. Apply it to an idle session or use it as a project default.',
-                  );
+          {state.approvalRules.length > 0 && !profileEditorOpen && (
+            <details className="agent-approval-rules">
+              <summary>Saved approval rules · {state.approvalRules.length}</summary>
+              <p>These rules apply across profiles within their saved scope.</p>
+              {state.approvalRules.map((rule) => (
+                <div key={rule.id}>
+                  <span>
+                    {rule.label} · {rule.tool} · {rule.scope.kind}
+                  </span>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      if (confirm(`Remove saved approval rule “${rule.label}”?`))
+                        void perform('removeApprovalRule', { ruleId: rule.id }).catch(() => {});
+                    }}
+                  >
+                    Remove rule
+                  </button>
+                </div>
+              ))}
+            </details>
+          )}
+          {profileEditorOpen && (
+            <form
+              onInvalid={(event) => {
+                const target = event.target as HTMLElement;
+                target.closest('details')?.setAttribute('open', '');
+              }}
+              className="capability-editor"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void perform('publishProfile', {
+                  id: profileId,
+                  name: profileName,
+                  loadWorkspaceAgentsMd,
+                  knowledge,
+                  baseVersion,
+                  tools,
+                  extensions,
+                  skills: skills.map((v) => {
+                    const i = v.lastIndexOf('@');
+                    return { name: v.slice(0, i), version: Number(v.slice(i + 1)) };
+                  }),
                 })
-                .catch(() => {});
-            }}
-          >
-            <div className="capability-fields">
+                  .then(() => {
+                    setProfileEditorOpen(false);
+                    setMessage(
+                      'Profile saved. Existing sessions and project defaults keep their selected revision.',
+                    );
+                  })
+                  .catch(() => {});
+              }}
+            >
+              <header className="library-editor-heading">
+                <strong>{baseVersion ? profileName : 'New profile'}</strong>
+                <span className="profile-draft-status" role="status">
+                  {profileDirty ? 'Unsaved changes' : ''}
+                </span>
+              </header>
               <label>
                 Name
                 <input
                   required
                   value={profileName}
-                  onChange={(e) => setProfileName(e.target.value)}
-                />
-              </label>
-              <label>
-                ID
-                <input
-                  required
-                  pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                  disabled={baseVersion > 0}
-                  value={profileId}
-                  onChange={(e) => setProfileId(e.target.value)}
-                />
-              </label>
-            </div>
-            <label className="capability-check">
-              <input
-                type="checkbox"
-                checked={loadWorkspaceAgentsMd}
-                onChange={(e) => setLoadWorkspaceAgentsMd(e.target.checked)}
-              />
-              Load workspace AGENTS.md
-            </label>
-            <p className="muted">
-              Also copies local root guidance into new workspaces when Git does not include it.
-            </p>
-            <KnowledgePicker state={state} value={knowledge} onChange={setKnowledge} />
-            <fieldset>
-              <legend>Tools</legend>
-              <div className="capability-options">
-                {data.tools
-                  .filter((t) => t.group !== 'harness')
-                  .map((t) => (
-                    <label key={t.id} className="capability-check">
-                      <input
-                        type="checkbox"
-                        checked={tools.includes(t.id)}
-                        onChange={() => setTools(toggle(tools, t.id))}
-                      />
-                      {t.name}
-                    </label>
-                  ))}
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend>Skills</legend>
-              {!data.skills.length && <p>Import a skill to select it here.</p>}
-              {[
-                ...new Map(
-                  [
-                    ...latestSkills,
-                    ...data.skills.filter((s) => skills.includes(`${s.name}@${s.version}`)),
-                  ].map((s) => [`${s.name}@${s.version}`, s]),
-                ).values(),
-              ].map((s) => (
-                <label key={`${s.name}@${s.version}`} className="capability-check">
-                  <input
-                    type="checkbox"
-                    checked={skills.includes(`${s.name}@${s.version}`)}
-                    onChange={() => {
-                      const k = `${s.name}@${s.version}`;
-                      setSkills(
-                        skills.includes(k)
-                          ? skills.filter((v) => v !== k)
-                          : [...skills.filter((v) => !v.startsWith(s.name + '@')), k],
+                  onChange={(e) => {
+                    setProfileName(e.target.value);
+                    if (!baseVersion && !customId)
+                      setProfileId(
+                        e.target.value
+                          .toLowerCase()
+                          .normalize('NFKD')
+                          .replace(/[\u0300-\u036f]/g, '')
+                          .replace(/[^a-z0-9]+/g, '-')
+                          .replace(/^-|-$/g, ''),
                       );
-                    }}
+                  }}
+                />
+              </label>
+              <details className="profile-section">
+                <summary>
+                  Tools <span>{tools.length} selected</span>
+                </summary>
+                {browsing.tools && data.tools.filter((t) => t.group !== 'harness').length > 8 && (
+                  <input
+                    aria-label="Find tools"
+                    placeholder="Find tools…"
+                    value={toolQuery}
+                    onChange={(e) => setToolQuery(e.target.value)}
                   />
-                  {s.name} · v{s.version}
-                </label>
-              ))}
-            </fieldset>
-            <button className="primary" disabled={busy}>
-              Publish profile
-            </button>
-          </form>
-          {projectId && (
-            <label className="capability-default">
-              Default for {state.projects.find((p) => p.id === projectId)?.name}
-              <ProfilePicker
-                label="Project capability profile"
-                state={state}
-                value={data.projectProfiles[projectId] ? key(data.projectProfiles[projectId]!) : ''}
-                disabled={busy}
-                onChange={(value) =>
-                  void perform('setProjectProfile', {
-                    projectId,
-                    profile: profileRef(state, value),
-                    expected: data.projectProfiles[projectId] ?? null,
-                  })
-                    .then(() =>
-                      setMessage(
-                        'Default updated for new sessions. Existing sessions are unchanged.',
-                      ),
+                )}
+                <div>
+                  <div className="capability-section-actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      aria-label={browsing.tools ? 'Done adding tools' : 'Add tools'}
+                      aria-expanded={browsing.tools}
+                      onClick={() => {
+                        setBrowsing((current) => ({ ...current, tools: !current.tools }));
+                        setToolQuery('');
+                      }}
+                    >
+                      {browsing.tools ? 'Done' : 'Add'}
+                    </button>
+                  </div>
+                  {!tools.length && !browsing.tools && <p className="muted">No tools selected.</p>}
+                  <div className="capability-options">
+                    {data.tools
+                      .filter(
+                        (t) =>
+                          t.group !== 'harness' &&
+                          (browsing.tools || tools.includes(t.id)) &&
+                          `${toolDescription(t).title} ${t.name}`
+                            .toLowerCase()
+                            .includes(toolQuery.toLowerCase()),
+                      )
+                      .sort((a, b) => Number(tools.includes(b.id)) - Number(tools.includes(a.id)))
+                      .map((t) => (
+                        <div key={t.id}>
+                          <label className="capability-check">
+                            <input
+                              type="checkbox"
+                              checked={tools.includes(t.id)}
+                              onChange={() => setTools(toggle(tools, t.id))}
+                            />
+                            {toolDescription(t).title}
+                          </label>
+                          <details className="profile-tool-details">
+                            <summary>Details</summary>
+                            <p>{toolDescription(t).brief}</p>
+                            <p>
+                              {t.approval === 'ask'
+                                ? 'Requires approval unless a saved rule applies.'
+                                : 'Approval not required.'}
+                            </p>
+                            {data.disabledTools.includes(t.id) && (
+                              <p>Disabled by the deployment.</p>
+                            )}
+                          </details>
+                        </div>
+                      ))}
+                    {tools
+                      .filter(
+                        (id) =>
+                          !data.tools.some((tool) => tool.id === id && tool.group !== 'harness'),
+                      )
+                      .map((id) => (
+                        <label className="capability-check" key={id}>
+                          <input
+                            type="checkbox"
+                            checked
+                            onChange={() =>
+                              setTools((current) => current.filter((value) => value !== id))
+                            }
+                          />
+                          {id} · Unavailable
+                        </label>
+                      ))}
+                  </div>
+                </div>
+              </details>
+              <details className="profile-section">
+                <summary>
+                  Extensions <span>{extensions.length} selected</span>
+                </summary>
+                <div>
+                  {data.extensions.length > 0 && (
+                    <div className="capability-section-actions">
+                      <button
+                        type="button"
+                        className="secondary"
+                        aria-label={
+                          browsing.extensions ? 'Done adding extensions' : 'Add extensions'
+                        }
+                        aria-expanded={browsing.extensions}
+                        onClick={() =>
+                          setBrowsing((current) => ({
+                            ...current,
+                            extensions: !current.extensions,
+                          }))
+                        }
+                      >
+                        {browsing.extensions ? 'Done' : 'Add'}
+                      </button>
+                    </div>
+                  )}
+                  {!extensions.length && data.extensions.length > 0 && !browsing.extensions && (
+                    <p className="muted">No extensions selected.</p>
+                  )}
+                  {!data.extensions.length && (
+                    <p>No extensions registered. Manage registrations in Integrations.</p>
+                  )}
+                  {[...new Set(data.extensions.map((extension) => extension.id))]
+                    .filter((id) => browsing.extensions || extensions.some((pin) => pin.id === id))
+                    .sort(
+                      (a, b) =>
+                        Number(extensions.some((pin) => pin.id === b)) -
+                        Number(extensions.some((pin) => pin.id === a)),
                     )
-                    .catch(() => {})
-                }
-              />
-            </label>
+                    .map((id) => {
+                      const revisions = data.extensions.filter((extension) => extension.id === id);
+                      const pin = extensions.find((value) => value.id === id);
+                      const chosen = revisions.find(
+                        (extension) =>
+                          extension.revision === pin?.revision && extension.hash === pin.hash,
+                      );
+                      const fallback = revisions.at(-1)!;
+                      return (
+                        <div className="profile-choice" key={id}>
+                          <label className="capability-check">
+                            <input
+                              type="checkbox"
+                              checked={!!pin}
+                              onChange={(event) =>
+                                setExtensions((current) =>
+                                  event.target.checked
+                                    ? [
+                                        ...current.filter((value) => value.id !== id),
+                                        { id, revision: fallback.revision, hash: fallback.hash },
+                                      ]
+                                    : current.filter((value) => value.id !== id),
+                                )
+                              }
+                            />
+                            {id}
+                          </label>
+                          <details>
+                            <summary>Revision{pin ? ` · ${pin.revision}` : ''}</summary>
+                            <select
+                              aria-label={`Revision for ${id}`}
+                              disabled={!pin}
+                              value={chosen ? `${chosen.revision}@${chosen.hash}` : ''}
+                              onChange={(event) => {
+                                const revision = revisions.find(
+                                  (value) =>
+                                    `${value.revision}@${value.hash}` === event.target.value,
+                                );
+                                if (revision)
+                                  setExtensions((current) => [
+                                    ...current.filter((value) => value.id !== id),
+                                    { id, revision: revision.revision, hash: revision.hash },
+                                  ]);
+                              }}
+                            >
+                              {!chosen && (
+                                <option value="">
+                                  {pin
+                                    ? `Unavailable revision ${pin.revision}`
+                                    : 'Select a revision'}
+                                </option>
+                              )}
+                              {revisions.map((revision) => (
+                                <option
+                                  key={`${revision.revision}@${revision.hash}`}
+                                  value={`${revision.revision}@${revision.hash}`}
+                                >
+                                  {revision.revision}
+                                </option>
+                              ))}
+                            </select>
+                          </details>
+                        </div>
+                      );
+                    })}
+                  {extensions
+                    .filter((pin) => !data.extensions.some((extension) => extension.id === pin.id))
+                    .map((pin) => (
+                      <label className="capability-check" key={`${pin.id}@${pin.revision}`}>
+                        <input
+                          type="checkbox"
+                          checked
+                          onChange={() =>
+                            setExtensions((current) => current.filter((value) => value !== pin))
+                          }
+                        />
+                        {pin.id} · Unavailable revision {pin.revision}
+                      </label>
+                    ))}
+                </div>
+              </details>
+              <details className="profile-section">
+                <summary>
+                  Skills <span>{skills.length} selected</span>
+                </summary>
+                <div>
+                  {data.skills.length > 0 && (
+                    <div className="capability-section-actions">
+                      <button
+                        type="button"
+                        className="secondary"
+                        aria-label={browsing.skills ? 'Done adding skills' : 'Add skills'}
+                        aria-expanded={browsing.skills}
+                        onClick={() =>
+                          setBrowsing((current) => ({ ...current, skills: !current.skills }))
+                        }
+                      >
+                        {browsing.skills ? 'Done' : 'Add'}
+                      </button>
+                    </div>
+                  )}
+                  {!skills.length && data.skills.length > 0 && !browsing.skills && (
+                    <p className="muted">No skills selected.</p>
+                  )}
+                  {!data.skills.length && <p>Import a skill to select it here.</p>}
+                  {latestSkills
+                    .filter(
+                      (skill) =>
+                        browsing.skills ||
+                        skills.some(
+                          (value) => value.slice(0, value.lastIndexOf('@')) === skill.name,
+                        ),
+                    )
+                    .sort(
+                      (a, b) =>
+                        Number(
+                          skills.some((value) => value.slice(0, value.lastIndexOf('@')) === b.name),
+                        ) -
+                        Number(
+                          skills.some((value) => value.slice(0, value.lastIndexOf('@')) === a.name),
+                        ),
+                    )
+                    .map((latest) => {
+                      const selectedKey = skills.find(
+                        (value) => value.slice(0, value.lastIndexOf('@')) === latest.name,
+                      );
+                      const revisions = data.skills.filter((value) => value.name === latest.name);
+                      return (
+                        <div className="profile-choice" key={latest.name}>
+                          <label className="capability-check">
+                            <input
+                              type="checkbox"
+                              checked={!!selectedKey}
+                              onChange={(event) =>
+                                setSkills((current) =>
+                                  event.target.checked
+                                    ? [...current, `${latest.name}@${latest.version}`]
+                                    : current.filter((value) => value !== selectedKey),
+                                )
+                              }
+                            />
+                            {latest.name}
+                          </label>
+                          <details>
+                            <summary>
+                              Revision
+                              {selectedKey
+                                ? ` · ${selectedKey.slice(selectedKey.lastIndexOf('@') + 1)}`
+                                : ''}
+                            </summary>
+                            <select
+                              aria-label={`Revision for ${latest.name}`}
+                              disabled={!selectedKey}
+                              value={selectedKey ?? `${latest.name}@${latest.version}`}
+                              onChange={(event) =>
+                                setSkills((current) => [
+                                  ...current.filter((value) => value !== selectedKey),
+                                  event.target.value,
+                                ])
+                              }
+                            >
+                              {selectedKey &&
+                                !revisions.some(
+                                  (value) => `${value.name}@${value.version}` === selectedKey,
+                                ) && <option value={selectedKey}>Unavailable revision</option>}
+                              {revisions.map((value) => (
+                                <option
+                                  key={value.version}
+                                  value={`${value.name}@${value.version}`}
+                                >
+                                  {value.version}
+                                </option>
+                              ))}
+                            </select>
+                          </details>
+                        </div>
+                      );
+                    })}
+                  {skills
+                    .filter(
+                      (value) =>
+                        !latestSkills.some(
+                          (skill) => value.slice(0, value.lastIndexOf('@')) === skill.name,
+                        ),
+                    )
+                    .map((value) => (
+                      <label className="capability-check" key={value}>
+                        <input
+                          type="checkbox"
+                          checked
+                          onChange={() =>
+                            setSkills((current) => current.filter((item) => item !== value))
+                          }
+                        />
+                        {value} · Unavailable
+                      </label>
+                    ))}
+                </div>
+              </details>
+              <details className="profile-section">
+                <summary>Advanced</summary>
+                <div>
+                  <label>
+                    ID
+                    <input
+                      required
+                      pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                      disabled={baseVersion > 0}
+                      value={profileId}
+                      onChange={(e) => {
+                        setCustomId(true);
+                        setProfileId(e.target.value);
+                      }}
+                    />
+                  </label>
+                  <label className="capability-check">
+                    <input
+                      type="checkbox"
+                      checked={loadWorkspaceAgentsMd}
+                      onChange={(e) => setLoadWorkspaceAgentsMd(e.target.checked)}
+                    />
+                    Load workspace AGENTS.md
+                  </label>
+                  <KnowledgePicker state={state} value={knowledge} onChange={setKnowledge} />
+                </div>
+              </details>
+              <footer className="profile-save-bar">
+                <button
+                  className="primary"
+                  disabled={busy || !profileDirty || !profileId || !profileName.trim()}
+                >
+                  Save profile
+                </button>
+                <button type="button" className="secondary" disabled={busy} onClick={cancelProfile}>
+                  Cancel
+                </button>
+              </footer>
+            </form>
           )}
         </>
       )}
-      {tab === 'Instructions' && children}
     </section>
   );
 }

@@ -4,7 +4,16 @@ import type { Project, RuntimeState, RuntimeDefinitionInput } from '../../shared
 import { PlacementEditor } from './PlacementEditor';
 import { ExecutionProfileEditor } from './ExecutionProfileEditor';
 import './ticket-fields.css';
-export function ProjectSettings({ state, project }: { state: RuntimeState; project: Project }) {
+import { InstructionSettings, ProjectAgentProfile } from '../library';
+export function ProjectSettings({
+  state,
+  project,
+  onManageAgents,
+}: {
+  state: RuntimeState;
+  project: Project;
+  onManageAgents?: () => void;
+}) {
   const [message, setMessage] = useState('');
   const [runtimeDraft, setRuntimeDraft] = useState('');
   const [revision, setRevision] = useState(project.revision);
@@ -99,6 +108,12 @@ export function ProjectSettings({ state, project }: { state: RuntimeState; proje
           <button type="submit">Publish revision</button>
         </form>
       </details>
+      <ProjectAgentProfile state={state} projectId={project.id} onManage={onManageAgents} />
+      <InstructionSettings
+        key={`${project.id}-instructions`}
+        state={state}
+        projectId={project.id}
+      />
       <h2>Default agent permissions</h2>
       <ExecutionProfileEditor key={`${project.id}-profile`} state={state} target={project} />
       <h2>Default placement</h2>
