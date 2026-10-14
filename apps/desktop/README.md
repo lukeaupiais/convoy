@@ -12,5 +12,9 @@ shutdown; tests can exercise it without loading Electron. `desktop:dev` loads Vi
 from loopback and accepts a shutdown command from the development supervisor;
 packaged builds continue to load the daemon-served UI.
 
+Startup requires an explicit daemon readiness message. Each reported initialization
+stage renews a 20-second progress timeout; an overall two-minute deadline bounds
+startup even if stages keep changing. Failures include the last reported stage.
+
 Do not put domain rules here. Build and installed-app instructions are in
 [`docs/desktop.md`](../../docs/desktop.md).
