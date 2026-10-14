@@ -982,7 +982,7 @@ export async function executeRunner(
     return bindInspection(request.workspace, request.binding);
   await assertInspectionBinding(request);
   const { action } = request;
-  extensionAdapters ??= ['probe', 'extension'].includes(action) ? await installedDeepThoughtAdapters(signal) : {};
+  extensionAdapters ??= ['probe', 'extension'].includes(action) ? await installedDeepThoughtAdapters(signal, request.repository ?? request.workspace) : {};
   if (action === 'probe') {
     const accessMode = executionAccess(request.accessMode);
     const root = await realpath(request.repository);

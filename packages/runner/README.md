@@ -44,3 +44,8 @@ start and readiness share the configured startup deadline, bounded by total
 runtime lifetime. Interrupted creation is reconciled using the recorded name,
 identity label, image and resource envelope; missing identity evidence remains
 uncertain. Independent expiry is installed before container creation.
+
+SDK runtime probes run only after a workspace is known and its configured and
+canonical interpreter paths have been checked. Manually created adapters defer
+probing until their first query unless `workingDirectory` is supplied to the
+factory. Default runner discovery checks health before advertising the adapter.
