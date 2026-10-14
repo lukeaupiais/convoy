@@ -19,8 +19,10 @@ function InvitationAdministration({
   state,
   createInvitation,
   createTeam,
+  runtimeAvailable,
 }: {
   state: RuntimeState;
+  runtimeAvailable: boolean;
   createInvitation: (
     input: RuntimeCommandInputMap['createInvitation'],
   ) => Promise<RuntimeCommandResultMap['createInvitation']>;
@@ -46,6 +48,7 @@ function InvitationAdministration({
 
   async function issue(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!runtimeAvailable || busy) return;
     const form = event.currentTarget;
     setBusy(true);
     setMessage(undefined);
@@ -160,7 +163,7 @@ function InvitationAdministration({
             <option value={30 * 24 * 60 * 60 * 1000}>30 days</option>
           </select>
         </label>
-        <button disabled={busy}>{busy ? 'Creating…' : 'Create invitation'}</button>
+        <button disabled={!runtimeAvailable || busy}>{busy ? 'Creating…' : 'Create invitation'}</button>
       </form>
       {message && <small role={message.error ? 'alert' : 'status'}>{message.text}</small>}
       {issued && (
@@ -199,6 +202,7 @@ function InvitationAdministration({
           <form
             onSubmit={(event) => {
               event.preventDefault();
+              if (!runtimeAvailable || busy) return;
               const form = event.currentTarget;
               const data = new FormData(form);
               setBusy(true);
@@ -234,7 +238,7 @@ function InvitationAdministration({
                 placeholder="platform"
               />
             </label>
-            <button disabled={busy}>Create team</button>
+            <button disabled={!runtimeAvailable || busy}>Create team</button>
           </form>
         </details>
       )}
@@ -249,8 +253,10 @@ export function ActiveContext({
   acceptInvitation,
   createInvitation,
   createTeam,
+  runtimeAvailable = true,
 }: {
   state: RuntimeState;
+  runtimeAvailable?: boolean;
   projectId?: string;
   selectContext: (context: ContextRef) => void;
   acceptInvitation: (token: string) => Promise<void>;
@@ -309,6 +315,7 @@ export function ActiveContext({
               <small>Project</small>
               <select
                 aria-label="Active context project"
+                disabled={!runtimeAvailable}
                 value={projectId ?? state.activeContext?.projectId ?? state.projects[0]?.id ?? ''}
                 onChange={(event) => {
                   const available = model.availableContexts.find(
@@ -396,7 +403,7 @@ export function ActiveContext({
                 autoComplete="off"
                 placeholder="Invitation token or link"
               />
-              <button disabled={joining}>{joining ? 'Joining…' : 'Accept'}</button>
+              <button disabled={!runtimeAvailable || joining}>{joining ? 'Joining…' : 'Accept'}</button>
             </div>
             {joinMessage && (
               <small role={joinMessage.error ? 'alert' : 'status'}>{joinMessage.text}</small>
@@ -406,6 +413,7 @@ export function ActiveContext({
             state={source}
             createInvitation={createInvitation}
             createTeam={createTeam}
+            runtimeAvailable={runtimeAvailable}
           />
         </div>
       )}

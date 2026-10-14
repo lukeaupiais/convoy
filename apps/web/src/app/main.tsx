@@ -26,6 +26,7 @@ import '../shared/styles/navigation.css';
 import { BoardStudio } from '../features/board/BoardStudio';
 import '../shared/styles/readability.css';
 import '../shared/styles/identity.css';
+import './connection.css';
 import { ActiveContext } from '../features/access';
 import { ProjectSwitcher } from '../features/access/ProjectSwitcher';
 import { ticketNavigationReducer } from './ticket-navigation';
@@ -80,7 +81,13 @@ function App() {
   );
   const [selected, setSelected] = useState<number | null>(null);
   const [detailTicketId, setDetailTicketId] = useState<number>();
-  const { state: liveRuntime, error: runtimeError } = useRuntime(
+  const {
+    state: liveRuntime,
+    error: runtimeError,
+    isStale: runtimeStale,
+    isRefreshing: runtimeRefreshing,
+    refresh: refreshRuntime,
+  } = useRuntime(
     page === 'Project board' ? detailTicketId : undefined,
     page === 'Project board' && detailTicketId === undefined,
   );
@@ -150,7 +157,7 @@ function App() {
       const target = liveRuntime?.projects.find((p) => p.id === route.projectId);
       if (target) {
         setProjectId(target.id);
-        if (liveRuntime?.activeContext?.projectId !== target.id)
+        if (liveRuntime?.activeContext?.projectId !== target.id && !runtimeStale)
           void command('selectActiveContext', {
             context: { organizationId: target.organizationId, projectId: target.id },
           }).catch((e) => setToast(e.message));
@@ -159,7 +166,7 @@ function App() {
     followWikiLink();
     window.addEventListener('hashchange', followWikiLink);
     return () => window.removeEventListener('hashchange', followWikiLink);
-  }, [routeProjects]);
+  }, [routeProjects, runtimeStale]);
   const [workflowReference, setWorkflowReference] = useState<WorkflowReference>();
   const [workflowRunId, setWorkflowRunId] = useState<string>();
   const workflowContextKey = JSON.stringify([
@@ -189,6 +196,7 @@ function App() {
   } | null>(null);
   const [toast, setToast] = useState('');
   async function selectContext(context: ContextRef) {
+    if (runtimeStale) return;
     if (!canLeaveAgents()) return;
     if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return;
     try {
@@ -316,7 +324,7 @@ function App() {
       conversation.linkedTicketIds.includes(current?.id ?? -1),
     ) ?? [];
   async function importDrafts() {
-    if (!project) return;
+    if (!project || runtimeStale) return;
     setSaving(true);
     try {
       const value = await command('importTickets', {
@@ -339,6 +347,7 @@ function App() {
     setMobile(false);
   }
   async function openChat(id: number) {
+    if (runtimeStale) return;
     try {
       const value = await command('openTicketConversation', { ticketId: id, requestId: newId() });
       setChatConversationId(value.result.id);
@@ -348,6 +357,7 @@ function App() {
     }
   }
   function newChat() {
+    if (runtimeStale) return;
     setNewChatOpen(true);
   }
   function inspectConversation(id: string) {
@@ -424,6 +434,7 @@ function App() {
                 <ProjectSwitcher
                   state={liveRuntime}
                   projectId={project.id}
+                  runtimeAvailable={!runtimeStale}
                   selectContext={(context) => void selectContext(context)}
                   createProject={() => {
                     navigate('Project settings');
@@ -445,15 +456,19 @@ function App() {
               <ActiveContext
                 state={liveRuntime}
                 projectId={project?.id}
+                runtimeAvailable={!runtimeStale}
                 selectContext={(context) => void selectContext(context)}
                 acceptInvitation={async (token) => {
+                  if (runtimeStale) throw new Error('Reconnect before making changes.');
                   await command('acceptInvitation', { token });
                 }}
                 createInvitation={async (input) => {
+                  if (runtimeStale) throw new Error('Reconnect before making changes.');
                   const result = await command('createInvitation', input);
                   return result.result;
                 }}
                 createTeam={async (input) => {
+                  if (runtimeStale) throw new Error('Reconnect before making changes.');
                   const result = await command('createTeam', input);
                   return result.result;
                 }}
@@ -461,21 +476,21 @@ function App() {
             )}
           </div>
           <div className="top-actions">
-            <AttentionMenu state={liveRuntime} unavailable={!!runtimeError} loadGlobal={page === 'Project board'} open={(target) => {
+            <AttentionMenu state={liveRuntime} unavailable={runtimeStale} loadGlobal={page === 'Project board'} open={(target) => {
               if (target.kind === 'conversation') inspectConversation(target.id);
               else if (target.kind === 'ticket') setSelected(target.id);
               else if (target.id) openWorkflowRun(target.id);
               else navigate('Workflows');
             }} />
             {page === 'Chat' ? (
-              <button className="primary" disabled={saving} onClick={() => void newChat()}>
+              <button className="primary" disabled={saving || runtimeStale} onClick={() => void newChat()}>
                 <Plus size={15} />
                 New chat
               </button>
             ) : page === 'Project board' ? (
               <button
                 className="primary"
-                disabled={!project}
+                disabled={!project || runtimeStale}
                 onClick={() => {
                   createRequest.current = newId();
                   setNewTask('Backlog');
@@ -488,9 +503,24 @@ function App() {
           </div>
         </header>
         {runtimeError && (
-          <p role="alert" className="chat-error">
-            {runtimeError} Shared ticket edits are unavailable until reconnection.
-          </p>
+          <section className="connection-notice" role="alert" aria-live="polite">
+            <div>
+              <strong>Connection lost</strong>
+              <p>
+                {liveRuntime
+                  ? 'Showing the last available snapshot. Work may still be running.'
+                  : 'Work may still be running.'}{' '}
+                Refresh the latest state before making changes.
+              </p>
+            </div>
+            <button type="button" className="secondary" disabled={runtimeRefreshing} onClick={refreshRuntime}>
+              {runtimeRefreshing ? 'Refreshing…' : 'Reconnect'}
+            </button>
+            <details>
+              <summary>Troubleshooting</summary>
+              <p>If Convoy is stopped, run <code>npm run server</code> from its directory.</p>
+            </details>
+          </section>
         )}
 
         {['Project settings', 'Wiki'].includes(page) && (
@@ -514,13 +544,20 @@ function App() {
         )}
         {page === 'Project settings' && project && liveRuntime && (
           <section className="runtime-page">
-            <ProjectSettings key={project.id} project={project} state={liveRuntime} onManageAgents={() => navigate('Agents')} />
+            <fieldset
+              className="stale-settings-controls"
+              disabled={runtimeStale}
+              style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}
+            >
+              <ProjectSettings key={project.id} project={project} state={liveRuntime} onManageAgents={() => navigate('Agents')} />
+            </fieldset>
             <div>
               <h2>Create another project</h2>
               <form
                 className="runtime-form"
                 onSubmit={async (e) => {
                   e.preventDefault();
+                  if (runtimeStale) return;
                   const f = new FormData(e.currentTarget);
                   try {
                     const value = await command('saveProject', {
@@ -541,7 +578,7 @@ function App() {
                   Project name
                   <input id="new-project-name" name="name" required />
                 </label>
-                <button className="primary">Create project</button>
+                <button className="primary" disabled={runtimeStale}>Create project</button>
               </form>
               {browserDrafts.length > 0 && (
                 <>
@@ -551,7 +588,7 @@ function App() {
                     IDs will not be overwritten unless they are matching legacy session
                     placeholders.
                   </p>
-                  <button className="secondary" disabled={saving} onClick={importDrafts}>
+                  <button className="secondary" disabled={saving || runtimeStale} onClick={importDrafts}>
                     Import browser tickets
                   </button>
                 </>
@@ -569,12 +606,14 @@ function App() {
             projectName={projectName}
             onSelectTicket={setSelected}
             onNewTicket={(boardId, columnId) => {
+              if (runtimeStale) return;
               createRequest.current = newId();
               setNewTaskPlacement({ boardId, columnId });
               setNewTask('Backlog');
             }}
             onManageIntegrations={() => navigate('Integrations')}
             runtimeError={runtimeError}
+            runtimeAvailable={!runtimeStale}
             onOpenWorkflow={(reference) => {
               setWorkflowReference(reference);
               navigate('Workflows');
@@ -586,6 +625,7 @@ function App() {
             openChat={inspectConversation}
             openTicket={setSelected}
             openWorkflows={() => navigate('Workflows')}
+            openWorkflowRun={openWorkflowRun}
           />
         )}
         {page === 'Chat' && liveRuntime && (
@@ -707,7 +747,7 @@ function App() {
                     state={liveRuntime}
                     ticket={currentTicket}
                     session={currentExecution}
-                    runtimeAvailable={!runtimeError}
+                    runtimeAvailable={!runtimeStale}
                     onExecutionDetails={() => {
                       setTicketRecoveryRequested(false);
                       dispatchTicketNavigation({ type: 'show', view: 'execution' });
@@ -743,7 +783,11 @@ function App() {
                   runLabel={runLabel}
                   onRun={() => dispatchTicketNavigation({ type: 'show', view: 'execution' })}
                   onOpenWorkflowRun={openWorkflowRun}
-                  runtimeAvailable={!runtimeError}
+                  runtimeAvailable={!runtimeStale}
+                  onRecovery={() => {
+                    setTicketRecoveryRequested(true);
+                    dispatchTicketNavigation({ type: 'show', view: 'execution' });
+                  }}
                   onSelectTicket={(id) => {
                     setSelected(id);
                     dispatchTicketNavigation({ type: 'show', view: 'details' });
@@ -763,7 +807,7 @@ function App() {
                     key={current.id}
                     state={liveRuntime}
                     ticket={currentTicket}
-                    runtimeAvailable={!runtimeError}
+                    runtimeAvailable={!runtimeStale}
                     onOpenWorkflowRun={openWorkflowRun}
                     focusRecovery={ticketRecoveryRequested}
                     onOpenTicketMessages={() => {
@@ -811,7 +855,7 @@ function App() {
             aria-label="Create ticket"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (saving || !project) return;
+              if (saving || !project || runtimeStale) return;
               const data = new FormData(e.currentTarget);
               setSaving(true);
               createRequest.current ||= newId();
@@ -978,7 +1022,7 @@ function App() {
               <span className="muted">
                 {newTaskPlacement ? 'Adding to selected board column' : 'Create a new ticket'}
               </span>
-              <button className="primary" type="submit" disabled={saving}>
+              <button className="primary" type="submit" disabled={saving || runtimeStale}>
                 <Plus size={16} />
                 {selectedDestination !== 'convoy'
                   ? `Create in ${(liveRuntime?.ticketConnections ?? []).find((value) => value.id === selectedDestination)?.name ?? 'external source'}`
@@ -995,7 +1039,9 @@ function App() {
           {pendingPlacement && (
             <button
               className="secondary"
-              onClick={() =>
+              disabled={runtimeStale}
+              onClick={() => {
+                if (runtimeStale) return;
                 void command('setBoardPlacement', {
                   boardId: pendingPlacement.boardId,
                   ticketId: pendingPlacement.ticketId,
@@ -1007,7 +1053,7 @@ function App() {
                     setToast('Placement saved.');
                   })
                   .catch((error) => setToast(`Placement retry failed: ${(error as Error).message}`))
-              }
+              }}
             >
               Retry placement
             </button>

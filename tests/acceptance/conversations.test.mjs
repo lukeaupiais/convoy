@@ -255,6 +255,7 @@ test('project context cannot leak through reassignment; workflow decisions and r
   assert.equal((await f.session()).flow.status,'waiting_gate');
   await f.chat('approveGate',{instance:(await f.session()).flow.instance});
   await f.chat('releaseTicket');assert.equal((await f.runtime.snapshot()).tickets[0].status,'Ready');
+  assert.equal((await f.runtime.snapshot()).tickets[0].executionSessionId,undefined);
   const p=await f.act('saveProject',{name:'Other'});
   const other=await f.act('createTicket',{title:'Other work',projectId:p.id,requestId:'other'});
   await assert.rejects(f.chat('requestExecution',{ticketId:other.id,mode:'continue',brief:'Other'}),/another project/);

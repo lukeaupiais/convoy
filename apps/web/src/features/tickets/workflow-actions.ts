@@ -6,13 +6,17 @@ type Act = (action: RuntimeAction, input?: object) => void | Promise<void>;
 export function ticketWorkflowActions(
   session: Session,
   act: Act,
-  options: { startRun?: () => void } = {},
+  options: {
+    startRun?: () => void;
+    requestChanges?: (feedback: string) => void | boolean | Promise<void | boolean>;
+  } = {},
 ): WorkflowInteractionActions {
   const instance = session.flow?.instance;
   if (!instance) return {};
   return {
     approveGate: () => act('approveGate', { instance }),
-    requestChanges: (feedback) => act('requestChanges', { instance, feedback }),
+    requestChanges:
+      options.requestChanges ?? ((feedback) => act('requestChanges', { instance, feedback })),
     continueRun: () => act('continueWorkflow', { instance }),
     pause: () => act('pauseWorkflow'),
     cancel: () => {

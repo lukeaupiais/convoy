@@ -23,32 +23,32 @@ export function SettingsPage({
   onCloseReference?: () => void;
   onOpenConversation?: (id: string) => void;
 }) {
-  const { state, error } = useRuntime();
+  const { state, error, isStale } = useRuntime();
   return (
     <section className="runtime-page">
       {view !== 'Workflows' && <h1 className="sr-only">{view}</h1>}
       {error && <p role="alert">{error}</p>}
-      {view === 'Runners' && state && <EnvironmentSettings state={state} />}{' '}
-      {view === 'Providers' && state && <ProviderSettings state={state} />}{' '}
-      {view === 'Integrations' && state && <IntegrationSettings state={state} />}{' '}
-      {view === 'Workflows' &&
-        state &&
-        !error &&
-        (workflowReference ? (
+      {view === 'Workflows' && state && workflowReference && (
           <WorkflowReferenceView
             state={state}
             reference={workflowReference}
             onBack={() => onCloseReference?.()}
           />
-        ) : (
+      )}
+      <fieldset disabled={isStale} style={{ border: 0, margin: 0, minWidth: 0, padding: 0 }}>
+        {view === 'Runners' && state && <EnvironmentSettings state={state} />}{' '}
+        {view === 'Providers' && state && <ProviderSettings state={state} />}{' '}
+        {view === 'Integrations' && state && <IntegrationSettings state={state} />}{' '}
+        {view === 'Workflows' && state && !workflowReference && (
           <WorkflowWorkspace
             state={state}
             projectId={projectId}
             workflowRunId={workflowRunId}
             onOpenConversation={onOpenConversation}
           />
-        ))}
-      {view === 'Agents' && state && <AgentSettings state={state} />}
+        )}
+        {view === 'Agents' && state && <AgentSettings state={state} />}
+      </fieldset>
     </section>
   );
 }

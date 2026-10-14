@@ -1,3 +1,4 @@
+import { writableTicketStatuses } from '../integrations';
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Paperclip, X } from 'lucide-react';
 import {
@@ -41,10 +42,12 @@ const fileSize = (bytes: number) =>
 function TicketFiles({
   ticket,
   editing,
+  runtimeAvailable,
   revisionChanged,
 }: {
   ticket: Ticket;
   editing: boolean;
+  runtimeAvailable: boolean;
   revisionChanged: (revision: number) => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
@@ -55,7 +58,7 @@ function TicketFiles({
   useEffect(() => setRevision(ticket.revision), [ticket.revision]);
   const files = ticket.attachments ?? [];
   async function upload(selected: FileList | null) {
-    if (!selected?.length || busy) return;
+    if (!selected?.length || busy || !runtimeAvailable) return;
     setBusy(true);
     setError('');
     let nextRevision = revision;
@@ -86,7 +89,7 @@ function TicketFiles({
     }
   }
   async function remove(file: ContextFile) {
-    if (busy) return;
+    if (busy || !runtimeAvailable) return;
     setBusy(true);
     setError('');
     try {
@@ -124,7 +127,7 @@ function TicketFiles({
               <button
                 type="button"
                 aria-label={`Remove ${file.name}`}
-                disabled={busy}
+                disabled={busy || !runtimeAvailable}
                 onClick={() => void remove(file)}
               >
                 <X size={13} />
@@ -145,7 +148,7 @@ function TicketFiles({
           <button
             type="button"
             className="ticket-attach"
-            disabled={busy}
+            disabled={busy || !runtimeAvailable}
             onClick={() => input.current?.click()}
           >
             <Paperclip size={14} /> {busy ? 'Adding…' : 'Add files'}
@@ -192,6 +195,7 @@ export function TicketDetails({
   onRun,
   runtimeAvailable = true,
   onSelectTicket,
+  onRecovery,
   onOpenWorkflowRun,
 }: {
   state: RuntimeState;
@@ -200,6 +204,7 @@ export function TicketDetails({
   onRun: () => void;
   runtimeAvailable?: boolean;
   onSelectTicket: (id: number) => void;
+  onRecovery?: () => void;
   onOpenWorkflowRun?: (runId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -245,6 +250,7 @@ export function TicketDetails({
   const ticketScopeRef = useRef(ticketScopeKey);
   ticketScopeRef.current = ticketScopeKey;
   const [workflowWorking, setWorkflowWorking] = useState(false);
+  const [workflowError, setWorkflowError] = useState('');
   const related = (state.ticketRelations ?? []).flatMap((relation) => {
     const otherId =
       relation.sourceTicketId === ticket.id
@@ -331,17 +337,16 @@ export function TicketDetails({
       board.grouping.mode === 'field' &&
       board.grouping.field === 'status',
   );
+  const writableStatuses = writableTicketStatuses(ticket, state.ticketConnections ?? []);
   const statusChoices = [
     ...new Set([
-      ...statusBoards.flatMap((board) =>
+      ...(writableStatuses ?? statusBoards.flatMap((board) =>
         board.columns.map((column) => column.value ?? column.name),
-      ),
+      )),
       ticket.status,
     ]),
   ];
-  const sourceOwnsStatus = ticket.externalLinks?.some(
-    (link) => link.fieldOwnership?.status === 'external',
-  );
+  const sourceOwnsStatus = writableStatuses !== null && writableStatuses.length === 0;
   const availableConnections = (state.ticketConnections ?? []).filter(
     (connection) =>
       connection.enabled &&
@@ -389,22 +394,25 @@ export function TicketDetails({
     threadSources.map(({ link }) => link.connectionId).join('|'),
   ]);
   useEffect(() => {
-    if (!session || !owns(session)) return;
+    if (!session || !owns(session) || !runtimeAvailable) return;
     const timer = setInterval(
       () => void command('heartbeat', { sessionId: session.id }).catch(() => {}),
       25000,
     );
     return () => clearInterval(timer);
-  }, [session?.id, session?.lease?.client]);
-  async function actWorkflow(action: RuntimeAction, input: object = {}) {
-    if (!session || workflowWorking) return;
+  }, [session?.id, session?.lease?.client, runtimeAvailable]);
+  async function actWorkflow(action: RuntimeAction, input: object = {}): Promise<boolean> {
+    if (!session || workflowWorking || !runtimeAvailable) return false;
     setWorkflowWorking(true);
+    setWorkflowError('');
     try {
       if (!owns(session))
         await command('claim', { sessionId: session.id, label: 'Ticket workflow' });
       await command(action, { sessionId: session.id, ...input });
+      return true;
     } catch (error) {
-      setMessage((error as Error).message);
+      setWorkflowError((error as Error).message);
+      return false;
     } finally {
       setWorkflowWorking(false);
     }
@@ -413,6 +421,7 @@ export function TicketDetails({
     input: { requestId: string; remoteId?: string; confirmNotPosted?: true },
     successMessage: string,
   ) {
+    if (!runtimeAvailable) return;
     const scopedKey = draftKey;
     const attempt = (replyAttempts.current.get(scopedKey) ?? 0) + 1;
     replyAttempts.current.set(scopedKey, attempt);
@@ -465,7 +474,12 @@ export function TicketDetails({
             <h2>{ticket.title}</h2>
             <span className="ticket-status">{ticket.status}</span>
           </div>
-          <button className="secondary" onClick={() => setEditing(true)}>
+          <button
+            className="secondary"
+            disabled={!runtimeAvailable}
+            title={!runtimeAvailable ? 'Reconnect to refresh before editing.' : undefined}
+            onClick={() => setEditing(true)}
+          >
             Edit
           </button>
         </header>
@@ -507,16 +521,27 @@ export function TicketDetails({
               )}
             </section>
             {session?.flow && (
-              <section className="ticket-agent-activity" aria-label="Agent work">
+              <section className="ticket-agent-activity" aria-label="Workflow">
                 <WorkflowRunInteraction
                   key={session.id}
                   session={session}
                   activityReservation={preparedActivityReservation}
                   working={workflowWorking || !runtimeAvailable}
-                  onRecovery={onRun}
+                  actionError={workflowError}
+                  onRecovery={onRecovery ?? onRun}
                   onOpenWorkflowRun={onOpenWorkflowRun}
                   actions={{
-                    ...ticketWorkflowActions(session, (action, input) => void actWorkflow(action, input)),
+                    ...ticketWorkflowActions(
+                      session,
+                      (action, input) => void actWorkflow(action, input),
+                      {
+                        requestChanges: (feedback) =>
+                          actWorkflow('requestChanges', {
+                            instance: session.flow!.instance,
+                            feedback,
+                          }),
+                      },
+                    ),
                     ...workflowHumanTaskActions(session),
                     requiresActivityReservation: !!approvalTargetNodeId,
                     canPrepareActivityApproval: !!session && runtimeAvailable,
@@ -525,6 +550,7 @@ export function TicketDetails({
                     approvalContextKey: JSON.stringify([state.currentUser?.id, state.activeContext?.id, state.activeContext?.projectId, state.activeContext?.principal]),
                     prepareActivityApproval: approvalTargetNodeId ? async () => {
                       if (!session) throw new Error('Workflow session is unavailable.');
+                      if (!runtimeAvailable) throw new Error('Reconnect to refresh before preparing approval.');
                       if (!owns(session)) await command('claim', { sessionId: session.id, label: 'Ticket workflow' });
                       return (await command('prepareWorkflowActivity', { workflowRunId: session.flow!.id,
                         gateInstance: session.flow!.instance, targetNodeId: approvalTargetNodeId })).result;
@@ -759,7 +785,7 @@ export function TicketDetails({
                 )}
               </section>
             )}
-            <TicketFiles ticket={ticket} editing={false} revisionChanged={setRevision} />
+            <TicketFiles ticket={ticket} editing={false} runtimeAvailable={runtimeAvailable} revisionChanged={setRevision} />
             {session?.flow && <WorkflowActivityHistory session={session} />}
           </div>
           <aside className="ticket-context" aria-label="Ticket context">
@@ -795,7 +821,7 @@ export function TicketDetails({
                       <summary>Manage link</summary>
                       <button
                         className="secondary"
-                        disabled={linkBusy}
+                        disabled={linkBusy || !runtimeAvailable}
                         onClick={async () => {
                           setLinkBusy(true);
                           try {
@@ -827,6 +853,7 @@ export function TicketDetails({
                       <label>
                         Existing ticket
                         <Select
+                          disabled={!runtimeAvailable}
                           value={relatedTicketId}
                           onChange={(event) => setRelatedTicketId(event.target.value)}
                         >
@@ -840,7 +867,7 @@ export function TicketDetails({
                       </label>
                       <button
                         className="secondary"
-                        disabled={linkBusy || !relatedTicketId}
+                        disabled={linkBusy || !runtimeAvailable || !relatedTicketId}
                         onClick={async () => {
                           setLinkBusy(true);
                           try {
@@ -871,6 +898,7 @@ export function TicketDetails({
                     New ticket title
                     <input
                       value={relatedTitle}
+                      disabled={!runtimeAvailable}
                       onChange={(event) => setRelatedTitle(event.target.value)}
                       placeholder={ticket.title}
                     />
@@ -880,6 +908,7 @@ export function TicketDetails({
                       Board
                       <Select
                         value={relatedBoardId}
+                        disabled={!runtimeAvailable}
                         onChange={(event) => setRelatedBoardId(event.target.value)}
                       >
                         <option value="">Project default</option>
@@ -893,7 +922,7 @@ export function TicketDetails({
                   )}
                   <button
                     className="secondary"
-                    disabled={linkBusy}
+                    disabled={linkBusy || !runtimeAvailable}
                     onClick={async () => {
                       setLinkBusy(true);
                       try {
@@ -920,7 +949,7 @@ export function TicketDetails({
             </details>
             {!session?.flow && (
               <section className="ticket-context-group">
-                <h3>Agent work</h3>
+                <h3>Workflow</h3>
                 <button className="ticket-context-action" onClick={onRun}>
                   {runLabel} →
                 </button>
@@ -979,7 +1008,7 @@ export function TicketDetails({
                         </label>
                         <button
                           className="secondary"
-                          disabled={publishing || !remoteIssueId.trim()}
+                          disabled={publishing || !runtimeAvailable || !remoteIssueId.trim()}
                           onClick={async () => {
                             setPublishing(true);
                             try {
@@ -1000,7 +1029,7 @@ export function TicketDetails({
                         </button>
                         <button
                           className="secondary"
-                          disabled={publishing}
+                          disabled={publishing || !runtimeAvailable}
                           onClick={async () => {
                             if (
                               !window.confirm(
@@ -1069,7 +1098,7 @@ export function TicketDetails({
                             {connection?.capabilities?.update && (
                               <button
                                 className="secondary"
-                                disabled={publishing}
+                                disabled={publishing || !runtimeAvailable}
                                 onClick={async () => {
                                   setPublishing(true);
                                   try {
@@ -1096,7 +1125,7 @@ export function TicketDetails({
                             )}
                             <button
                               className="secondary"
-                              disabled={publishing}
+                              disabled={publishing || !runtimeAvailable}
                               onClick={async () => {
                                 setPublishing(true);
                                 try {
@@ -1126,7 +1155,7 @@ export function TicketDetails({
                           Publish to
                           <Select
                             defaultValue=""
-                            disabled={publishing}
+                            disabled={publishing || !runtimeAvailable}
                             onChange={async (event) => {
                               if (!event.target.value) return;
                               setPublishing(true);
@@ -1171,7 +1200,7 @@ export function TicketDetails({
       className="runtime-form ticket-edit-form"
       onSubmit={async (event) => {
         event.preventDefault();
-        if (saving) return;
+        if (saving || !runtimeAvailable) return;
         setSaving(true);
         setMessage('');
         const form = new FormData(event.currentTarget);
@@ -1198,6 +1227,8 @@ export function TicketDetails({
         }
       }}
     >
+      <fieldset className="ticket-edit-disabled" disabled={!runtimeAvailable || saving}>
+      <legend className="sr-only">Ticket fields</legend>
       <label className="ticket-title-field">
         <span>Title</span>
         <textarea name="title" aria-label="Title" defaultValue={ticket.title} required rows={2} />
@@ -1229,7 +1260,7 @@ export function TicketDetails({
           />
         )}
       </div>
-      <TicketFiles ticket={ticket} editing revisionChanged={setRevision} />
+      <TicketFiles ticket={ticket} editing runtimeAvailable={runtimeAvailable} revisionChanged={setRevision} />
       <details className="ticket-properties">
         <summary>Properties</summary>
         <div className="ticket-property-grid">
@@ -1341,12 +1372,17 @@ export function TicketDetails({
           <PlacementEditor state={state} target={ticket} ticket />
         </details>
       </details>
+      </fieldset>
       {message && <p role="alert">{message}</p>}
       <div className="ticket-edit-actions">
         <button type="button" className="secondary" onClick={() => setEditing(false)}>
           Cancel
         </button>
-        <button className="primary ticket-save" disabled={saving}>
+        <button
+          className="primary ticket-save"
+          disabled={saving || !runtimeAvailable}
+          title={!runtimeAvailable ? 'Reconnect to refresh before saving.' : undefined}
+        >
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>

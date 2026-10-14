@@ -15,12 +15,16 @@ const js = ts.transpileModule(
 ).outputText;
 const {
   workflowActivityHistory,
+  workflowArtifactCollection,
+  workflowAttentionLabel,
   approvalControlInvalidated,
   workflowDecisionCapabilities,
   workflowDecisionLabel,
   workflowNeedsRecovery,
   workflowRunOutput,
   workflowStatusLabel,
+  workflowFeedbackContextKey,
+  submitWorkflowFeedback,
 } = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'));
 
 test('approval preparation survives its first explicit claim but invalidates on loss, gate change, or lease replacement', () => {
@@ -418,6 +422,125 @@ test('known engine states use concise operator labels with readable generic fall
   assert.equal(workflowStatusLabel('awaiting_continue'), 'Ready to continue');
   assert.equal(workflowStatusLabel('awaiting_submission'), 'Output required');
   assert.equal(workflowStatusLabel('paused_by_adapter'), 'Paused by adapter');
+});
+
+test('required workflow attention takes precedence over running and preserves the underlying status', () => {
+  const runningQuestion = {
+    status: 'running',
+    pendingQuestion: { id: 'question-1', question: 'Which option?' },
+    flow: { status: 'running' },
+  };
+  assert.equal(workflowAttentionLabel(runningQuestion), 'Answer required');
+  assert.equal(workflowStatusLabel(runningQuestion.flow.status), 'Running');
+  assert.equal(
+    workflowAttentionLabel({
+      status: 'running',
+      pending: { id: 'tool-1', tool: 'read' },
+      flow: { status: 'running' },
+    }),
+    'Permission required',
+  );
+  assert.equal(
+    workflowAttentionLabel({
+      status: 'running',
+      assignment: { state: 'uncertain' },
+      flow: { status: 'running' },
+    }),
+    'Recovery required',
+  );
+  assert.equal(
+    workflowAttentionLabel({ status: 'running', flow: { status: 'waiting_gate' } }),
+    'Decision required',
+  );
+  assert.equal(workflowAttentionLabel({ status: 'running', flow: { status: 'running' } }), undefined);
+});
+
+test('artifact collections expose a bounded item count and ignore uncaptured legacy paths', () => {
+  assert.deepEqual(workflowArtifactCollection(undefined), { artifacts: [], count: 0 });
+  const submission = {
+    artifacts: [
+      ...Array.from({ length: 80 }, (_, index) => ({
+        id: `artifact-${index}`,
+        name: `output-${index}.txt`,
+        path: `output/${index}.txt`,
+        mime: 'text/plain',
+      })),
+      'legacy/not-captured.txt',
+    ],
+  };
+  const collection = workflowArtifactCollection(submission);
+  assert.equal(collection.count, 80);
+  assert.equal(collection.artifacts.length, 80);
+  assert.equal(collection.artifacts[0].id, 'artifact-0');
+  assert.equal(collection.artifacts.at(-1).id, 'artifact-79');
+});
+
+test('feedback draft identity changes with gate, active context, or exact reviewed material', () => {
+  const flow = {
+    id: 'run-1',
+    nodeId: 'review',
+    instance: 'gate-instance',
+    decisionSubmissionRef: { nodeId: 'draft', instance: 'draft-1', revision: 4 },
+  };
+  const material = JSON.stringify(['project-a', flow.decisionSubmissionRef]);
+  const key = workflowFeedbackContextKey('session-1', flow, material);
+  assert.equal(workflowFeedbackContextKey('session-1', flow, material), key);
+  assert.notEqual(
+    workflowFeedbackContextKey(
+      'session-1',
+      flow,
+      JSON.stringify(['project-b', flow.decisionSubmissionRef]),
+    ),
+    key,
+  );
+  assert.notEqual(
+    workflowFeedbackContextKey('session-1', { ...flow, instance: 'gate-instance-2' }, material),
+    key,
+  );
+  assert.notEqual(
+    workflowFeedbackContextKey(
+      'session-1',
+      {
+        ...flow,
+        decisionSubmissionRef: { ...flow.decisionSubmissionRef, revision: 5 },
+      },
+      JSON.stringify([
+        'project-a',
+        { ...flow.decisionSubmissionRef, revision: 5 },
+      ]),
+    ),
+    key,
+  );
+});
+
+test('feedback submission retains a failed draft and ignores results after context changes', async () => {
+  let context = 'gate-a';
+  let resolveRequest;
+  const pending = submitWorkflowFeedback(
+    context,
+    () => context,
+    () => new Promise((resolve) => (resolveRequest = resolve)),
+  );
+  assert.equal(typeof resolveRequest, 'function');
+  resolveRequest(false);
+  assert.equal(await pending, 'failed');
+
+  let resolveStaleRequest;
+  const stale = submitWorkflowFeedback(
+    context,
+    () => context,
+    () => new Promise((resolve) => (resolveStaleRequest = resolve)),
+  );
+  context = 'gate-b';
+  resolveStaleRequest();
+  assert.equal(await stale, 'stale');
+  assert.equal(await submitWorkflowFeedback(context, () => context, async () => undefined), 'submitted');
+  assert.equal(
+    await submitWorkflowFeedback(context, () => context, async () => {
+      throw new Error('request failed');
+    }),
+    'failed',
+  );
 });
 
 test('activity history is a concise projection of configured names, outcomes, and recorded times', () => {

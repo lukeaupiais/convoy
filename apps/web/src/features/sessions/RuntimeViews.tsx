@@ -89,14 +89,17 @@ export function SessionControls({
           withControl(() => humanActions.decideHumanOutcome!(input))
       : undefined,
   };
-  async function act(action: RuntimeAction, extra = {}) {
+  async function act(action: RuntimeAction, extra = {}): Promise<boolean> {
+    if (working || !runtimeAvailable) return false;
     setWorking(true);
     setError('');
     try {
       await ensureControl();
       await command(action, { sessionId: s.id, ...extra });
+      return true;
     } catch (e) {
       setError((e as Error).message);
+      return false;
     } finally {
       setWorking(false);
     }
@@ -138,7 +141,7 @@ export function SessionControls({
       setError('Select the existing ticket created by this effect.');
       return;
     }
-    await act('reconcileWorkflowEffect', {
+    const reconciled = await act('reconcileWorkflowEffect', {
       instance: s.flow.instance,
       effectKey,
       resolution,
@@ -146,7 +149,7 @@ export function SessionControls({
         ? { result: { id: Number(recoveryTicketId) } }
         : {}),
     });
-    if (resolution === 'applied') setRecoveryTicketId('');
+    if (reconciled && resolution === 'applied') setRecoveryTicketId('');
   }
   const configuration = (
     <div className={`session-configuration${settingsOnly ? '' : ' runtime-toolbar'}`}>
@@ -155,7 +158,7 @@ export function SessionControls({
         <select
           aria-label="Session runner"
           value={runnerId}
-          disabled={busy || !!s.workspace}
+          disabled={!runtimeAvailable || busy || !!s.workspace}
           onChange={(e) => setRunnerId(e.target.value)}
         >
           <option value="">Use ticket / project placement</option>
@@ -170,7 +173,7 @@ export function SessionControls({
         Workflow
         <select
           aria-label="Session workflow"
-          disabled={settingsOnly && !!s.flow && !['completed', 'cancelled'].includes(s.flow.status)}
+          disabled={!runtimeAvailable || (settingsOnly && !!s.flow && !['completed', 'cancelled'].includes(s.flow.status))}
           value={workflow}
           onChange={(e) => setWorkflow(e.target.value)}
         >
@@ -192,7 +195,7 @@ export function SessionControls({
               placeholder="Repository root"
               value={workingDirectory}
               disabled={
-                busy || working || (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
+                !runtimeAvailable || busy || working || (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
               }
               onChange={(event) => setWorkingDirectory(event.target.value)}
             />
@@ -222,12 +225,20 @@ export function SessionControls({
   );
   const inspection = (
     <>
-      <SessionCapabilities
-        state={state}
-        session={s}
-        acquireControl={compact ? ensureControl : undefined}
-        onManageAgents={onManageAgents}
-      />
+      <fieldset className="session-capabilities-readonly" disabled={!runtimeAvailable}>
+        <legend className="sr-only">Session capabilities</legend>
+        <SessionCapabilities
+          state={state}
+          session={s}
+          acquireControl={compact ? ensureControl : undefined}
+          onManageAgents={runtimeAvailable ? onManageAgents : undefined}
+        />
+      </fieldset>
+      {!runtimeAvailable && onManageAgents && (
+        <button type="button" className="secondary" onClick={onManageAgents}>
+          Manage profiles
+        </button>
+      )}
       <details className="runtime-details">
         <summary>
           {settingsOnly ? 'Effective instructions' : 'Workspace, workflow & effective instructions'}
@@ -355,6 +366,9 @@ export function SessionControls({
         <p role="alert" className="chat-error">
           {error}
         </p>
+      )}
+      {!runtimeAvailable && (
+        <p role="status">Reconnect to refresh before changing this session.</p>
       )}
       {s.queueReason && <p role="status">Queued: {s.queueReason}</p>}
       {!compact && s.assignment && (
@@ -498,11 +512,15 @@ export function SessionControls({
           <p>{s.pendingQuestion.question}</p>
           <label>
             Your answer
-            <textarea value={answer} onChange={(e) => setAnswer(e.target.value)} />
+            <textarea
+              value={answer}
+              disabled={!runtimeAvailable || working}
+              onChange={(e) => setAnswer(e.target.value)}
+            />
           </label>
           <button
             className="primary"
-            disabled={!canAct || working || !answer.trim()}
+            disabled={!canAct || working || !runtimeAvailable || !answer.trim()}
             onClick={() => act('answerQuestion', { questionId: s.pendingQuestion!.id, answer })}
           >
             Send answer
@@ -551,7 +569,7 @@ export function SessionControls({
                   : {}),
               }),
             requestChanges: (revisionFeedback) =>
-              void act('requestChanges', {
+              act('requestChanges', {
                 instance: s.flow!.instance,
                 feedback: revisionFeedback,
               }),
@@ -628,10 +646,12 @@ export function RuntimeSessions({
   openChat,
   openTicket,
   openWorkflows,
+  openWorkflowRun,
 }: {
   openChat: (id: string) => void;
   openTicket: (id: number) => void;
   openWorkflows: () => void;
+  openWorkflowRun?: (runId: string) => void;
 }) {
   const { state, error } = useRuntime();
   const [projectFilter, setProjectFilter] = useState('');
@@ -724,22 +744,29 @@ export function RuntimeSessions({
                 </details>
               );
             })}
-            {model.orphanEffects.map((effect) => (
-              <details className="live-alert" key={`effect:${effect.effectKey}`}>
-                <summary className="live-row">
-                  <span className="live-row-main">
-                    <strong>Workflow effect</strong>
-                    <small>{effect.operation}</small>
-                  </span>
-                  <span className="live-row-state">Outcome uncertain</span>
-                </summary>
-                <div className="live-alert-details">
-                  <p>{effect.message ?? 'Inspect the effect before attempting recovery.'}</p>
-                  <small>{effect.effectKey}</small>
-                  <button onClick={openWorkflows}>Open workflows</button>
-                </div>
-              </details>
-            ))}
+            {model.orphanEffects.map((effect) => {
+              const run = state.workflowRuns?.find((value) => effect.effectKey.startsWith(`${value.id}:`));
+              return (
+                <details className="live-alert" key={`effect:${effect.effectKey}`}>
+                  <summary className="live-row">
+                    <span className="live-row-main">
+                      <strong>Workflow effect</strong>
+                      <small>{effect.operation}</small>
+                    </span>
+                    <span className="live-row-state">Outcome uncertain</span>
+                  </summary>
+                  <div className="live-alert-details">
+                    <p>{effect.message ?? 'Inspect the effect before attempting recovery.'}</p>
+                    <small>{effect.effectKey}</small>
+                    {run && openWorkflowRun ? (
+                      <button onClick={() => openWorkflowRun(run.id)}>Open associated workflow run</button>
+                    ) : (
+                      <button onClick={openWorkflows}>Open workflows</button>
+                    )}
+                  </div>
+                </details>
+              );
+            })}
             {model.attention.map((s) => sessionRow(s))}
             {model.active.length > 0 && (
               <div className="live-section-label">

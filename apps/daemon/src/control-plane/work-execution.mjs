@@ -56,6 +56,7 @@ export function createWorkExecution({ state, jobs }) {
     projection(ticket) {
       const session = sessionFor(ticket);
       return {
+        executionSessionId: session?.id,
         runnerId: session?.runnerId,
         workflow: session?.workflow ? { id: session.workflow.id, name: session.workflow.name, version: session.workflow.version } : null,
         executionStatus: session?.status,

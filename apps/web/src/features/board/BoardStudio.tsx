@@ -1,3 +1,4 @@
+import { writableTicketStatuses } from '../integrations';
 import { Select } from '../../shared/ui/Select';
 import { BoardAutomationInspector } from '../workflows/index';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -30,6 +31,7 @@ type Props = {
   onManageIntegrations: () => void;
   onOpenWorkflow: (reference: WorkflowReference) => void;
   runtimeError?: string;
+  runtimeAvailable?: boolean;
 };
 const starter: Board = {
   id: 'new-board',
@@ -70,10 +72,14 @@ function columnFor(board: Board, ticket: Ticket) {
     board.tickets?.find((p) => p.ticketId === ticket.id)?.columnId ?? board.columns[0]?.id ?? ''
   );
 }
-const sourceOwnsBoardField = (board: Board, ticket: Ticket) =>
-  board.grouping.mode === 'field' &&
-  (board.grouping.field === 'status' || board.grouping.field === 'priority') &&
-  ticket.externalLinks?.some((link) => link.fieldOwnership?.[board.grouping.field as 'status' | 'priority'] === 'external');
+const sourceOwnsBoardField = (board: Board, ticket: Ticket, state: RuntimeState) => {
+  if (board.grouping.mode !== 'field') return false;
+  if (board.grouping.field === 'status') {
+    const writable = writableTicketStatuses(ticket, state.ticketConnections ?? []);
+    return writable !== null && !board.columns.some(column => writable.includes(String(column.value ?? column.name)));
+  }
+  return board.grouping.field === 'priority' && ticket.externalLinks?.some(link => link.fieldOwnership?.priority === 'external');
+};
 
 export function BoardStudio({
   state,
@@ -85,6 +91,7 @@ export function BoardStudio({
   onManageIntegrations,
   onOpenWorkflow,
   runtimeError,
+  runtimeAvailable = true,
 }: Props) {
   const boards = useMemo(
     () => boardData(state).filter((value) => value.projectIds.includes(projectId)),
@@ -175,6 +182,7 @@ export function BoardStudio({
     patch({ columns });
   }
   async function save(asTemplate = false) {
+    if (!runtimeAvailable) return;
     setSaving(true);
     setMessage('');
     try {
@@ -193,6 +201,7 @@ export function BoardStudio({
     }
   }
   async function deleteBoard() {
+    if (!runtimeAvailable) return;
     setSaving(true);
     try {
       await command('deleteBoard', { id: board.id, revision: board.revision });
@@ -204,7 +213,7 @@ export function BoardStudio({
     }
   }
   async function deleteTemplate() {
-    if (!templateId) return;
+    if (!templateId || !runtimeAvailable) return;
     const template = templates.find((value) => value.id === templateId);
     if (!template) {
       setMessage('Template was not found.');
@@ -222,6 +231,7 @@ export function BoardStudio({
     }
   }
   async function move(ticket: Ticket, columnId: string) {
+    if (!runtimeAvailable) return;
     setMessage('');
     try {
       await command('setBoardPlacement', {
@@ -356,7 +366,8 @@ export function BoardStudio({
             onChange={(e) => setQuery(e.target.value)}
           />
           {syncSource && syncBinding && (
-            <button className="secondary" disabled={saving} onClick={async () => {
+            <button className="secondary" disabled={saving || !runtimeAvailable} onClick={async () => {
+              if (!runtimeAvailable) return;
               setSaving(true);
               try {
                 const response = await command('syncTicketImportBinding', { id: syncBinding.id, limit: 100 });
@@ -787,19 +798,19 @@ export function BoardStudio({
             <span />
             <button
               className="secondary"
-              disabled={saving || !templateId}
+              disabled={saving || !runtimeAvailable || !templateId}
               onClick={() => {
                 if (window.confirm('Delete this board template?')) void deleteTemplate();
               }}
             >
               Delete template
             </button>
-            <button className="secondary" disabled={saving} onClick={() => void save(true)}>
+            <button className="secondary" disabled={saving || !runtimeAvailable} onClick={() => void save(true)}>
               Save as template
             </button>
             <button
               className="secondary"
-              disabled={saving || draft.id !== board.id}
+              disabled={saving || !runtimeAvailable || draft.id !== board.id}
               onClick={() => {
                 if (window.confirm('Delete this board?')) void deleteBoard();
               }}
@@ -808,7 +819,7 @@ export function BoardStudio({
             </button>
             <button
               className="primary"
-              disabled={saving || !draft.name.trim()}
+              disabled={saving || !runtimeAvailable || !draft.name.trim()}
               onClick={() => void save()}
             >
               {saving ? 'Saving…' : 'Save board'}
@@ -828,8 +839,8 @@ export function BoardStudio({
               {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
               <Select
                 aria-label={`Move CVY-${t.id}`}
-                disabled={Boolean(sourceOwnsBoardField(board, t))}
-                title={sourceOwnsBoardField(board, t) ? 'Change this status in the external source, then sync.' : undefined}
+                disabled={!runtimeAvailable || Boolean(sourceOwnsBoardField(board, t, state))}
+                title={!runtimeAvailable ? 'Reconnect to refresh before moving tickets.' : sourceOwnsBoardField(board, t, state) ? 'This external field does not support writes from Convoy.' : undefined}
                 value={columnFor(board, t)}
                 onChange={(e) => void move(t, e.target.value)}
               >
@@ -867,7 +878,7 @@ export function BoardStudio({
                       onDrop={(e) => {
                         const id = Number(e.dataTransfer.getData('text/plain'));
                         const t = tickets.find((x) => x.id === id);
-                        if (t) void move(t, column.id);
+                        if (runtimeAvailable && t) void move(t, column.id);
                       }}
                     >
                       <header>
@@ -886,7 +897,7 @@ export function BoardStudio({
                           {cards.length}
                           {column.wipLimit ? ` / ${column.wipLimit}` : ''}
                         </span>
-                        {(!board.filters.origins?.length || board.filters.origins.includes('convoy')) && !board.filters.importBindingIds?.length &&
+                        {runtimeAvailable && (!board.filters.origins?.length || board.filters.origins.includes('convoy')) && !board.filters.importBindingIds?.length &&
                           <button
                             aria-label={`Add ticket to ${column.name}`}
                             onClick={() => onNewTicket(board.id, column.id)}
@@ -898,7 +909,7 @@ export function BoardStudio({
                         {cards.map((t) => (
                           <article
                             className="custom-card"
-                            draggable={!sourceOwnsBoardField(board, t)}
+                            draggable={runtimeAvailable && !sourceOwnsBoardField(board, t, state)}
                             key={t.id}
                             onDragStart={(e) => e.dataTransfer.setData('text/plain', String(t.id))}
                           >

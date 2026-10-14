@@ -1,4 +1,11 @@
-import type { Session, WorkflowActivityDescriptor, WorkflowEdge, WorkflowStep } from '../../shared/api/runtime';
+import type {
+  Session,
+  WorkflowActivityDescriptor,
+  WorkflowEdge,
+  WorkflowStep,
+  WorkflowSubmission,
+  WorkflowSubmissionArtifact,
+} from '../../shared/api/runtime';
 
 export type WorkflowApprovalControlState = {
   gateKey: string;
@@ -72,6 +79,45 @@ export function workflowStatusLabel(status: string) {
     statusLabels[status] ??
     status.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase())
   );
+}
+
+/** Required input and recovery state take precedence over execution progress. */
+export function workflowAttentionLabel(session: Session) {
+  if (session.pendingQuestion) return 'Answer required';
+  if (session.pending) return 'Permission required';
+  if (workflowNeedsRecovery(session)) return 'Recovery required';
+  if (session.flow?.status === 'waiting_gate') return 'Decision required';
+  return undefined;
+}
+
+export function workflowArtifactCollection(submission?: WorkflowSubmission) {
+  const artifacts =
+    submission?.artifacts.filter(
+      (item): item is WorkflowSubmissionArtifact => typeof item !== 'string',
+    ) ?? [];
+  return { artifacts, count: artifacts.length };
+}
+
+export function workflowFeedbackContextKey(
+  sessionId: string,
+  flow: Pick<NonNullable<Session['flow']>, 'id' | 'nodeId' | 'instance'> | undefined,
+  contextKey?: string,
+) {
+  return JSON.stringify([sessionId, flow?.id, flow?.nodeId, flow?.instance, contextKey ?? '']);
+}
+
+export async function submitWorkflowFeedback(
+  contextKey: string,
+  currentContextKey: () => string,
+  submit: () => void | boolean | Promise<void | boolean>,
+): Promise<'submitted' | 'failed' | 'stale'> {
+  try {
+    const result = await submit();
+    if (currentContextKey() !== contextKey) return 'stale';
+    return result === false ? 'failed' : 'submitted';
+  } catch {
+    return currentContextKey() === contextKey ? 'failed' : 'stale';
+  }
 }
 
 export function workflowActivityHistory(session: Session) {

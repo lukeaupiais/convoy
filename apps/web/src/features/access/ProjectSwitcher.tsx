@@ -9,12 +9,14 @@ export function ProjectSwitcher({
   selectContext,
   createProject,
   manageProject,
+  runtimeAvailable = true,
 }: {
   state: RuntimeState;
   projectId?: string;
   selectContext: (context: ContextRef) => void;
   createProject: () => void;
   manageProject: () => void;
+  runtimeAvailable?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -81,6 +83,7 @@ export function ProjectSwitcher({
               <button
                 key={`${context.organizationId}:${choice.id}`}
                 type="button"
+                disabled={!runtimeAvailable}
                 onClick={() => {
                   selectContext({
                     organizationId: context.organizationId,
