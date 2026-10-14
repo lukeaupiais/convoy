@@ -8,6 +8,31 @@ All long-running operations need explicit cancellation, bounded output, terminal
 state, and disconnect semantics. A lost transport after mutation is not success.
 Tests live in `tests/runner`.
 
+## Local code intelligence
+
+The optional `deepthought` extension adapter uses the separately provisioned
+DeepThought SDK 0.2.0a1 on Linux. It does not install packages, execute indexers,
+call models, or start a service. Configure `CONVOY_DEEPTHOUGHT_PYTHON` with an
+absolute virtualenv Python path on each runner host, outside assigned workspaces.
+Local and SSH workers use the same adapter and protocol; remote workers need
+their own installation and environment configuration. Bubblewrap namespaces must
+work before the adapter is advertised.
+
+Publish the exported `deepThoughtExtensionManifest` through the Library's reviewed
+`publishExtension` command, then pin its exact revision and hash in a capability
+profile. Configuration alone does not grant a session the tool. The
+`code_intelligence` tool accepts `definitions`, `references`, or `dependencies`.
+References and dependencies require an existing working-directory-relative SCIP
+`index`; references require an exact `symbol`, and dependencies require a `file`.
+Without an index, only Python/TypeScript/TSX syntax definitions are available.
+
+Queries run with the selected working directory mounted read-only, private
+scratch space, no network and no inherited credentials or repository Python
+configuration. Source and index reads, process time and output are bounded.
+Results retain snapshot identity, capabilities, diagnostics, coverage and explicit
+resolution states; dependency edges describe references, not calls. Match limits
+and truncated candidate/witness lists are reported explicitly.
+
 Foreground and supervised shell commands accept up to 32,000 characters, so
 ordinary multiline scripts and evidence writes fit in one operation. Oversized
 commands report the measured length, limit and recovery. Execution grants,

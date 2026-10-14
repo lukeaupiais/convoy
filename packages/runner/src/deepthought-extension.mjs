@@ -1,0 +1,333 @@
+import { spawn } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
+import { realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { isAbsolute, relative } from 'node:path';
+
+export const deepThoughtExtensionManifest = {
+  id: 'deepthought',
+  kind: 'executor',
+  revision: 'sdk-0.2.0a1-adapter-1',
+  execution: { location: 'runner', adapter: 'deepthought' },
+  tools: [
+    {
+      id: 'query',
+      name: 'code_intelligence',
+      description:
+        'Read local definitions, SCIP references or witnessed file dependencies. References are not proven calls. Indexes must already exist in the assigned working directory.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['operation'],
+        properties: {
+          operation: { type: 'string', enum: ['definitions', 'references', 'dependencies'] },
+          symbol: { type: 'string', minLength: 1, maxLength: 500 },
+          file: { type: 'string', minLength: 1, maxLength: 500 },
+          index: { type: 'string', minLength: 1, maxLength: 500 },
+          limit: { type: 'integer', minimum: 1, maximum: 100 },
+        },
+      },
+      approval: 'none',
+    },
+  ],
+};
+const expectedHash = createHash('sha256')
+  .update(JSON.stringify(deepThoughtExtensionManifest))
+  .digest('hex');
+const within = (root, path) => {
+  const rel = relative(root, path);
+  return !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../');
+};
+const canonical = (value) =>
+  typeof value === 'string' &&
+  value.length <= 500 &&
+  value.length > 0 &&
+  !isAbsolute(value) &&
+  !/[\\\x00-\x1f:]/.test(value) &&
+  value.split('/').every((part) => part && part !== '.' && part !== '..');
+const environment = { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' };
+function sandboxArgs(prefixes, root) {
+  const argv = [
+    '--unshare-net',
+    '--die-with-parent',
+    '--new-session',
+    '--ro-bind',
+    '/usr',
+    '/usr',
+    '--symlink',
+    'usr/lib',
+    '/lib',
+    '--symlink',
+    'usr/lib64',
+    '/lib64',
+    '--symlink',
+    'usr/bin',
+    '/bin',
+    '--proc',
+    '/proc',
+    '--dev',
+    '/dev',
+    '--tmpfs',
+    '/tmp',
+  ];
+  for (const prefix of new Set(prefixes))
+    if (prefix !== '/usr') argv.push('--ro-bind', prefix, prefix);
+  argv.push(...(root ? ['--ro-bind', root, '/work'] : ['--dir', '/work']));
+  return [
+    ...argv,
+    '--chdir',
+    '/work',
+    '--clearenv',
+    '--setenv',
+    'PATH',
+    environment.PATH,
+    '--setenv',
+    'LANG',
+    environment.LANG,
+  ];
+}
+const bridge = String.raw`
+import json, sys, os, stat, tempfile
+from collections import Counter
+from dataclasses import asdict
+from pathlib import Path
+from deepthought import analyze_repository, ingest_scip, compose_graph
+from deepthought import __version__
+if __version__!='0.2.0a1':
+    raise ValueError('Installed SDK no longer matches the pinned adapter')
+a=json.load(sys.stdin)
+root=Path('/work')
+if 'index' in a:
+    directory=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+    try:
+        parts=a['index'].split('/')
+        for part in parts[:-1]:
+            next_directory=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory)
+            os.close(directory)
+            directory=next_directory
+        fd=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+        with os.fdopen(fd,'rb') as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValueError('Index must be a regular file')
+            content=handle.read(10000001)
+        if len(content)>10000000:
+            raise ValueError('Index byte budget exceeded')
+        with tempfile.NamedTemporaryFile(dir='/tmp') as captured:
+            captured.write(content)
+            captured.flush()
+            source=ingest_scip(captured.name,repository_id='workspace',max_index_bytes=10000000)
+    finally:
+        os.close(directory)
+else:
+    source=analyze_repository(root, repository_id='workspace', max_files=200, max_file_bytes=1000000, max_total_bytes=10000000)
+out={'status':source.status, 'analysis_status':source.status, 'snapshot_id':source.snapshot_id, 'capabilities':source.capabilities, 'coverage':dict(Counter(c.status for c in source.coverage)), 'diagnostic_count':len(source.diagnostics), 'diagnostics':[asdict(d) for d in source.diagnostics[:10]]}
+operation=a['operation']
+if operation=='definitions':
+    rows=[asdict(d) for d in source.definitions if 'symbol' not in a or a['symbol'] in (d.symbol,d.native_id)]
+elif 'references' not in source.capabilities:
+    rows=[]
+    out['status']='unavailable'
+    out['reason']='References require a supplied SCIP index; no indexer is executed.'
+else:
+    graph=compose_graph([source])
+    out['graph_status']=graph.status
+    out['status']=graph.status
+    out['graph_snapshot_id']=graph.snapshot_id
+    out['resolution_counts']=graph.resolution_counts
+    if operation=='references':
+        targets=graph.lookup_definitions(a['symbol'])
+        ids={node.id for node in targets}
+        rows=[]
+        for ref in graph.references:
+            if ids.intersection(ref.target_ids) or (not ids and ref.reference.native_id==a['symbol']):
+                row=asdict(ref)
+                row['target_count']=len(ref.target_ids)
+                row['target_ids']=ref.target_ids[:20]
+                row['targets_truncated']=len(ref.target_ids)>20
+                rows.append(row)
+    else:
+        rows=[]
+        for edge in graph.dependencies('workspace',a['file']):
+            row=asdict(edge)
+            row['witness_count']=len(edge.witness_ids)
+            row['witness_ids']=edge.witness_ids[:20]
+            row['witnesses_truncated']=len(edge.witness_ids)>20
+            rows.append(row)
+out.update(total_matches=len(rows),truncated=len(rows)>a.get('limit',20),matches=rows[:a.get('limit',20)])
+print(json.dumps(out,separators=(',',':'),allow_nan=False))
+`;
+
+function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } = {}) {
+  if (signal?.aborted) return Promise.reject(new Error('DeepThought query cancelled.'));
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, argv, {
+      cwd: '/',
+      env: environment,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    let size = 0,
+      error,
+      stderrBytes = 0,
+      force;
+    const stop = (message) => {
+      if (error) return;
+      error = new Error(message);
+      child.kill('SIGTERM');
+      force = setTimeout(() => child.kill('SIGKILL'), 250);
+    };
+    const abort = () => stop('DeepThought query cancelled.');
+    const timer = setTimeout(() => stop('DeepThought query timed out.'), timeoutMs);
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    child.stdout.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxOutputBytes)
+        stop('DeepThought output limit exceeded; narrow the query or limit.');
+      else stdout.push(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 4000) stop('DeepThought error output limit exceeded.');
+    });
+    child.stdin.on('error', () => {});
+    child.once('error', (cause) => {
+      error ??= cause;
+    });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      clearTimeout(force);
+      signal?.removeEventListener('abort', abort);
+      if (error) return reject(error);
+      if (code !== 0)
+        return reject(
+          new Error(
+            'DeepThought process failed; verify its separately provisioned SDK and isolated runtime.',
+          ),
+        );
+      resolve(Buffer.concat(stdout).toString('utf8'));
+    });
+    child.stdin.end(input);
+  });
+}
+
+export async function createDeepThoughtAdapter({
+  python,
+  timeoutMs = 30000,
+  maxOutputBytes = 32000,
+  signal,
+} = {}) {
+  if (process.platform !== 'linux' || typeof python !== 'string' || !isAbsolute(python))
+    throw new Error('DeepThought requires a provisioned absolute Python path on Linux.');
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 120000 ||
+    !Number.isInteger(maxOutputBytes) ||
+    maxOutputBytes < 1 ||
+    maxOutputBytes > 32000
+  )
+    throw new Error('Invalid DeepThought process limits.');
+  accessSync('/usr/bin/bwrap', constants.X_OK);
+  const probe = await runProcess(
+    python,
+    [
+      '-I',
+      '-B',
+      '-c',
+      "import json,sys; from importlib.metadata import version; import deepthought; print(json.dumps({'version':version('deepthought-analysis-engine'),'prefixes':[sys.prefix,sys.base_prefix]}))",
+    ],
+    { signal, timeoutMs: 5000, maxOutputBytes: 16000 },
+  );
+  const metadata = JSON.parse(probe);
+  if (
+    metadata.version !== '0.2.0a1' ||
+    !Array.isArray(metadata.prefixes) ||
+    metadata.prefixes.some((p) => typeof p !== 'string' || !isAbsolute(p) || p === '/')
+  )
+    throw new Error('DeepThought adapter requires SDK 0.2.0a1 and bounded runtime prefixes.');
+  await runProcess(
+    '/usr/bin/bwrap',
+    [
+      ...sandboxArgs(metadata.prefixes),
+      '--',
+      python,
+      '-I',
+      '-B',
+      '-c',
+      "import deepthought,socket,errno; s=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',9))\nexcept OSError as e: assert e.errno in (errno.ENETUNREACH,errno.EHOSTUNREACH)\nelse: raise RuntimeError('Network isolation unavailable')\nassert deepthought.__version__=='0.2.0a1'",
+    ],
+    { signal, timeoutMs: 5000, maxOutputBytes: 4000 },
+  );
+  return async ({ extension, tool, args, workingDirectory, signal }) => {
+    if (
+      extension?.id !== 'deepthought' ||
+      extension.revision !== deepThoughtExtensionManifest.revision ||
+      extension.hash !== expectedHash ||
+      tool !== 'extension.deepthought.query'
+    )
+      throw new Error(
+        'DeepThought extension revision or tool does not match the installed adapter.',
+      );
+    if (
+      !args ||
+      Array.isArray(args) ||
+      Object.keys(args).some(
+        (k) => !['operation', 'symbol', 'index', 'file', 'limit'].includes(k),
+      ) ||
+      !['definitions', 'references', 'dependencies'].includes(args.operation)
+    )
+      throw new Error('Invalid DeepThought query.');
+    if (
+      args.symbol !== undefined &&
+      (typeof args.symbol !== 'string' || !args.symbol.length || args.symbol.length > 500)
+    )
+      throw new Error('Invalid DeepThought symbol.');
+    for (const key of ['index', 'file'])
+      if (args[key] !== undefined && !canonical(args[key]))
+        throw new Error('DeepThought paths must be canonical working-directory-relative paths.');
+    if (
+      (args.operation === 'references' && !args.symbol) ||
+      (args.operation === 'dependencies' && !args.file)
+    )
+      throw new Error('Reference queries require a symbol; dependencies require a file.');
+    if (
+      args.limit !== undefined &&
+      (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 100)
+    )
+      throw new Error('DeepThought limit must be 1-100.');
+    if (signal?.aborted) throw new Error('DeepThought query cancelled.');
+    const root = await realpath(workingDirectory);
+    if (metadata.prefixes.some((prefix) => within(root, prefix)))
+      throw new Error(
+        'DeepThought runtime must be provisioned outside the assigned working directory.',
+      );
+    const argv = [...sandboxArgs(metadata.prefixes, root), '--', python, '-I', '-B', '-c', bridge];
+    const output = await runProcess('/usr/bin/bwrap', argv, {
+      signal,
+      timeoutMs,
+      maxOutputBytes,
+      input: JSON.stringify(args),
+    });
+    try {
+      return JSON.parse(output);
+    } catch {
+      throw new Error('DeepThought returned invalid JSON.');
+    }
+  };
+}
+
+const installed = new Map();
+export async function installedDeepThoughtAdapters(signal) {
+  if (signal?.aborted) throw new Error('DeepThought query cancelled.');
+  const python = process.env.CONVOY_DEEPTHOUGHT_PYTHON;
+  if (!python) return {};
+  try {
+    if (!installed.has(python))
+      installed.set(python, await createDeepThoughtAdapter({ python, signal }));
+    return { deepthought: installed.get(python) };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return {}; // A missing/incompatible installation is not advertised.
+  }
+}

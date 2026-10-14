@@ -3,6 +3,7 @@ import { runInspectionProbe } from './inspection-probe.mjs';
 import { tmpdir, userInfo } from 'node:os';
 import { bindInspection, assertInspectionBinding } from './execution-binding.mjs';
 import { readWorkspaceGuidance, seedWorkspaceGuidance } from './workspace-guidance.mjs';
+import { installedDeepThoughtAdapters } from './deepthought-extension.mjs';
 // This exact module runs locally or over SSH. No provider credentials are sent to runners.
 import { validateExecutionDescriptor } from './execution-descriptor.mjs';
 import { openInspectionFilter } from './inspection-filter.mjs';
@@ -345,7 +346,7 @@ const runnerContracts = {
   },
   extension: {
     required: ['workspace', 'extension', 'adapter', 'tool', 'args'],
-    optional: ['operationId', 'workingDirectory'],
+    optional: ['operationId', 'workingDirectory', 'accessMode', 'execution', 'executionProfile'],
   },
   command_start: {
     required: ['workspace', 'command', 'launchId'],
@@ -973,7 +974,7 @@ export async function executeRunner(
   signal,
   supervisor,
   terminals,
-  extensionAdapters = {},
+  extensionAdapters,
 ) {
   validateRunnerRequest(request);
   validateExecutionDescriptor(request);
@@ -981,6 +982,7 @@ export async function executeRunner(
     return bindInspection(request.workspace, request.binding);
   await assertInspectionBinding(request);
   const { action } = request;
+  extensionAdapters ??= ['probe', 'extension'].includes(action) ? await installedDeepThoughtAdapters(signal) : {};
   if (action === 'probe') {
     const accessMode = executionAccess(request.accessMode);
     const root = await realpath(request.repository);

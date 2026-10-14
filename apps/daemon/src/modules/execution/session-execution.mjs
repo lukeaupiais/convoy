@@ -286,6 +286,9 @@ export function createSessionExecution({
               adapter: extension.extension.adapter,
               tool: extension.id,
               args,
+              accessMode: access.accessMode,
+              execution: access.execution,
+              executionProfile: access.grant.profileId,
             }
           : {
               action: 'tool',

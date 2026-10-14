@@ -1,4 +1,5 @@
 export { runAgentLoop } from './agent-loop.mjs';
+export { createDeepThoughtAdapter, deepThoughtExtensionManifest } from './deepthought-extension.mjs';
 export { driveCommand } from './command-driver.mjs';
 export { CommandSupervisor } from './command-supervisor.mjs';
 export { digest, executeRunner, processRun, validateRunnerRequest } from './runner-agent.mjs';
