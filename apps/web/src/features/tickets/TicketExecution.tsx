@@ -95,15 +95,15 @@ export function TicketExecution({
       (!s.activeTicketId || s.activeTicketId === ticket.id),
   );
   useEffect(() => {
-    if (!session || !owns(session)) return;
+    if (!session || !owns(session) || !runtimeAvailable) return;
     const timer = setInterval(
       () => void command('heartbeat', { sessionId: session.id }).catch(() => {}),
       25000,
     );
     return () => clearInterval(timer);
-  }, [session?.id, session?.lease?.client]);
+  }, [session?.id, session?.lease?.client, runtimeAvailable]);
   async function act(action: RuntimeAction, input: object = {}) {
-    if (!session || working) return;
+    if (!session || working || !runtimeAvailable) return;
     setWorking(true);
     setError('');
     try {
@@ -117,7 +117,7 @@ export function TicketExecution({
     }
   }
   async function launch() {
-    if (working) return;
+    if (working || !runtimeAvailable) return;
     const chosen = versions.find((w) => `${w.id}@${w.version}` === workflow);
     if (!chosen) {
       setError('Choose a published workflow.');
@@ -175,7 +175,7 @@ export function TicketExecution({
                   session.status,
                 ) && (
                   <button
-                    disabled={working || busy}
+                    disabled={working || busy || !runtimeAvailable}
                     onClick={() =>
                       void act('resetVerificationRuntime', {
                         runtimeId: session.verificationRuntime!.id,
@@ -189,7 +189,7 @@ export function TicketExecution({
               )}
             </details>
           )}
-          <details className="execution-evidence" open={focusRecovery}>
+          <details className="execution-evidence" open={focusRecovery || !runtimeAvailable}>
             <summary>Execution details</summary>
             <WorkflowRunDetails
               session={session}
@@ -214,19 +214,15 @@ export function TicketExecution({
                 : (session.queueReason ?? 'No worktree provisioned')}
               {session.assignment && ` · ${session.assignment.state}`}
             </p>
-            {runtimeAvailable ? (
-              <SessionControls
-                session={session}
-                state={state}
-                showWorkflowInteraction={false}
-                runtimeAvailable={runtimeAvailable}
-                openRecovery={focusRecovery}
-                onOpenTicketMessages={onOpenTicketMessages}
-                onOpenWorkflowRun={onOpenWorkflowRun}
-              />
-            ) : (
-              <p role="status">Reconnect to refresh before changing this session.</p>
-            )}
+            <SessionControls
+              session={session}
+              state={state}
+              showWorkflowInteraction={false}
+              runtimeAvailable={runtimeAvailable}
+              openRecovery={focusRecovery}
+              onOpenTicketMessages={onOpenTicketMessages}
+              onOpenWorkflowRun={onOpenWorkflowRun}
+            />
           </details>
         </>
       )}
@@ -241,7 +237,7 @@ export function TicketExecution({
                 value={profile}
                 emptyLabel="Workflow / session / project default"
                 onChange={setProfile}
-                disabled={working || pendingRequest}
+                disabled={working || pendingRequest || !runtimeAvailable}
               />
             </label>
             <label>
@@ -249,7 +245,7 @@ export function TicketExecution({
               <Select
                 aria-label="Run workflow"
                 value={workflow}
-                disabled={working || pendingRequest}
+                disabled={working || pendingRequest || !runtimeAvailable}
                 onChange={(e) => setWorkflow(e.target.value)}
               >
                 <option value="" disabled>
@@ -267,7 +263,7 @@ export function TicketExecution({
               <Select
                 aria-label="Execution session"
                 value={target}
-                disabled={working || pendingRequest}
+                disabled={working || pendingRequest || !runtimeAvailable}
                 onChange={(e) => {
                   setTarget(e.target.value);
                   setEnvironment('inherit');
@@ -286,7 +282,7 @@ export function TicketExecution({
               <Select
                 aria-label="Execution environment"
                 value={fixed ? 'inherit' : environment}
-                disabled={fixed || working || pendingRequest}
+                disabled={fixed || working || pendingRequest || !runtimeAvailable}
                 onChange={(e) => setEnvironment(e.target.value)}
               >
                 <option value="inherit">
@@ -314,7 +310,7 @@ export function TicketExecution({
               <Select
                 aria-label="Execution model"
                 value={model}
-                disabled={working || pendingRequest}
+                disabled={working || pendingRequest || !runtimeAvailable}
                 onChange={(e) => setModel(e.target.value)}
               >
                 {state.models.map((m) => (
@@ -376,6 +372,7 @@ export function TicketExecution({
           {pendingRequest && !working && (
             <button
               className="secondary"
+              disabled={!runtimeAvailable}
               onClick={() => {
                 request.current = '';
                 setPendingRequest(false);

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FormEvent } from 'react';
 import type {
   Session,
   WorkflowActivityReservation,
@@ -15,12 +16,16 @@ import { WorkflowRunComposition, WorkflowRunResultPanel } from './WorkflowRunCom
 import { artifactMarkdownBlocks } from './artifact-markdown';
 import {
   workflowActivityHistory,
+  workflowArtifactCollection,
+  workflowAttentionLabel,
   approvalControlInvalidated,
   workflowDecisionLabel,
   workflowDecisionCapabilities,
   workflowNeedsRecovery,
   workflowRunOutput,
   workflowStatusLabel,
+  workflowFeedbackContextKey,
+  submitWorkflowFeedback,
 } from './workflow-interaction';
 import './workflow-run-interaction.css';
 
@@ -32,7 +37,7 @@ export type WorkflowInteractionActions = {
   canShowPreparedActivityApproval?: boolean;
   approvalControlKey?: string;
   approvalContextKey?: string;
-  requestChanges?: (feedback: string) => void;
+  requestChanges?: (feedback: string) => void | boolean | Promise<void | boolean>;
   continueRun?: () => void;
   pause?: () => void | Promise<void>;
   cancel?: () => void | Promise<void> | boolean;
@@ -216,7 +221,7 @@ function submissionIdentity(submission: WorkflowSubmission) {
   return `${submission.nodeId ?? ''}:${submission.instance ?? ''}:${submission.revision ?? ''}`;
 }
 
-function ArtifactViewer({
+function SubmissionCollections({
   sessionId,
   submission,
   label,
@@ -230,8 +235,10 @@ function ArtifactViewer({
   const [inspectedSubmission, setInspectedSubmission] = useState<WorkflowSubmission>();
   const [inspectedSessionId, setInspectedSessionId] = useState('');
   const [selectedId, setSelectedId] = useState('');
+  const [referenceIndex, setReferenceIndex] = useState<number | null>(null);
   const opener = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const returnScroll = useRef({ left: 0, top: 0 });
   const sourceSessionId = inspectedSessionId || sessionId;
   const sessionIdentity = useRef(sessionId);
   const inspectedArtifacts = useMemo(
@@ -242,10 +249,7 @@ function ArtifactViewer({
     [inspectedSubmission],
   );
   const currentArtifacts = useMemo(
-    () =>
-      submission?.artifacts.filter(
-        (item): item is WorkflowSubmissionArtifact => typeof item !== 'string',
-      ) ?? [],
+    () => workflowArtifactCollection(submission).artifacts,
     [submission],
   );
   const inspectedPrimary =
@@ -253,7 +257,14 @@ function ArtifactViewer({
   const currentPrimary =
     currentArtifacts.find((item) => item.id === primaryArtifactId) ?? currentArtifacts[0];
   const rowArtifacts = currentArtifacts.length ? currentArtifacts : inspectedArtifacts;
-  const selected = inspectedArtifacts.find((item) => item.id === selectedId) ?? inspectedPrimary;
+  const inspectedReferences = inspectedSubmission?.references ?? [];
+  const currentReferences = submission?.references ?? [];
+  const rowReferences = currentReferences.length ? currentReferences : inspectedReferences;
+  const selectedReference = referenceIndex === null ? undefined : inspectedReferences[referenceIndex];
+  const selected =
+    referenceIndex === null
+      ? inspectedArtifacts.find((item) => item.id === selectedId) ?? inspectedPrimary
+      : undefined;
   const stale =
     !!inspectedSubmission &&
     (!submission || submissionIdentity(inspectedSubmission) !== submissionIdentity(submission));
@@ -298,6 +309,11 @@ function ArtifactViewer({
     if (dialog && !dialog.open) dialog.showModal();
   }, [inspectedSubmission]);
   useEffect(() => {
+    dialogRef.current
+      ?.querySelector<HTMLElement>('nav [aria-current="true"]')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [inspectedSubmission, selected?.id, referenceIndex]);
+  useEffect(() => {
     setError('');
     setDownloadError('');
     if (!selected || !supportedText) {
@@ -335,7 +351,7 @@ function ArtifactViewer({
     supportedText,
     inspectedSubmission && submissionIdentity(inspectedSubmission),
   ]);
-  if (!currentArtifacts.length && !inspectedArtifacts.length) return null;
+  if (!currentArtifacts.length && !inspectedArtifacts.length && !rowReferences.length) return null;
   let rendered = content;
   if (json && content) {
     try {
@@ -346,26 +362,48 @@ function ArtifactViewer({
   }
   return (
     <>
-      <div className="workflow-files-row" aria-label="Captured files">
-        <span>
-          {label ? `${label} · ` : ''}
-          {rowArtifacts.length} {rowArtifacts.length === 1 ? 'file' : 'files'}
-          {rowArtifacts.length > 0 && ` · ${rowArtifacts.map((item) => item.name).join(', ')}`}
-        </span>
+      {rowArtifacts.length > 0 && (
+        <div className="workflow-files-row" aria-label="Captured output collection">
+          <span className="workflow-files-label">
+            {label ?? 'Captured files'} · {rowArtifacts.length}{' '}
+            {rowArtifacts.length === 1 ? 'item' : 'items'}
+          </span>
+          <button
+            type="button"
+            className="workflow-inspector-open secondary"
+            ref={opener}
+            aria-label={`Open ${label ?? 'captured files'} collection, ${rowArtifacts.length} ${rowArtifacts.length === 1 ? 'item' : 'items'}`}
+            onClick={(event) => {
+              opener.current = event.currentTarget;
+              returnScroll.current = { left: window.scrollX, top: window.scrollY };
+              setReferenceIndex(null);
+              setSelectedId((currentPrimary ?? inspectedPrimary)?.id ?? '');
+              setInspectedSessionId(sessionId);
+              setInspectedSubmission(
+                currentArtifacts.length > 0 ? submission : (inspectedSubmission ?? submission),
+              );
+            }}
+          >
+            Open collection
+          </button>
+        </div>
+      )}
+      {rowReferences.length > 0 && (
         <button
           type="button"
-          className="workflow-inspector-open secondary"
-          ref={opener}
-          aria-label={`Open captured files: ${rowArtifacts.map((item) => item.name).join(', ')}`}
-          onClick={() => {
-            setSelectedId((inspectedPrimary ?? currentPrimary)?.id ?? '');
+          className="workflow-reference-open workflow-inspector-open secondary"
+          aria-label={`Open references, ${rowReferences.length} ${rowReferences.length === 1 ? 'reference' : 'references'}`}
+          onClick={(event) => {
+            opener.current = event.currentTarget;
+            returnScroll.current = { left: window.scrollX, top: window.scrollY };
+            setReferenceIndex(0);
             setInspectedSessionId(sessionId);
-            setInspectedSubmission(submission);
+            setInspectedSubmission(currentReferences.length > 0 ? submission : inspectedSubmission);
           }}
         >
-          Inspect
+          References · {rowReferences.length}
         </button>
-      </div>
+      )}
       {inspectedSubmission && (
         <dialog
           ref={dialogRef}
@@ -373,13 +411,21 @@ function ArtifactViewer({
           aria-labelledby="workflow-inspector-title"
           onClose={() => {
             setInspectedSubmission(undefined);
-            requestAnimationFrame(() => opener.current?.focus());
+            requestAnimationFrame(() => {
+              opener.current?.focus({ preventScroll: true });
+              window.scrollTo({ ...returnScroll.current, behavior: 'instant' });
+            });
           }}
         >
           <header>
             <div>
-              <small>Captured output · revision {inspectedSubmission.revision ?? 'unknown'}</small>
-              <h2 id="workflow-inspector-title">{label ?? 'Captured materials'}</h2>
+              <small>
+                {inspectedSubmission.step ?? 'Captured output'} · revision{' '}
+                {inspectedSubmission.revision ?? 'unknown'}
+              </small>
+              <h2 id="workflow-inspector-title">
+                {referenceIndex === null ? (label ?? 'Captured files') : 'References'}
+              </h2>
             </div>
             <button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>
               Close
@@ -389,10 +435,15 @@ function ArtifactViewer({
             <p className="workflow-inspector-stale" role="status">
               This captured revision has been superseded. You are still inspecting the reviewed
               content.
-              {currentArtifacts.length > 0 ? (
+              {currentArtifacts.length > 0 || currentReferences.length > 0 ? (
                 <button
                   type="button"
                   onClick={() => {
+                    setReferenceIndex(
+                      referenceIndex !== null && currentReferences.length > 0
+                        ? 0
+                        : currentArtifacts.length > 0 ? null : 0,
+                    );
                     setSelectedId(currentPrimary?.id ?? '');
                     setInspectedSessionId(sessionId);
                     if (submission) setInspectedSubmission(submission);
@@ -401,24 +452,60 @@ function ArtifactViewer({
                   Open current revision
                 </button>
               ) : (
-                <span>Current activity has no captured files.</span>
+                <span>Current activity has no captured files or references.</span>
               )}
             </p>
           )}
           <div className="workflow-inspector-content">
-            <nav aria-label="Captured files">
-              {inspectedArtifacts.map((item) => (
+            <nav aria-label="Captured output collections">
+              {referenceIndex === null && inspectedArtifacts.map((item) => (
                 <button
                   type="button"
                   key={item.id}
                   aria-current={item.id === selected?.id ? 'true' : undefined}
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() => {
+                    setReferenceIndex(null);
+                    setSelectedId(item.id);
+                  }}
                 >
                   {item.name}
                 </button>
               ))}
+              {referenceIndex !== null && inspectedReferences.map((ref, index) => (
+                <button
+                  type="button"
+                  key={`reference:${index}`}
+                  aria-current={referenceIndex === index ? 'true' : undefined}
+                  onClick={() => setReferenceIndex(index)}
+                >
+                  {ref.path}:{ref.startLine}–{ref.endLine}
+                </button>
+              ))}
             </nav>
-            <section aria-label="Selected captured file">
+            <section
+              aria-label={referenceIndex === null ? 'Selected captured file' : 'Selected reference'}
+            >
+              {selectedReference && (
+                <>
+                  <div className="workflow-material-meta">
+                    <span>
+                      {selectedReference.path}:{selectedReference.startLine}–{selectedReference.endLine}
+                    </span>
+                  </div>
+                  <div className="workflow-material-body">
+                    <pre>{selectedReference.text}</pre>
+                  </div>
+                  <details className="workflow-inspector-metadata">
+                    <summary>Reference details</summary>
+                    <dl>
+                      <div>
+                        <dt>SHA-256</dt>
+                        <dd>{selectedReference.sha256}</dd>
+                      </div>
+                    </dl>
+                  </details>
+                </>
+              )}
               {selected && (
                 <>
                   <div className="workflow-material-meta">
@@ -491,6 +578,7 @@ export function WorkflowRunInteraction({
   activityReservation,
   onRecovery,
   onOpenWorkflowRun,
+  actionError,
 }: {
   session: Session;
   working?: boolean;
@@ -498,12 +586,16 @@ export function WorkflowRunInteraction({
   activityReservation?: WorkflowActivityReservation;
   onRecovery?: () => void;
   onOpenWorkflowRun?: (runId: string) => void;
+  actionError?: string;
 }) {
   const flow = session.flow;
   const nodes = session.workflow?.nodes ?? session.workflow?.steps ?? [];
   const node = flow ? nodes.find((item) => item.id === flow.nodeId) : undefined;
   const { submission, bindings } = workflowRunOutput(session);
   const [feedback, setFeedback] = useState('');
+  const [feedbackDraftContext, setFeedbackDraftContext] = useState('');
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackError, setFeedbackError] = useState('');
   const [answer, setAnswer] = useState('');
   const [showFeedback, setShowFeedback] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -511,6 +603,7 @@ export function WorkflowRunInteraction({
   const [preparedReservationGate, setPreparedReservationGate] = useState('');
   const [preparedReservationContext, setPreparedReservationContext] = useState('');
   const [reservationError, setReservationError] = useState('');
+  const [reservationBusy, setReservationBusy] = useState(false);
   const [humanValues, setHumanValues] = useState<Record<string, unknown>>({});
   const [humanValuesContext, setHumanValuesContext] = useState('');
   const [humanRun, setHumanRun] = useState<WorkflowRun | null>(null);
@@ -544,6 +637,8 @@ export function WorkflowRunInteraction({
   const committedHumanDraftContext = useRef('');
   const humanTaskCanOperateRef = useRef(false);
   const humanTaskWasOperable = useRef(false);
+  const feedbackRequest = useRef(0);
+  const feedbackPending = useRef(false);
   const workflowRunLoader = useRef(actions.loadWorkflowRun);
   workflowRunLoader.current = actions.loadWorkflowRun;
   const details = submission?.details ?? {};
@@ -965,7 +1060,80 @@ export function WorkflowRunInteraction({
       setHumanTaskBusy(false);
     }
   }
-  const approvalGateKey = `${session.id}:${flow?.id ?? ''}:${flow?.nodeId ?? ''}:${flow?.instance ?? ''}`;
+  const approvalGateKey = JSON.stringify([
+    session.id,
+    flow?.id,
+    flow?.nodeId,
+    flow?.instance,
+    flow?.decisionSubmissionRef,
+    submission ? submissionIdentity(submission) : undefined,
+  ]);
+  const feedbackContextKey = workflowFeedbackContextKey(
+    session.id,
+    flow,
+    JSON.stringify([
+      actions.approvalContextKey,
+      flow?.decisionSubmissionRef,
+      submission ? submissionIdentity(submission) : undefined,
+    ]),
+  );
+  const feedbackContext = useRef(feedbackContextKey);
+  if (feedbackContext.current !== feedbackContextKey) {
+    feedbackContext.current = feedbackContextKey;
+    feedbackRequest.current += 1;
+    feedbackPending.current = false;
+  }
+  useEffect(() => {
+    setFeedback('');
+    setFeedbackDraftContext(feedbackContextKey);
+    setFeedbackError('');
+    setShowFeedback(false);
+    setFeedbackBusy(false);
+  }, [feedbackContextKey]);
+  const feedbackValue = feedbackDraftContext === feedbackContextKey ? feedback : '';
+  async function submitFeedback(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      working ||
+      flow?.status !== 'waiting_gate' ||
+      !canRevise ||
+      !actions.requestChanges ||
+      !feedbackValue.trim() ||
+      feedbackPending.current
+    )
+      return;
+    const request = ++feedbackRequest.current;
+    const contextKey = feedbackContextKey;
+    const value = feedbackValue;
+    feedbackPending.current = true;
+    setFeedbackBusy(true);
+    setFeedbackError('');
+    try {
+      const outcome = await submitWorkflowFeedback(
+        contextKey,
+        () => feedbackContext.current,
+        () => actions.requestChanges!(value),
+      );
+      if (outcome === 'failed') {
+        if (request === feedbackRequest.current && contextKey === feedbackContext.current)
+          setFeedbackError('Request could not be sent. Your draft is still here.');
+        return;
+      }
+      if (
+        outcome === 'submitted' &&
+        request === feedbackRequest.current &&
+        contextKey === feedbackContext.current
+      ) {
+        setFeedback('');
+        setShowFeedback(false);
+      }
+    } finally {
+      if (request === feedbackRequest.current && contextKey === feedbackContext.current) {
+        feedbackPending.current = false;
+        setFeedbackBusy(false);
+      }
+    }
+  }
   const canPrepareApproval = Boolean(
     actions.requiresActivityReservation &&
     actions.prepareActivityApproval &&
@@ -1004,6 +1172,7 @@ export function WorkflowRunInteraction({
       setPreparedReservationGate('');
       setPreparedReservationContext('');
       setReservationError('');
+      setReservationBusy(false);
     }
     approvalControlState.current = nextApprovalControlState;
   }, [
@@ -1022,10 +1191,11 @@ export function WorkflowRunInteraction({
         (canShowPreparedApproval && activityReservation?.preview ? activityReservation : undefined))
       : undefined;
   async function prepareActivityApproval() {
-    if (!actions.prepareActivityApproval) return;
+    if (working || !canPrepareApproval || !actions.prepareActivityApproval || reservationBusy) return;
     const request = ++reservationRequest.current;
     const gateKey = approvalGateKey;
     const contextKey = actions.approvalContextKey ?? '';
+    setReservationBusy(true);
     setReservationError('');
     try {
       const reservation = await actions.prepareActivityApproval();
@@ -1047,16 +1217,126 @@ export function WorkflowRunInteraction({
         currentCanPrepareApproval.current
       )
         setReservationError((error as Error).message);
+    } finally {
+      if (request === reservationRequest.current) setReservationBusy(false);
     }
   }
   if (!flow) return null;
+  const attentionLabel = workflowAttentionLabel(session);
+  const associatedWorkflowRunId = session.workflowRunId ?? flow.id;
   return (
     <section className="workflow-run-interaction" aria-label="Current activity">
       <header className="workflow-run-heading">
-        <h2>Current activity</h2>
-        <span role="status">{statusText}</span>
-        <strong>{node?.name ?? session.workflow?.name ?? 'Workflow activity'}</strong>
+        <div className="workflow-activity-title">
+          <small>Current activity</small>
+          <h2>{node?.name ?? session.workflow?.name ?? 'Workflow activity'}</h2>
+        </div>
+        <div className="workflow-state-labels">
+          <span role="status" className={attentionLabel ? 'is-attention' : ''}>
+            {attentionLabel ?? (session.status === 'queued' ? 'Queued' : statusText)}
+          </span>
+          {attentionLabel && statusText && statusText !== attentionLabel && (
+            <small aria-label={`Execution status: ${statusText}`}>{statusText}</small>
+          )}
+        </div>
       </header>
+      {onOpenWorkflowRun && associatedWorkflowRunId && (
+        <button
+          type="button"
+          className="workflow-run-link"
+          onClick={() => onOpenWorkflowRun(associatedWorkflowRunId)}
+        >
+          View workflow run
+        </button>
+      )}
+      {session.status === 'queued' && session.queueReason && (
+        <p className="workflow-queue-reason">{session.queueReason}</p>
+      )}
+      {(session.pendingQuestion || session.pending) && (
+        <section className="workflow-interaction-slot" aria-label="Required interaction">
+          {session.pendingQuestion && (
+            <section className="workflow-required-interaction">
+              <strong>Question</strong>
+              <p>{session.pendingQuestion.question}</p>
+              {actions.answerQuestion && (
+                <>
+                  <label>
+                    Answer
+                    <textarea
+                      value={answer}
+                      disabled={working}
+                      onChange={(event) => setAnswer(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    className="primary"
+                    disabled={working || !answer.trim()}
+                    onClick={() => actions.answerQuestion?.(session.pendingQuestion!.id, answer)}
+                  >
+                    Send answer
+                  </button>
+                </>
+              )}
+            </section>
+          )}
+          {session.pending && (
+            <section className="workflow-required-interaction">
+              <strong>Tool permission · {session.pending.tool}</strong>
+              <pre>{JSON.stringify(session.pending.args, null, 2)}</pre>
+              {actions.decideTool && (
+                <div className="workflow-tool-actions">
+                  <button
+                    className="primary"
+                    disabled={working}
+                    onClick={() => actions.decideTool?.(session.pending!.id, true)}
+                  >
+                    Allow once
+                  </button>
+                  {session.pending.rule && actions.allowAlwaysTool && (
+                    <button
+                      className="secondary"
+                      disabled={working}
+                      onClick={() => actions.allowAlwaysTool?.(session.pending!.id)}
+                    >
+                      Always allow · {session.pending.rule.label}
+                    </button>
+                  )}
+                  <button
+                    className="secondary"
+                    disabled={working}
+                    onClick={() => actions.decideTool?.(session.pending!.id, false)}
+                  >
+                    Deny
+                  </button>
+                </div>
+              )}
+              {session.pending.rule && (
+                <small>
+                  {session.pending.rule.label} · {session.pending.rule.scope.kind}
+                </small>
+              )}
+            </section>
+          )}
+        </section>
+      )}
+      {hasBlockingState && (
+        <section className="workflow-blocking-state" role="alert">
+          <p>
+            {session.assignment?.state === 'uncertain'
+              ? (session.assignment.message ?? 'Execution outcome needs reconciliation.')
+              : (failureEvent?.message ??
+                failureEvent?.text ??
+                (flow.status === 'awaiting_submission'
+                  ? 'Required output is unavailable.'
+                  : 'This activity needs recovery.'))}
+          </p>
+          {onRecovery && recoveryNeeded && (
+            <button type="button" className="secondary" onClick={onRecovery}>
+              Open recovery
+            </button>
+          )}
+        </section>
+      )}
       {submission && (
         <div className="workflow-submission" aria-label="Activity output">
           {summaryLabel && summaryLabel !== 'Summary' && (
@@ -1081,7 +1361,7 @@ export function WorkflowRunInteraction({
           )}
           {primaryDetail && (
             <div className="workflow-primary-detail">
-              {primaryDetail.label && <strong>{primaryDetail.label}</strong>}
+              <strong>{primaryDetail.label || primaryDetail.field}</strong>
               <p>{details[primaryDetail.field!]}</p>
             </div>
           )}
@@ -1091,41 +1371,28 @@ export function WorkflowRunInteraction({
                 .filter((binding) => binding !== primaryDetail)
                 .map((binding) => (
                   <div key={binding.field}>
-                    {binding.label && <dt>{binding.label}</dt>}
+                    <dt>{binding.label || binding.field}</dt>
                     <dd>{details[binding.field!]}</dd>
                   </div>
                 ))}
             </dl>
           )}
-          {otherDetailEntries.length > 0 || submission.references?.length ? (
-            <details className="workflow-supporting-output">
-              <summary>Supporting output</summary>
-              {otherDetailEntries.length > 0 && (
-                <dl>
-                  {otherDetailEntries.map(([, value], index) => (
-                    <div key={index}>
-                      <dd>{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              )}
-              {submission.references?.length ? (
-                <ul>
-                  {submission.references.map((ref) => (
-                    <li key={`${ref.path}:${ref.startLine}:${ref.endLine}`}>
-                      <strong>
-                        {ref.path}:{ref.startLine}–{ref.endLine}
-                      </strong>
-                      <pre>{ref.text}</pre>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+          {otherDetailEntries.length > 0 && (
+            <details className="workflow-output-details">
+              <summary>Details · {otherDetailEntries.length}</summary>
+              <dl>
+                {otherDetailEntries.map(([field, value]) => (
+                  <div key={field}>
+                    <dt>{field}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
             </details>
-          ) : null}
+          )}
         </div>
       )}
-      <ArtifactViewer
+      <SubmissionCollections
         key={session.id}
         sessionId={session.id}
         submission={submission}
@@ -1221,81 +1488,6 @@ export function WorkflowRunInteraction({
           {humanTaskError && <p role="alert">{humanTaskError}</p>}
         </>
       )}
-      {(session.pendingQuestion || session.pending) && (
-        <section className="workflow-interaction-slot" aria-label="Required interaction">
-          {session.pendingQuestion && (
-            <section className="workflow-required-interaction">
-              <strong>Question</strong>
-              <p>{session.pendingQuestion.question}</p>
-              <label>
-                Answer
-                <textarea value={answer} onChange={(event) => setAnswer(event.target.value)} />
-              </label>
-              <button
-                className="primary"
-                disabled={working || !answer.trim() || !actions.answerQuestion}
-                onClick={() => actions.answerQuestion?.(session.pendingQuestion!.id, answer)}
-              >
-                Send answer
-              </button>
-            </section>
-          )}
-          {session.pending && (
-            <section className="workflow-required-interaction">
-              <strong>Tool permission · {session.pending.tool}</strong>
-              <pre>{JSON.stringify(session.pending.args, null, 2)}</pre>
-              <div className="workflow-tool-actions">
-                <button
-                  className="primary"
-                  disabled={working || !actions.decideTool}
-                  onClick={() => actions.decideTool?.(session.pending!.id, true)}
-                >
-                  Allow once
-                </button>
-                {session.pending.rule && actions.allowAlwaysTool && (
-                  <button
-                    className="secondary"
-                    disabled={working}
-                    onClick={() => actions.allowAlwaysTool?.(session.pending!.id)}
-                  >
-                    Always allow · {session.pending.rule.label}
-                  </button>
-                )}
-                <button
-                  className="secondary"
-                  disabled={working || !actions.decideTool}
-                  onClick={() => actions.decideTool?.(session.pending!.id, false)}
-                >
-                  Deny
-                </button>
-              </div>
-              {session.pending.rule && (
-                <small>
-                  {session.pending.rule.label} · {session.pending.rule.scope.kind}
-                </small>
-              )}
-            </section>
-          )}
-        </section>
-      )}
-      {hasBlockingState && (
-        <section className="workflow-blocking-state" role="alert">
-          <p>
-            {session.assignment?.state === 'uncertain'
-              ? (session.assignment.message ?? 'Execution outcome needs reconciliation.')
-              : (failureEvent?.message ??
-                failureEvent?.text ??
-                (flow.status === 'awaiting_submission'
-                  ? 'Required output is unavailable.'
-                  : 'This activity needs recovery.'))}
-          </p>
-          {onRecovery && recoveryNeeded && (
-            <button type="button" className="secondary" onClick={onRecovery}>
-              Open recovery
-            </button>
-          )}
-        </section>
-      )}
       {(flow.status === 'waiting_gate' ||
         (flow.status === 'awaiting_continue' && (actions.continueRun || actions.rework))) && (
         <footer className="workflow-interaction-footer">
@@ -1308,10 +1500,10 @@ export function WorkflowRunInteraction({
                     canPrepareApproval && (
                       <button
                         className="secondary"
-                        disabled={working}
+                        disabled={working || reservationBusy}
                         onClick={() => void prepareActivityApproval()}
                       >
-                        Prepare approval
+                        Review action
                       </button>
                     )}
                   {activeReservation?.preview && (
@@ -1319,7 +1511,7 @@ export function WorkflowRunInteraction({
                       className="workflow-approval-preview"
                       aria-label="Prepared activity approval"
                     >
-                      <strong>{activeReservation.preview.activity}</strong>
+                      <strong>Prepared action · {activeReservation.preview.activity}</strong>
                       {activeReservation.preview.resources?.model && (
                         <small>Model: {activeReservation.preview.resources.model}</small>
                       )}
@@ -1350,13 +1542,14 @@ export function WorkflowRunInteraction({
                       </details>
                     </div>
                   )}
+                  {actionError && <p role="alert">{actionError}</p>}
                   {reservationError && <p role="alert">{reservationError}</p>}
                   {approvalReady &&
                   actions.approveGate &&
                   (!actions.requiresActivityReservation || !!activeReservation) ? (
                     <button
                       className="primary"
-                      disabled={working}
+                      disabled={working || feedbackBusy || reservationBusy}
                       onClick={() => actions.approveGate?.(activeReservation)}
                     >
                       {workflowDecisionLabel(node, 'approved')}
@@ -1367,14 +1560,16 @@ export function WorkflowRunInteraction({
                   ) : (
                     <p role="alert">No supported approval outcome is configured.</p>
                   )}
-                  {canRevise && actions.requestChanges && (
+                  {canRevise && actions.requestChanges && !showFeedback && (
                     <button
                       type="button"
                       className="secondary"
-                      aria-expanded={showFeedback}
-                      onClick={() => setShowFeedback((value) => !value)}
+                      disabled={working || feedbackBusy}
+                      onClick={() => {
+                        if (!working && !feedbackBusy) setShowFeedback(true);
+                      }}
                     >
-                      {showFeedback ? 'Cancel' : workflowDecisionLabel(node, 'changes_requested')}
+                      {workflowDecisionLabel(node, 'changes_requested')}
                     </button>
                   )}
                 </>
@@ -1383,31 +1578,53 @@ export function WorkflowRunInteraction({
           )}
           {flow.status === 'awaiting_continue' && actions.continueRun && (
             <button className="primary" disabled={working} onClick={actions.continueRun}>
-              Continue
+              Continue workflow
             </button>
           )}
           {flow.status === 'awaiting_continue' && actions.rework && (
             <button className="secondary" disabled={working} onClick={actions.rework}>
-              Rework this step
+              Rework activity
             </button>
           )}
         </footer>
       )}
       {showFeedback && flow.status === 'waiting_gate' && canRevise && actions.requestChanges && (
-        <label className="workflow-feedback">
-          <textarea
-            aria-label="Change request"
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-          />
-          <button
-            className="secondary"
-            disabled={working || !feedback.trim()}
-            onClick={() => actions.requestChanges?.(feedback)}
-          >
-            Send request
-          </button>
-        </label>
+        <form className="workflow-feedback" onSubmit={(event) => void submitFeedback(event)}>
+          <label>
+            <span>{workflowDecisionLabel(node, 'changes_requested')}</span>
+            <textarea
+              aria-label={workflowDecisionLabel(node, 'changes_requested')}
+              value={feedbackValue}
+              disabled={working || feedbackBusy}
+              onChange={(event) => {
+                setFeedback(event.target.value);
+                setFeedbackDraftContext(feedbackContextKey);
+              }}
+            />
+          </label>
+          <div className="workflow-feedback-actions">
+            <button
+              type="submit"
+              className="primary"
+              disabled={working || feedbackBusy || !feedbackValue.trim()}
+            >
+              {feedbackBusy ? 'Sending…' : 'Send request'}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={feedbackBusy}
+              onClick={() => {
+                setFeedback('');
+                setFeedbackError('');
+                setShowFeedback(false);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+          {feedbackError && <p role="alert">{feedbackError}</p>}
+        </form>
       )}
     </section>
   );

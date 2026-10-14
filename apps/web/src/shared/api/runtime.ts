@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   CommandEnvelope,
   RuntimeAction,
@@ -53,6 +53,22 @@ export async function command<Action extends RuntimeAction>(
   action: Action,
   input: RuntimeCommandInputMap[Action],
 ) {
+  if (action === 'claim') {
+    const target = input as RuntimeCommandInputMap['claim'];
+    const sessionId = target.sessionId ?? target.taskId;
+    if (sessionId !== undefined) {
+      const generation = contextGeneration;
+      const snapshot = await api<RuntimeState>(`/api/runtime/${encodeURIComponent(String(sessionId))}`);
+      const session = snapshot.sessions.find(value => String(value.id) === String(sessionId));
+      if (session?.workflowRunId) {
+        const run = (await command('getWorkflowRun', { workflowRunId: session.workflowRunId })).result;
+        if (generation !== contextGeneration) throw new RuntimeApiError('Active context changed. Try again.');
+        if (run.independent && !(run.lease?.ownedByCurrentCaller && run.lease.expiresAt > Date.now()))
+          await command('claimWorkflowRun', { workflowRunId: run.id, label: target.label });
+      }
+      if (generation !== contextGeneration) throw new RuntimeApiError('Active context changed. Try again.');
+    }
+  }
   const fileMutation = [
     'saveSkillSource',
     'createSkillSource',
@@ -95,44 +111,76 @@ export async function command<Action extends RuntimeAction>(
 
 export function useRuntime(taskId?: number, overview = false, enabled = true) {
   const [state, setState] = useState<RuntimeState | null>(null);
+  const [loadedScope, setLoadedScope] = useState('');
   const [error, setError] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const reload = useRef<(() => void) | null>(null);
+  const scope = JSON.stringify([taskId ?? null, overview]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      reload.current = null;
+      setIsRefreshing(false);
+      return;
+    }
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
+    let request = 0;
+    const load = async (reconnect = false) => {
+      const currentRequest = ++request;
       const generation = contextGeneration;
+      if (reconnect) setIsRefreshing(true);
       try {
         const value = await api<RuntimeState>(
           `/api/runtime${taskId ? `/${taskId}` : overview ? '?view=overview' : ''}`,
         );
-        if (live && generation === contextGeneration) {
+        if (live && currentRequest === request && generation === contextGeneration) {
           setState(value);
+          setLoadedScope(scope);
           setError('');
         }
       } catch {
-        if (live && generation === contextGeneration)
+        if (live && currentRequest === request && generation === contextGeneration)
           setError(
-            'Daemon unavailable. Run npm run server. Existing work may still be running; reconnect before retrying.',
+            'Connection lost. Existing work may still be running. Reconnect before sending another command.',
           );
+      } finally {
+        if (live && currentRequest === request) setIsRefreshing(false);
       }
-      if (live) timer = setTimeout(poll, 1000);
+      if (live && currentRequest === request) timer = setTimeout(() => void load(), 1000);
     };
+    const reconnect = () => {
+      clearTimeout(timer);
+      void load(true);
+    };
+    reload.current = reconnect;
     const contextChanged = () => {
+      clearTimeout(timer);
+      request++;
       setState(null);
       setError('');
+      setIsRefreshing(false);
+      void load();
     };
     window.addEventListener('convoy-context-changed', contextChanged);
-    void poll();
+    void load();
     return () => {
       live = false;
+      request++;
       clearTimeout(timer);
+      if (reload.current === reconnect) reload.current = null;
       window.removeEventListener('convoy-context-changed', contextChanged);
     };
   }, [taskId, overview, enabled]);
 
-  return { state, error };
+  const refresh = () => reload.current?.();
+  return {
+    state,
+    error,
+    isStale: !enabled || !state || loadedScope !== scope || !!error || isRefreshing,
+    isRefreshing,
+    refresh,
+  };
 }
 
 export function owns(session?: Session) {

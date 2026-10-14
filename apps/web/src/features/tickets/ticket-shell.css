@@ -114,6 +114,15 @@
   gap: 12px;
   margin: 0;
 }
+.ticket-edit-disabled {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
 .ticket-edit-form label {
   display: flex;
   flex-direction: column;

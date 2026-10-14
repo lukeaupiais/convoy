@@ -1,0 +1,49 @@
+.connection-notice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.9rem;
+  align-items: center;
+  margin: 0.65rem 1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent, var(--purple));
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.connection-notice strong {
+  font-size: 0.9rem;
+}
+
+.connection-notice p {
+  margin: 0.15rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.connection-notice details {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+}
+
+.connection-notice summary {
+  width: fit-content;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.connection-notice button {
+  min-height: 2.5rem;
+}
+
+@media (max-width: 520px) {
+  .connection-notice {
+    margin: 0.5rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-notice button {
+    width: 100%;
+  }
+}

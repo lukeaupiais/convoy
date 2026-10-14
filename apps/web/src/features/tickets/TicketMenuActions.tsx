@@ -97,7 +97,7 @@ export function TicketMenuActions({
       )}
       {session && ticketNeedsRecovery(state, ticket, session) && (
         <button role="menuitem" onClick={onRecovery}>
-          Recovery
+          Open recovery details
         </button>
       )}
     </>

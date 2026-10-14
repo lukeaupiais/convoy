@@ -103,7 +103,7 @@ export function SessionChat({
 }) {
   const key = `convoy.chat.v1.${taskId}`;
   const [local, setLocal] = useState(() => load(key));
-  const { state, error: connectionError } = useRuntime();
+  const { state, error: connectionError, isStale } = useRuntime();
   const { session, connection } = useSessionStream(
     taskId,
     state?.sessions.find((s) => s.id === String(taskId)),
@@ -200,12 +200,12 @@ export function SessionChat({
     }
   }, [key, local]);
   useEffect(() => {
-    if (!owned) return;
+    if (!owned || isStale) return;
     const timer = setInterval(() => {
       void command('heartbeat', { sessionId: taskId }).catch(() => {});
     }, 25000);
     return () => clearInterval(timer);
-  }, [owned, taskId]);
+  }, [owned, isStale, taskId]);
   useEffect(() => {
     const pane = scroll.current;
     if (!pane) return;
@@ -214,7 +214,7 @@ export function SessionChat({
   }, [session?.events.length, session?.partial]);
   async function send(mode: 'queue' | 'interrupt' = 'queue') {
     const text = local.draft.trim();
-    if (!hasInput || attaching || !canMessage || stopping || submitting || !state?.auth.connected)
+    if (isStale || !hasInput || attaching || !canMessage || stopping || submitting || !state?.auth.connected)
       return;
     setSubmitting(true);
     setError('');
@@ -248,7 +248,7 @@ export function SessionChat({
     }
   }
   async function control(action: RuntimeAction, input: object = {}) {
-    if (submitting) return;
+    if (isStale || submitting) return;
     setSubmitting(true);
     setError('');
     try {
@@ -262,7 +262,7 @@ export function SessionChat({
     }
   }
   async function reviewChanges() {
-    if (!session?.workspace || reviewing || running) return;
+    if (isStale || !session?.workspace || reviewing || running) return;
     setReviewOpen(true);
     setReviewing(true);
     setError('');
@@ -353,7 +353,7 @@ export function SessionChat({
                   <div className="runtime-toolbar runtime-info">
                     <button
                       className="secondary"
-                      disabled={submitting || !!busy || !state.auth.connected}
+                      disabled={isStale || submitting || !!busy || !state.auth.connected}
                       onClick={async () => {
                         setSubmitting(true);
                         try {
@@ -414,7 +414,7 @@ export function SessionChat({
                 )}
               </>
             }
-            runtimeAvailable={!connectionError}
+            runtimeAvailable={!isStale}
             onOpenTicketMessages={
               session.activeTicketId ? () => openTicket(session.activeTicketId!) : undefined
             }
@@ -539,7 +539,13 @@ export function SessionChat({
               {session?.partial ? (
                 <MessageText text={session.partial} />
               ) : (
-                <p>{stopping ? 'Stopping…' : 'Working…'}</p>
+                <p>
+                  {stopping
+                    ? 'Stopping…'
+                    : session?.status === 'queued'
+                      ? session.queueReason ?? 'Queued for a runner'
+                      : 'Working…'}
+                </p>
               )}
             </div>
           </article>
@@ -576,7 +582,7 @@ export function SessionChat({
               <button
                 type="button"
                 className="secondary"
-                disabled={submitting || stopping}
+                disabled={isStale || submitting || stopping}
                 onClick={() => void control('stop')}
               >
                 Stop
@@ -586,7 +592,7 @@ export function SessionChat({
               <button
                 type="button"
                 className="secondary"
-                disabled={submitting || (!!session?.interruption?.needsReview && !reviewed)}
+                disabled={isStale || submitting || (!!session?.interruption?.needsReview && !reviewed)}
                 onClick={() => {
                   resumeId.current ||= newId();
                   void control('resumeSession', {
@@ -641,7 +647,7 @@ export function SessionChat({
                   type="button"
                   className="icon-button"
                   aria-label={`Remove queued message: ${m.text.slice(0, 40) || m.attachments?.[0]?.name}`}
-                  disabled={submitting}
+                  disabled={isStale || submitting}
                   onClick={() => void control('discardMessage', { requestId: m.id })}
                 >
                   <X size={14} />
@@ -679,7 +685,7 @@ export function SessionChat({
                 state={state}
                 inlineChat
                 interactionOnly
-                runtimeAvailable={!connectionError}
+                runtimeAvailable={!isStale}
                 onOpenTicketMessages={
                   session.activeTicketId ? () => openTicket(session.activeTicketId!) : undefined
                 }
@@ -694,7 +700,7 @@ export function SessionChat({
           onChange={(attachments) => setLocal((s) => ({ ...s, attachments }))}
           onError={setError}
           onBusy={setAttaching}
-          disabled={submitting || stopping || !canMessage}
+          disabled={isStale || submitting || stopping || !canMessage}
           workspace={!!session?.workspace}
         >
           {(toolbar) => (
@@ -735,7 +741,7 @@ export function SessionChat({
                   className="chat-model-picker"
                   aria-label="Chat model"
                   value={model}
-                  disabled={running || stopping}
+                disabled={isStale || running || stopping}
                   onChange={(e) => setModel(e.target.value)}
                 >
                   {state?.models.map((m) => (
@@ -748,7 +754,7 @@ export function SessionChat({
                   <button
                     type="button"
                     className="interrupt-send"
-                    disabled={submitting || attaching || stopping || !state?.auth.connected}
+                    disabled={isStale || submitting || attaching || stopping || !state?.auth.connected}
                     onClick={() => void send('interrupt')}
                   >
                     Steer now
@@ -759,6 +765,7 @@ export function SessionChat({
                   className="chat-send"
                   disabled={
                     !canMessage ||
+                    isStale ||
                     !hasInput ||
                     attaching ||
                     stopping ||
