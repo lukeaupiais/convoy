@@ -128,12 +128,15 @@ export type Runner = {
   repository: string;
   online: boolean;
   checkedAt: string;
+  health?: { failureCount: number; lastError?: string; nextCheckAt?: string };
   accessMode: 'contained' | 'trusted';
   capabilities: {
     tools: string[];
     shell: boolean;
     inspection?: boolean;
     verification?: boolean;
+    verificationReason?: string;
+    inspectionReason?: string;
     executionDescriptorVersion?: number;
     cli?: Record<string, boolean>;
     terminal?: boolean;

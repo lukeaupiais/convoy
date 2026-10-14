@@ -291,20 +291,23 @@ async function inspect(record, { discover = false } = {}) {
     throw new Error('Runtime container identity or enforcement changed.');
   return value;
 }
-export async function probeVerificationRuntime() {
+export async function probeVerificationRuntimeHealth(runCommand = run) {
+  let stage = 'Docker runtime';
   try {
-    const info = JSON.parse(
-      (await docker(['info', '--format', '{{json .}}'], { timeout: 5000 })).toString(),
-    );
-    if (info.CgroupVersion !== '2' || !info.MemoryLimit || !info.PidsLimit) return false;
-    await run('systemd-run', ['--user', '--wait', '--pipe', '--quiet', '/usr/bin/true'], {
-      timeout: 5000,
-    });
-    return true;
-  } catch {
-    return false;
+    const info = JSON.parse((await runCommand('/usr/bin/docker', ['info', '--format', '{{json .}}'], { timeout: 5000 })).toString());
+    if (info.CgroupVersion !== '2' || !info.MemoryLimit || !info.PidsLimit)
+      return { available: false, reason: 'Docker runtime needs cgroup v2, memory limits and PID limits.' };
+    stage = 'Runtime expiry supervisor';
+    await runCommand('systemd-run', ['--user', '--wait', '--pipe', '--quiet', '/usr/bin/true'], { timeout: 5000 });
+    return { available: true };
+  } catch (error) {
+    return { available: false, reason: `${stage}: ${error.message}`.slice(0, 1000) };
   }
 }
+export async function probeVerificationRuntime() {
+  return (await probeVerificationRuntimeHealth()).available;
+}
+
 async function prepare(workspace, execution, signal) {
   const definition = execution?.grant?.runtime?.definition;
   if (execution?.grant?.profileId !== 'verify' || !definition || !uuid(execution.assignmentToken))
