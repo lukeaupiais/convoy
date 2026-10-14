@@ -16,7 +16,7 @@ export function createRunners({
   deployment = createWorkerDeployment(),
   connect = connectWorker,
   idleMs = 60000,
-  extensionAdapters = {},
+  extensionAdapters,
 } = {}) {
   const local = new Map();
   const remote = new Map();
@@ -149,7 +149,7 @@ export function createRunners({
       request.action,
     );
   const withExecutionAccess = (runner, request) => {
-    if (!['probe', 'tool', 'command_start', 'terminal_start'].includes(request.action))
+    if (!['probe', 'tool', 'extension', 'command_start', 'terminal_start'].includes(request.action))
       return request;
     const requested = request.accessMode ?? runner.accessMode ?? 'contained';
     if (requested === 'trusted' && runner.accessMode !== 'trusted')
