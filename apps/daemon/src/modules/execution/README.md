@@ -1,8 +1,17 @@
 # Execution
 
 Owns environments, repository runners, pools, placement eligibility, assignment,
-capacity, and retained command evidence. It does not own provider conversations or
-workflow transitions.
+capacity, and retained command evidence. It does not own provider conversations
+or workflow transitions.
+
+Queued placement refreshes unavailable managed local/SSH runner health before selecting a runner.
+Only enabled, authorized candidates within the effective placement are probed;
+disabled or drained runners and uncertain assignments are not retried. Checks
+share an in-flight probe per runner and back off from 30 seconds to five minutes.
+Failed checks retain their reason and next-check time across daemon restarts.
+Recovery confirms required capabilities and preserves existing workspace pins.
+Outbound enrolled runners and revoked machine identities are never revived by
+this managed-runner recovery path.
 
 Local and SSH runners must expose equivalent behavior. Never reroute an attempt
 after provisioning may have begun without explicit reconciliation.

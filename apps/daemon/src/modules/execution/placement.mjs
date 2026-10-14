@@ -32,6 +32,7 @@ export function createPlacement({
   audit = async () => {},
   authorizeFullSystem = async () => ({ effect: 'allow' }),
   workflowRunAssignments = () => [],
+  now = Date.now,
 }) {
   state.environments ??= [];
   state.runnerPools ??= [];
@@ -260,7 +261,40 @@ export function createPlacement({
       ? catalog.project(t?.projectId ?? s.projectId ?? state.projects[0].id).placement
       : value;
   }
-  function choose(s, requiredTools = []) {
+  const healthProbes = new Map();
+  function healthFailed(r, message) {
+    const failureCount = Math.min((r.health?.failureCount ?? 0) + 1, 10);
+    r.health = { failureCount, lastError: message,
+      nextCheckAt: new Date(now() + Math.min(300000, 30000 * 2 ** (failureCount - 1))).toISOString() };
+  }
+  function healthDue(r) {
+    if (r.registration === 'outbound' || r.machineIdentity?.state === 'revoked' || !['local', 'ssh'].includes(r.kind)) return false;
+    if (healthProbes.has(r.id)) return true;
+    const retryAt = Date.parse(r.health?.nextCheckAt ?? '');
+    const checkedAt = Date.parse(r.checkedAt ?? '');
+    return now() >= (Number.isFinite(retryAt) ? retryAt : Number.isFinite(checkedAt) ? checkedAt + 30000 : 0);
+  }
+  function probeHealth(r, signal, accepts = () => true) {
+    if (healthProbes.has(r.id)) return healthProbes.get(r.id);
+    const operation = (async () => {
+      try {
+        r.capabilities = attested(r, await execute(r, { action: 'probe', repository: r.repository }, signal));
+        r.online = true;
+        const accepted = accepts(r);
+        if (accepted === true) r.health = { failureCount: 0 };
+        else healthFailed(r, accepted);
+      } catch (error) {
+        r.online = false;
+        healthFailed(r, error.message);
+      }
+      r.checkedAt = new Date(now()).toISOString();
+      await save();
+      return r;
+    })();
+    healthProbes.set(r.id, operation);
+    return operation.finally(() => { if (healthProbes.get(r.id) === operation) healthProbes.delete(r.id); });
+  }
+  function choose(s, requiredTools = [], recoverHealth = false) {
     if (s.assignment?.state === 'uncertain')
       return {
         reason:
@@ -299,10 +333,11 @@ export function createPlacement({
           r.organizationId === organizationId &&
           e.enabled &&
           r.enabled &&
-          r.online &&
-          executionPolicy.supports(r, executionPolicy.selected(s)) &&
+          (recoverHealth
+            ? healthDue(r) && (!r.online || !executionPolicy.supports(r, executionPolicy.selected(s)) || !required.every(t => r.capabilities?.tools?.includes(t)))
+            : r.online && executionPolicy.supports(r, executionPolicy.selected(s))) &&
           r.projectIds.includes(projectId) &&
-          required.every((t) => r.capabilities.tools.includes(t)) &&
+          (recoverHealth || required.every((t) => r.capabilities?.tools?.includes(t))) &&
           (p.requiredTags ?? []).every((t) => tags.includes(t))
         );
       });
@@ -516,19 +551,7 @@ export function createPlacement({
         return value;
       }
       if (c.action === 'probeRunner') {
-        const value = runner(c.runnerId);
-        try {
-          value.capabilities = attested(
-            value,
-            await execute(value, { action: 'probe', repository: value.repository }),
-          );
-          value.online = true;
-        } catch {
-          value.online = false;
-        }
-        value.checkedAt = new Date().toISOString();
-        await save();
-        return value;
+        return probeHealth(runner(c.runnerId));
       }
       if (c.action === 'saveEnvironment') {
         const old = c.id ? env(c.id) : null;
@@ -696,7 +719,23 @@ export function createPlacement({
       // authorized placement update. Concrete policies remain pinned before
       // runner selection/acquisition as before.
       if (selectedPlacement.mode !== 'none') s.placement ??= structuredClone(selectedPlacement);
-      const chosen = choose(s, requiredTools);
+      let chosen = choose(s, requiredTools);
+      if (chosen.reason && s.assignment?.state !== 'uncertain' && !signal?.aborted) {
+        const recovery = choose(s, requiredTools, true);
+        if (recovery.runner) {
+          const required = [...requiredTools, ...(selectedPlacement.requiredTools ?? [])];
+          await probeHealth(recovery.runner, signal, r => {
+            if (!executionPolicy.supports(r, selectedProfile))
+              return selectedProfile === 'verify' ? r.capabilities?.verificationReason ?? 'Verification runtime is unavailable.'
+                : selectedProfile === 'inspect' ? r.capabilities?.inspectionReason ?? 'Inspection runtime is unavailable.'
+                  : 'Runner cannot enforce the selected execution profile.';
+            return required.every(t => r.capabilities?.tools?.includes(t)) || 'Required runner tools are unavailable.';
+          });
+          chosen = choose(s, requiredTools);
+          if (chosen.reason && recovery.runner.health?.lastError)
+            chosen.reason = `Runner health check failed: ${recovery.runner.health.lastError} Automatic recheck is scheduled.`;
+        }
+      }
       if (chosen.capacityDemand) await capacity.recordDemand(chosen.capacityDemand);
       if (chosen.reason) {
         await auditDispatch(s, {
@@ -741,10 +780,11 @@ export function createPlacement({
             await execute(r, { action: 'probe', repository: r.repository }, signal),
           );
           r.online = true;
-          r.checkedAt = new Date().toISOString();
+          r.health = { failureCount: 0 };
+          r.checkedAt = new Date(now()).toISOString();
         }
         if (!executionPolicy.supports(r, selectedProfile))
-          throw new Error('Runner cannot enforce the selected execution profile.');
+          throw new Error(selectedProfile === 'verify' ? r.capabilities?.verificationReason ?? 'Verification runtime is unavailable.' : 'Runner cannot enforce the selected execution profile.');
         if (signal?.aborted) throw new Error('Stopped before provisioning.');
         if (
           ![...requiredTools, ...(effective(s).requiredTools ?? [])].every((t) =>
@@ -754,6 +794,8 @@ export function createPlacement({
           throw new Error('Required tools are no longer available.');
       } catch (e) {
         r.online = false;
+        r.checkedAt = new Date(now()).toISOString();
+        healthFailed(r, e.message);
         s.assignment.state = 'released';
         await save();
         await auditDispatch(s, {
@@ -769,7 +811,7 @@ export function createPlacement({
         });
         return {
           reason:
-            'Runner probe failed before execution. Refresh health or wait for another eligible runner.',
+            `Runner health check failed: ${e.message} Automatic recheck is scheduled.`,
         };
       }
       if (!s.workspace) {

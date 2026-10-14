@@ -1,4 +1,4 @@
-import { probeVerificationRuntime, prepareVerificationRuntime, runtimeCommand, runtimeTool, runtimeLifecycle } from './verification-runtime.mjs';
+import { probeVerificationRuntimeHealth, prepareVerificationRuntime, runtimeCommand, runtimeTool, runtimeLifecycle } from './verification-runtime.mjs';
 import { runInspectionProbe } from './inspection-probe.mjs';
 import { tmpdir, userInfo } from 'node:os';
 import { bindInspection, assertInspectionBinding } from './execution-binding.mjs';
@@ -1070,6 +1070,7 @@ export async function executeRunner(
       try {
         terminal = (await processRun('tmux', ['-V'], { signal, timeout: 5000 })).code === 0;
       } catch {}
+    const verificationHealth = await probeVerificationRuntimeHealth();
     return {
       repository: root,
       executionIdentity: `uid:${userInfo().uid}`,
@@ -1096,7 +1097,8 @@ export async function executeRunner(
       ],
       shell,
       inspection,
-      verification: await probeVerificationRuntime(),
+      verification: verificationHealth.available,
+      ...(verificationHealth.reason ? { verificationReason: verificationHealth.reason } : {}),
       ...(inspectionReason ? { inspectionReason } : {}),
       executionDescriptorVersion: inspection ? 1 : 0,
       cli,
