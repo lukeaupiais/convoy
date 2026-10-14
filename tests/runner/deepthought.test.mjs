@@ -132,6 +132,8 @@ test('runtime discovery is cancellable and leaves the shared event loop responsi
   const root = await mkdtemp(join(tmpdir(), 'convoy-deepthought-discovery-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const slow = join(root, 'python');
+  const workspace = join(root, 'workspace');
+  await mkdir(workspace);
   await writeFile(slow, '#!/bin/sh\nexec /usr/bin/sleep 5\n', { mode: 0o700 });
   const previous = process.env.CONVOY_DEEPTHOUGHT_PYTHON;
   process.env.CONVOY_DEEPTHOUGHT_PYTHON = slow;
@@ -144,7 +146,7 @@ test('runtime discovery is cancellable and leaves the shared event loop responsi
   const request = executeRunner(
     {
       action: 'extension',
-      workspace: root,
+      workspace,
       adapter: 'deepthought',
       extension,
       tool: 'extension.deepthought.query',
@@ -159,6 +161,26 @@ test('runtime discovery is cancellable and leaves the shared event loop responsi
   }, 25);
   await assert.rejects(request, /cancelled/);
   assert(timerElapsed < 500, `Shared event loop blocked for ${timerElapsed}ms`);
+});
+
+test('workspace-owned SDK executables and external aliases never run a host probe', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'convoy-deepthought-untrusted-'));
+  const runtime = await mkdtemp(join(tmpdir(), 'convoy-deepthought-alias-'));
+  t.after(async () => {
+    await rm(runtime, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  });
+  const canary = join(root, 'HOST_EXECUTED');
+  await writeFile(join(root, 'python'), `#!/bin/sh\nprintf executed > '${canary}'\n`, { mode: 0o700 });
+  await symlink(join(root, 'python'), join(runtime, 'python'));
+  await symlink(root, join(runtime, 'venv'));
+  for (const provisioned of [join(root, 'python'), join(runtime, 'python'), join(runtime, 'venv/python')]) {
+    await assert.rejects(async () => {
+      const adapter = await createDeepThoughtAdapter({ python: provisioned });
+      await adapter({ extension, tool: 'extension.deepthought.query', args: { operation: 'definitions' }, workingDirectory: root });
+    }, /outside the assigned working directory/);
+    await assert.rejects(access(canary));
+  }
 });
 
 test(

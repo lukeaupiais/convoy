@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { isAbsolute, relative } from 'node:path';
+import { dirname, isAbsolute, relative } from 'node:path';
 
 export const deepThoughtExtensionManifest = {
   id: 'deepthought',
@@ -211,11 +211,18 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
   });
 }
 
+async function assertRuntimeOutside(python, root) {
+  const provisioned = await Promise.all([realpath(python), realpath(dirname(python))]);
+  if ([python, ...provisioned].some((path) => within(root, path)))
+    throw new Error('DeepThought runtime must be provisioned outside the assigned working directory.');
+}
+
 export async function createDeepThoughtAdapter({
   python,
   timeoutMs = 30000,
   maxOutputBytes = 32000,
   signal,
+  workingDirectory,
 } = {}) {
   if (process.platform !== 'linux' || typeof python !== 'string' || !isAbsolute(python))
     throw new Error('DeepThought requires a provisioned absolute Python path on Linux.');
@@ -229,36 +236,44 @@ export async function createDeepThoughtAdapter({
   )
     throw new Error('Invalid DeepThought process limits.');
   accessSync('/usr/bin/bwrap', constants.X_OK);
-  const probe = await runProcess(
-    python,
-    [
-      '-I',
-      '-B',
-      '-c',
-      "import json,sys; from importlib.metadata import version; import deepthought; print(json.dumps({'version':version('deepthought-analysis-engine'),'prefixes':[sys.prefix,sys.base_prefix]}))",
-    ],
-    { signal, timeoutMs: 5000, maxOutputBytes: 16000 },
-  );
-  const metadata = JSON.parse(probe);
-  if (
-    metadata.version !== '0.2.0a1' ||
-    !Array.isArray(metadata.prefixes) ||
-    metadata.prefixes.some((p) => typeof p !== 'string' || !isAbsolute(p) || p === '/')
-  )
-    throw new Error('DeepThought adapter requires SDK 0.2.0a1 and bounded runtime prefixes.');
-  await runProcess(
-    '/usr/bin/bwrap',
-    [
-      ...sandboxArgs(metadata.prefixes),
-      '--',
+  let metadata;
+  const loadRuntime = async (root, signal) => {
+    await assertRuntimeOutside(python, root);
+    const probe = await runProcess(
       python,
-      '-I',
-      '-B',
-      '-c',
-      "import deepthought,socket,errno; s=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',9))\nexcept OSError as e: assert e.errno in (errno.ENETUNREACH,errno.EHOSTUNREACH)\nelse: raise RuntimeError('Network isolation unavailable')\nassert deepthought.__version__=='0.2.0a1'",
-    ],
-    { signal, timeoutMs: 5000, maxOutputBytes: 4000 },
-  );
+      [
+        '-I',
+        '-B',
+        '-c',
+        "import json,sys; from importlib.metadata import version; import deepthought; print(json.dumps({'version':version('deepthought-analysis-engine'),'prefixes':[sys.prefix,sys.base_prefix]}))",
+      ],
+      { signal, timeoutMs: 5000, maxOutputBytes: 16000 },
+    );
+    const checked = JSON.parse(probe);
+    if (
+      checked.version !== '0.2.0a1' ||
+      !Array.isArray(checked.prefixes) ||
+      checked.prefixes.some((p) => typeof p !== 'string' || !isAbsolute(p) || p === '/')
+    )
+      throw new Error('DeepThought adapter requires SDK 0.2.0a1 and bounded runtime prefixes.');
+    await runProcess(
+      '/usr/bin/bwrap',
+      [
+        ...sandboxArgs(checked.prefixes),
+        '--',
+        python,
+        '-I',
+        '-B',
+        '-c',
+        "import deepthought,socket,errno; s=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',9))\nexcept OSError as e: assert e.errno in (errno.ENETUNREACH,errno.EHOSTUNREACH)\nelse: raise RuntimeError('Network isolation unavailable')\nassert deepthought.__version__=='0.2.0a1'",
+      ],
+      { signal, timeoutMs: 5000, maxOutputBytes: 4000 },
+    );
+    if (checked.prefixes.some((prefix) => within(root, prefix)))
+      throw new Error('DeepThought runtime must be provisioned outside the assigned working directory.');
+    return checked;
+  };
+  if (workingDirectory) metadata = await loadRuntime(await realpath(workingDirectory), signal);
   return async ({ extension, tool, args, workingDirectory, signal }) => {
     if (
       extension?.id !== 'deepthought' ||
@@ -298,6 +313,8 @@ export async function createDeepThoughtAdapter({
       throw new Error('DeepThought limit must be 1-100.');
     if (signal?.aborted) throw new Error('DeepThought query cancelled.');
     const root = await realpath(workingDirectory);
+    await assertRuntimeOutside(python, root);
+    metadata ??= await loadRuntime(root, signal);
     if (metadata.prefixes.some((prefix) => within(root, prefix)))
       throw new Error(
         'DeepThought runtime must be provisioned outside the assigned working directory.',
@@ -318,14 +335,17 @@ export async function createDeepThoughtAdapter({
 }
 
 const installed = new Map();
-export async function installedDeepThoughtAdapters(signal) {
+export async function installedDeepThoughtAdapters(signal, workingDirectory) {
   if (signal?.aborted) throw new Error('DeepThought query cancelled.');
   const python = process.env.CONVOY_DEEPTHOUGHT_PYTHON;
-  if (!python) return {};
+  if (!python || !workingDirectory) return {};
   try {
-    if (!installed.has(python))
-      installed.set(python, await createDeepThoughtAdapter({ python, signal }));
-    return { deepthought: installed.get(python) };
+    const root = await realpath(workingDirectory);
+    await assertRuntimeOutside(python, root);
+    const key = JSON.stringify([python, root]);
+    if (!installed.has(key))
+      installed.set(key, await createDeepThoughtAdapter({ python, signal, workingDirectory: root }));
+    return { deepthought: installed.get(key) };
   } catch (error) {
     if (signal?.aborted) throw error;
     return {}; // A missing/incompatible installation is not advertised.
