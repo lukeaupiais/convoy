@@ -270,7 +270,73 @@ export function createCatalog({ state, save, execution, externalTickets, context
     }
     state.ticketStatusMigrationVersion = 1;
   }
-  const boards = createBoards({ state, save, projects: state.projects, ticket, referencedColumn, referencedBoard });
+  function statusWriteTarget(t, status) {
+    const owners = t.externalLinks?.filter(value => value.fieldOwnership?.status === 'external') ?? [];
+    if (owners.length !== 1) throw new Error('Ticket status needs exactly one external owner.');
+    const source = activeConnection(owners[0].connectionId);
+    if (!source.capabilities?.statusWrite) throw new Error("This ticket's status is owned by the external source, which does not support status writes.");
+    const matches = Object.entries(source.manifest?.values?.status ?? {}).filter(([, value]) => value === status);
+    if (matches.length !== 1) throw new Error('Source status mapping must identify exactly one writable value.');
+    return { connectionId: source.id, status: matches[0][0] };
+  }
+  async function writeTicketStatus(t, status, command) {
+    const target = statusWriteTarget(t, status);
+    return changeExternalStatus({ ...command, ...target, ticketId: t.id, expectedStatus: status,
+      requestId: `status-${createHash('sha256').update(JSON.stringify([t.id, command.revision, status])).digest('hex')}` });
+  }
+  async function changeExternalStatus(c) {
+    const requestId = text(c.requestId, 'Request ID', 100);
+    if (!/^[\w-]+$/.test(requestId)) throw new Error('Invalid request ID.');
+    const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
+    const source = activeConnection(c.connectionId);
+    if (source.organizationId !== project(t.projectId).organizationId || !source.capabilities?.statusWrite)
+      throw new Error('Ticket source cannot change status.');
+    const link = t.externalLinks?.find(value => value.connectionId === source.id);
+    if (!link || (link.fieldOwnership?.status ?? 'external') !== 'external') throw new Error('External source does not own this ticket status.');
+    const rawStatus = text(c.status, 'Source status', 80);
+    const remoteVersion = text(link.remoteVersion, 'Remote version', 500);
+    const expectedStatus = c.expectedStatus ?? source.manifest?.values?.status?.[rawStatus];
+    if (expectedStatus !== undefined) boards.validateTicketUpdate(t, { status: expectedStatus });
+    const unresolved = state.ticketStatusChanges.find(value => value.ticketId === t.id && value.connectionId === source.id && value.id !== requestId && ['pending', 'outcome-unknown'].includes(value.state));
+    if (unresolved) throw new Error('A source status change is awaiting confirmation. Refresh before changing status again.');
+    const previous = state.ticketStatusChanges.find(value => value.id === requestId);
+    if (previous && (previous.ticketId !== t.id || previous.connectionId !== source.id || previous.status !== rawStatus || previous.evidenceReplyRequestId !== c.evidenceReplyRequestId))
+      throw new Error('Request ID belongs to a different status change.');
+    if (previous?.state === 'applied') return previous;
+    if (previous?.state === 'rejected') throw new Error('Status change was rejected by the source. Refresh the ticket.');
+    let evidenceMessageId;
+    if (c.evidenceReplyRequestId) {
+      const reply = state.ticketReplies.find(value => value.id === c.evidenceReplyRequestId && value.ticketId === t.id && value.connectionId === source.id && value.status === 'queued');
+      if (!reply?.remoteId) throw new Error('Reply evidence is missing.');
+      const thread = await syncThread(t, source);
+      const message = thread.messages.find(value => value.remoteId === reply.remoteId && value.body === reply.body &&
+        value.direction === 'outbound' && value.deliveryStatus === 'delivered');
+      if (!message) throw new Error('Reply is not confirmed delivered by the source.');
+      evidenceMessageId = message.remoteId;
+    }
+    const change = previous ?? { id: requestId, ticketId: t.id, connectionId: source.id, status: rawStatus,
+      evidenceReplyRequestId: c.evidenceReplyRequestId, remoteVersion, state: 'pending', createdAt: new Date().toISOString() };
+    if (!previous) { state.ticketStatusChanges.push(change); await save(); }
+    try {
+      const result = await externalTickets.setStatus(source, link.remoteId, {
+        status: rawStatus, remoteVersion: change.remoteVersion, evidenceMessageId, requestId,
+      });
+      if (c.expectedStatus !== undefined && result.status !== c.expectedStatus) throw new Error('Ticket source did not confirm the requested status.');
+      if (result.status === undefined) throw new Error('Ticket source did not map the resulting status.');
+      boards.validateTicketUpdate(t, { status: result.status });
+      recordColumnFacts(t, { ...t, status: result.status, revision: t.revision + 1 }, c);
+      t.status = result.status; t.revision++;
+      link.remoteStatus = result.rawStatus; link.mappedStatus = result.status;
+      link.remoteVersion = result.remoteVersion; link.syncState = 'linked'; delete link.message;
+      change.state = 'applied'; change.resultRemoteVersion = result.remoteVersion;
+      execution.syncTicket(t); await save(); return change;
+    } catch (error) {
+      change.state = [409, 422].includes(error.status) ? 'rejected' : 'outcome-unknown';
+      change.message = error.message;
+      await save(); throw error;
+    }
+  }
+  const boards = createBoards({ state, save, projects: state.projects, ticket, referencedColumn, referencedBoard, writeStatus: writeTicketStatus });
   const syncingBindings = new Set();
   function recordColumnFacts(before, after, command = {}) {
     for (const transition of boards.columnTransitions(before, after)) {
@@ -293,6 +359,10 @@ export function createCatalog({ state, save, execution, externalTickets, context
     const id = result?.id ?? result?.ticketId ?? command.ticketId ?? command.taskId;
     const value = ticket(id);
     if (!value) return;
+    // Source confirmation already persists the field transition before returning
+    // to the board command. Do not emit a second move for the same board.
+    if (state.workFacts.some(fact => fact.key === `column:${value.id}:${result?.revision ?? value.revision}:${command.boardId}` && fact.event === 'ticket_moved'))
+      eventNames = eventNames.filter(event => event !== 'ticket_moved');
     const actionKey = command.idempotencyKey ?? command.requestId ?? `${command.action}:${value.id}:${result?.revision ?? value.revision}`;
     for (const event of eventNames) {
       const key = `command:${event}:${actionKey}`;
@@ -850,53 +920,7 @@ export function createCatalog({ state, save, execution, externalTickets, context
           throw new Error(error.message, { cause: error });
         }
       }
-      if (c.action === 'setExternalTicketStatus') {
-        const requestId = text(c.requestId, 'Request ID', 100);
-        if (!/^[\w-]+$/.test(requestId)) throw new Error('Invalid request ID.');
-        const t = ticket(c.ticketId); if (!t) throw new Error('Ticket not found.');
-        const source = activeConnection(c.connectionId);
-        if (source.organizationId !== project(t.projectId).organizationId || !source.capabilities?.statusWrite)
-          throw new Error('Ticket source cannot change status.');
-        const link = t.externalLinks?.find(value => value.connectionId === source.id);
-        if (!link || (link.fieldOwnership?.status ?? 'external') !== 'external') throw new Error('External source does not own this ticket status.');
-        const rawStatus = text(c.status, 'Source status', 80);
-        const remoteVersion = text(link.remoteVersion, 'Remote version', 500);
-        const previous = state.ticketStatusChanges.find(value => value.id === requestId);
-        if (previous && (previous.ticketId !== t.id || previous.connectionId !== source.id || previous.status !== rawStatus || previous.evidenceReplyRequestId !== c.evidenceReplyRequestId))
-          throw new Error('Request ID belongs to a different status change.');
-        if (previous?.state === 'applied') return previous;
-        if (previous?.state === 'rejected') throw new Error('Status change was rejected by the source. Refresh the ticket.');
-        let evidenceMessageId;
-        if (c.evidenceReplyRequestId) {
-          const reply = state.ticketReplies.find(value => value.id === c.evidenceReplyRequestId && value.ticketId === t.id && value.connectionId === source.id && value.status === 'queued');
-          if (!reply?.remoteId) throw new Error('Reply evidence is missing.');
-          const thread = await syncThread(t, source);
-          const message = thread.messages.find(value => value.remoteId === reply.remoteId && value.body === reply.body &&
-            value.direction === 'outbound' && value.deliveryStatus === 'delivered');
-          if (!message) throw new Error('Reply is not confirmed delivered by the source.');
-          evidenceMessageId = message.remoteId;
-        }
-        const change = previous ?? { id: requestId, ticketId: t.id, connectionId: source.id, status: rawStatus,
-          evidenceReplyRequestId: c.evidenceReplyRequestId, remoteVersion, state: 'pending', createdAt: new Date().toISOString() };
-        if (!previous) { state.ticketStatusChanges.push(change); await save(); }
-        try {
-          const result = await externalTickets.setStatus(source, link.remoteId, {
-            status: rawStatus, remoteVersion: change.remoteVersion, evidenceMessageId, requestId,
-          });
-          if (result.status === undefined) throw new Error('Ticket source did not map the resulting status.');
-          boards.validateTicketUpdate(t, { status: result.status });
-          recordColumnFacts(t, { ...t, status: result.status, revision: t.revision + 1 }, c);
-          t.status = result.status; t.revision++;
-          link.remoteStatus = result.rawStatus; link.mappedStatus = result.status;
-          link.remoteVersion = result.remoteVersion; link.syncState = 'linked'; delete link.message;
-          change.state = 'applied'; change.resultRemoteVersion = result.remoteVersion;
-          execution.syncTicket(t); await save(); return change;
-        } catch (error) {
-          change.state = [409, 422].includes(error.status) ? 'rejected' : 'outcome-unknown';
-          change.message = error.message;
-          await save(); throw error;
-        }
-      }
+      if (c.action === 'setExternalTicketStatus') return changeExternalStatus(c);
       if (c.action === 'reconcileExternalTicketReply') {
         const reply = state.ticketReplies.find(value => value.id === c.requestId);
         if (!reply || !['pending', 'outcome-unknown'].includes(reply.status)) throw new Error('Reply is not awaiting reconciliation.');
@@ -958,15 +982,17 @@ export function createCatalog({ state, save, execution, externalTickets, context
         const t = ticket(c.taskId); if (!t) throw new Error('Ticket not found.'); if (c.revision !== t.revision) throw new Error('Ticket changed in another client. Reload before saving.');
         const patch = c.patch ?? {};
         if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !['title', 'description', 'status', 'label', 'agent', 'priority', 'customFields'].includes(k))) throw new Error('Unsupported ticket fields. Use placement and workflow commands for execution settings.');
-        for (const field of ['status', 'priority']) if (patch[field] !== undefined && patch[field] !== t[field] && t.externalLinks?.some(value => value.fieldOwnership?.[field] === 'external')) throw new Error(`This ticket's ${field} is owned by the external source.`);
-        if (Object.keys(patch).some(k => !['status', 'priority', 'label'].includes(k))) assertEditable(t);
+        for (const field of ['priority']) if (patch[field] !== undefined && patch[field] !== t[field] && t.externalLinks?.some(value => value.fieldOwnership?.[field] === 'external')) throw new Error(`This ticket's ${field} is owned by the external source.`);
+        if (Object.keys(patch).some(k => !['status', 'priority', 'label'].includes(k) && JSON.stringify(patch[k]) !== JSON.stringify(t[k]))) assertEditable(t);
         const contentChanged = ['title', 'description'].some(key => patch[key] !== undefined && patch[key] !== t[key]);
         if (contentChanged && t.externalLinks?.some(value => value.fieldOwnership?.title === 'external' && patch.title !== undefined && patch.title !== t.title || value.fieldOwnership?.description === 'external' && patch.description !== undefined && patch.description !== t.description)) throw new Error('This content is owned by the external source. Edit it there, then import again.');
         if (contentChanged && t.externalLinks?.some(value => value.syncState === 'error')) throw new Error('Resolve the external sync issue before editing linked content.');
         boards.validateTicketUpdate(t, patch);
         const value = fields({ ...t, ...patch });
+        const externalStatus = patch.status !== undefined && patch.status !== t.status && t.externalLinks?.some(link => link.fieldOwnership?.status === 'external');
+        if (externalStatus) await writeTicketStatus(t, value.status, c);
         recordColumnFacts(t, { ...t, ...value, revision: t.revision + 1 }, c);
-        Object.assign(t, value, { revision: t.revision + 1 });
+        Object.assign(t, value, { revision: t.revision + (externalStatus ? 0 : 1) });
         boards.ensureTicket(t);
         execution.syncTicket(t); await save();
         const outgoing = contentChanged ? t.externalLinks?.find(item => item.fieldOwnership?.title === 'convoy' && item.fieldOwnership?.description === 'convoy') : null;

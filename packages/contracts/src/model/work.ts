@@ -125,6 +125,7 @@ type TicketConnectionBase = {
     update: boolean;
     threadRead?: boolean;
     reply?: boolean;
+    statusWrite?: boolean;
   };
   revision: number;
 };

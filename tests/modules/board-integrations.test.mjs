@@ -455,3 +455,82 @@ test('first import after adding status observations establishes a baseline witho
   assert.equal(state.tickets[0].externalLinks[0].remoteStatus, 'Done');
   assert.equal(state.tickets[0].externalLinks[0].remotePriority, 'High');
 });
+
+async function statusBoardFixture(write) {
+  const f = fixture({ listIssues: async () => [{ remoteId: '7', remoteKey: 'STUDY-7', title: 'Research', status: 'Submitted', rawStatus: 'submitted', remoteVersion: '1', fieldOwnership: { status: 'external' } }], setStatus: write });
+  const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+    connection: { baseUrl: 'https://research.example.com/api', authentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_READ_TEST' }, writeAuthentication: { type: 'bearer', credential: 'CONVOY_TICKET_SOURCE_WRITE_TEST' } },
+    operations: { list: { method: 'GET', path: 'studies', response: { items: '$.items' } }, status: { method: 'PATCH', path: 'studies/${remoteId}/status', request: { status: 'state', remoteVersion: 'version' }, response: { item: '$.study' } } },
+    mapping: { remoteId: '$.id', remoteKey: '$.id', title: '$.title', status: '$.state', remoteVersion: '$.version' },
+    values: { status: { submitted: 'Submitted', investigating: 'Investigating', accepted: 'Accepted' } } };
+  const source = await f.catalog.command({ action: 'saveTicketConnection', organizationId: 'org', provider: 'custom-http', name: 'Research registry', manifest });
+  await f.catalog.command({ action: 'importExternalTickets', connectionId: source.id, projectId: 'alpha' });
+  const board = await f.catalog.command({ action: 'saveBoard', name: 'Studies', projectIds: ['alpha'], grouping: { mode: 'field', field: 'status' }, columns: [{ id: 'inbox', name: 'Inbox', value: 'Submitted' }, { id: 'study', name: 'Study', value: 'Investigating' }, { id: 'accepted', name: 'Accepted', value: 'Accepted' }] });
+  return { ...f, board, source, ticket: f.state.tickets[0] };
+}
+
+test('source-backed board moves and status edits write through with mapped values and confirmed revisions', async () => {
+  const writes = [];
+  const f = await statusBoardFixture(async (_source, remoteId, input) => {
+    writes.push(input); assert.equal(remoteId, '7');
+    return { rawStatus: input.status, status: input.status === 'investigating' ? 'Investigating' : 'Accepted', remoteVersion: String(writes.length + 1) };
+  });
+  const c = { action: 'setBoardPlacement', boardId: f.board.id, ticketId: f.ticket.id, revision: f.ticket.revision, placement: { columnId: 'study' } };
+  const moved = await f.catalog.command(c);
+  assert.equal(f.ticket.status, 'Investigating');
+  assert.equal(f.ticket.externalLinks[0].remoteVersion, '2');
+  assert.equal(moved.fromColumnId, 'inbox'); assert.equal(moved.toColumnId, 'study');
+  await f.catalog.workflowEvents.recordCommand(c, moved);
+  assert.equal(f.state.workFacts.filter(v => v.event === 'ticket_moved').length, 1);
+  await f.catalog.command({ action: 'updateTicket', taskId: f.ticket.id, revision: f.ticket.revision, patch: { status: 'Accepted' } });
+  assert.equal(f.ticket.status, 'Accepted');
+  assert.deepEqual(writes.map(v => [v.status, v.remoteVersion]), [['investigating', '1'], ['accepted', '2']]);
+});
+
+test('failed source writes leave the ticket, placement and move events unchanged', async () => {
+  let calls = 0;
+  const f = await statusBoardFixture(async () => { calls++; throw Object.assign(new Error('Source revision conflict'), { status: 409 }); });
+  const revision = f.ticket.revision;
+  await assert.rejects(f.catalog.command({ action: 'setBoardPlacement', boardId: f.board.id, ticketId: f.ticket.id, revision, placement: { columnId: 'study' } }), /Source revision conflict/);
+  assert.equal(calls, 1); assert.equal(f.ticket.status, 'Submitted'); assert.equal(f.ticket.revision, revision);
+  assert.equal(f.state.workFacts.filter(v => v.event === 'ticket_moved').length, 0);
+  assert.equal(f.catalog.snapshot().boards.find(v => v.id === f.board.id).tickets[0].columnId, 'inbox');
+});
+
+test('WIP and unsupported mappings reject source moves before dispatch', async () => {
+  let calls = 0;
+  const f = await statusBoardFixture(async () => { calls++; });
+  await f.catalog.command({ action: 'saveBoard', ...f.board, columns: f.board.columns.map(v => v.id === 'study' ? { ...v, wipLimit: 1 } : v) });
+  await f.catalog.command({ action: 'createTicket', requestId: 'occupant', projectId: 'alpha', title: 'Occupant', status: 'Investigating' });
+  await assert.rejects(f.catalog.command({ action: 'setBoardPlacement', boardId: f.board.id, ticketId: f.ticket.id, revision: f.ticket.revision, placement: { columnId: 'study' } }), /WIP limit/);
+  await assert.rejects(f.catalog.command({ action: 'updateTicket', taskId: f.ticket.id, revision: f.ticket.revision, patch: { status: 'Unsupported' } }), /mapping/);
+  assert.equal(calls, 0);
+});
+
+
+test('uncertain status writes retain intent, retry with one identity and block conflicting changes', async () => {
+  const writes = [];
+  const f = await statusBoardFixture(async (_source, _remoteId, input) => {
+    writes.push(input);
+    if (writes.length === 1) throw new Error('Lost source response');
+    return { status: 'Investigating', rawStatus: 'investigating', remoteVersion: '2' };
+  });
+  const c = { action: 'setBoardPlacement', boardId: f.board.id, ticketId: f.ticket.id, revision: f.ticket.revision, placement: { columnId: 'study' } };
+  await assert.rejects(f.catalog.command(c), /Lost source response/);
+  assert.equal(f.state.ticketStatusChanges[0].state, 'outcome-unknown');
+  await assert.rejects(f.catalog.command({ action: 'updateTicket', taskId: f.ticket.id, revision: f.ticket.revision, patch: { status: 'Accepted' } }), /awaiting confirmation/);
+  assert.equal(writes.length, 1);
+  await f.catalog.command(c);
+  assert.equal(writes.length, 2); assert.deepEqual(writes[0], writes[1]);
+  assert.equal(f.ticket.status, 'Investigating'); assert.equal(f.state.ticketStatusChanges[0].state, 'applied');
+});
+
+test('ambiguous status mappings and read-only connections cannot dispatch changes', async () => {
+  let calls = 0;
+  const f = await statusBoardFixture(async () => { calls++; });
+  f.source.manifest.values.status.other = 'Accepted';
+  await assert.rejects(f.catalog.command({ action: 'updateTicket', taskId: f.ticket.id, revision: f.ticket.revision, patch: { status: 'Accepted' } }), /mapping/);
+  f.source.capabilities.statusWrite = false;
+  await assert.rejects(f.catalog.command({ action: 'setBoardPlacement', boardId: f.board.id, ticketId: f.ticket.id, revision: f.ticket.revision, placement: { columnId: 'study' } }), /owned by the external source/);
+  assert.equal(calls, 0);
+});
