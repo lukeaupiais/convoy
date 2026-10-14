@@ -12,6 +12,11 @@ triggers, but Work never imports or traverses workflow state.
 approval-gated agent moves, and explicit workflow actions. A move on a local
 board changes presentation only. A move on a field-backed board also changes its
 configured authoritative ticket field; the command result reports that effect.
+For an externally owned status, a source with status-write capability and an
+unambiguous configured value mapping can accept moves and status edits from
+Convoy. Work checks placement constraints before dispatch, persists the outbound
+intent, and applies the status and move event only after source confirmation.
+Read-only external fields remain protected.
 
 Work also owns ticket origin, external issue links, board creation destinations,
 and sync conflict decisions. An injected adapter speaks the external issue API;

@@ -1271,3 +1271,45 @@ test('acceptance: workflow reply waits for an unresolved manual reply, then cont
     assert.equal(completedEffect.message, undefined);
     assert.equal(completedEffect.blockingReplyRequestId, undefined);
 });
+
+test('acceptance: synchronized status moves write through the adapter and start a workflow once after confirmation', async t => {
+    const credential = 'CONVOY_TICKET_SOURCE_SYNC_ACCEPTANCE';
+    const writeCredential = 'CONVOY_TICKET_SOURCE_SYNC_WRITE_ACCEPTANCE';
+    const previousWrite = process.env[writeCredential]; process.env[writeCredential] = 'write-secret';
+    t.after(() => { if (previousWrite === undefined) delete process.env[writeCredential]; else process.env[writeCredential] = previousWrite; });
+    const previous = process.env[credential]; process.env[credential] = 'fixture-secret';
+    t.after(() => { if (previous === undefined) delete process.env[credential]; else process.env[credential] = previous; });
+    let remote = { id: '17', key: 'STUDY-17', title: 'Study', state: 'submitted', version: 1 };
+    const writes = [];
+    const custom = createCustomTicketSource({ resolver: async () => [{ address: '8.8.4.4', family: 4 }], fetcher: async (_url, options) => {
+        if (options.method === 'PATCH') {
+            const input = JSON.parse(options.body); writes.push(input);
+            assert.equal(input.version, remote.version);
+            assert.match(options.headers['Idempotency-Key'], /^status-/);
+            remote = { ...remote, state: input.state, version: remote.version + 1 };
+            return Response.json({ study: remote });
+        }
+        return Response.json({ items: [remote] });
+    } });
+    const f = await fixture(t, { externalTickets: createTicketSources({ 'custom-http': custom }) });
+    const manifest = { apiVersion: 'convoy.dev/v1alpha1', kind: 'TicketSource',
+        connection: { baseUrl: 'https://research.example.com/api', authentication: { type: 'bearer', credential }, writeAuthentication: { type: 'bearer', credential: writeCredential } },
+        operations: { list: { method: 'GET', path: 'studies', response: { items: '$.items' } }, status: { method: 'PATCH', path: 'studies/${remoteId}/status', request: { status: 'state', remoteVersion: 'version', remoteVersionType: 'integer' }, response: { item: '$.study' } } },
+        mapping: { remoteId: '$.id', remoteKey: '$.key', title: '$.title', status: '$.state', remoteVersion: '$.version' }, values: { status: { submitted: 'Submitted', studying: 'Studying' } } };
+    const source = await f.act('saveTicketConnection', { organizationId: 'personal', provider: 'custom-http', name: 'Research registry', manifest });
+    const board = await f.act('saveBoard', { name: 'Studies', projectIds: ['agent-platform'], grouping: { mode: 'field', field: 'status' }, columns: [{ id: 'inbox', name: 'Inbox', value: 'Submitted' }, { id: 'study', name: 'Study', value: 'Studying' }] });
+    await f.act('saveWorkflow', { workflow: { id: 'study-review', name: 'Study review', nodes: [{ id: 'gate', kind: 'human', name: 'Review study', prompt: 'Approve' }], edges: [] }, baseVersion: 0 });
+    await f.act('saveAutomation', { organizationId: 'personal', revision: 0, rule: { name: 'Study arrival', projectId: 'agent-platform', enabled: true, when: { event: 'ticket_moved', boardId: board.id, columnId: 'study' }, if: [], then: { action: 'start_workflow', workflowId: 'study-review', workflowVersion: 1 } } });
+    await f.act('importExternalTickets', { connectionId: source.id, projectId: 'agent-platform' });
+    let state = await f.snapshot(); const ticket = state.tickets[0];
+    assert.equal(ticket.agent, 'Unassigned'); assert.equal(state.workflowEventDecisions.items.filter(value => value.workflowId === 'study-review').length, 0);
+    await f.act('setBoardPlacement', { boardId: board.id, ticketId: ticket.id, revision: ticket.revision, placement: { columnId: 'study' } });
+    state = await f.snapshot();
+    assert.deepEqual(writes, [{ state: 'studying', version: 1 }]);
+    assert.equal(state.tickets[0].status, 'Studying'); assert.equal(state.tickets[0].externalLinks[0].remoteVersion, '2');
+    const decisions = state.workflowEventDecisions.items.filter(value => value.workflowId === 'study-review');
+    assert.equal(decisions.length, 1); assert.equal((await f.act('getWorkflowRun', { workflowRunId: decisions[0].runId })).status, 'waiting_gate');
+    await f.act('importExternalTickets', { connectionId: source.id, projectId: 'agent-platform' });
+    state = await f.snapshot(); assert.equal(state.tickets[0].status, 'Studying');
+    assert.equal(state.workflowEventDecisions.items.filter(value => value.workflowId === 'study-review').length, 1);
+});

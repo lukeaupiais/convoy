@@ -172,7 +172,7 @@ function defaultTemplates() {
 
 const phaseColumn = status => ({ Backlog: 'column-backlog', Ready: 'column-ready', 'In progress': 'column-in-progress', 'In review': 'column-in-review', Done: 'column-done' }[status] ?? 'column-backlog');
 
-export function createBoards({ state, save, projects, ticket, referencedColumn = () => false, referencedBoard = () => false }) {
+export function createBoards({ state, save, projects, ticket, referencedColumn = () => false, referencedBoard = () => false, writeStatus }) {
   state.boards ??= [];
   state.boardTemplates ??= [];
   state.boardPlacements ??= {};
@@ -371,10 +371,11 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
         if (b.projectIds?.length && !b.projectIds.includes(t.projectId)) throw new Error('Ticket project is not available on this board.');
         if (!isVisible(b, t)) throw new Error('Ticket is excluded by this board’s membership filters.');
         const fromColumnId = computedPlacement(b, t).columnId;
-        const normalized = normalizePlacement(b, c.placement); state.boardPlacements[String(t.id)] ??= {};
+        const normalized = normalizePlacement(b, c.placement);
         const column = b.columns.find(value => value.id === normalized.columnId);
         const field = b.grouping?.mode === 'field' ? b.grouping.field : null;
-        if ((field === 'status' || field === 'priority') && t.externalLinks?.some(value => value.fieldOwnership?.[field] === 'external')) throw new Error(`This ticket's ${field} is owned by the external source. Change it there and sync again.`);
+        const externalStatus = field === 'status' && t.externalLinks?.some(value => value.fieldOwnership?.status === 'external');
+        if ((field === 'priority' || (externalStatus && !writeStatus)) && t.externalLinks?.some(value => value.fieldOwnership?.[field] === 'external')) throw new Error(`This ticket's ${field} is owned by the external source. Change it there and sync again.`);
         const fieldValue = field ? column.value ?? column.name : null;
         const previousFieldValue = field?.startsWith('custom.') ? t.customFields?.[field.slice(7)] : field ? t[field] : undefined;
         if (field === 'status' && (typeof fieldValue !== 'string' || !fieldValue.trim() || fieldValue.length > 80)) throw new Error('Shared status grouping needs a non-empty status value.');
@@ -390,13 +391,16 @@ export function createBoards({ state, save, projects, ticket, referencedColumn =
           if (visible.filter(value => wipColumn(affected, value) === affectedColumn.id).length >= affectedColumn.wipLimit) throw new Error(`Column ${affectedColumn.name} is at its WIP limit.`);
         }
         // All checks above happen before either the board placement or shared field is changed.
+        if (externalStatus && previousFieldValue !== fieldValue) await writeStatus(t, fieldValue, c);
+        state.boardPlacements[String(t.id)] ??= {};
         state.boardPlacements[String(t.id)][b.id] = normalized;
         if (field) {
           if (field.startsWith('custom.')) { t.customFields ??= {}; t.customFields[field.slice(7)] = fieldValue; }
           else if (field === 'status') t.status = fieldValue;
           else t[field] = fieldValue;
         }
-        t.revision++; await save(); return {
+        if (!externalStatus || previousFieldValue === fieldValue) t.revision++;
+        await save(); return {
           ticketId: t.id,
           boardId: b.id,
           placement: clone(normalized),
