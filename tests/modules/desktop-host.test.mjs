@@ -63,35 +63,32 @@ test('desktop startup timeout identifies the last reported initialization phase'
   assert.equal(killed, true);
 });
 
-test('desktop allows startup to continue while initialization phases make progress', async () => {
-  const child = new EventEmitter();
-  child.kill = () => {};
-  const start = launchDaemon(() => child, { entry: '/daemon', env: {}, cwd: '/', timeoutMs: 60 });
-  const phase = setTimeout(() => child.emit('message', { type: 'startup-phase', phase: 'Hydrating runtime state' }), 40);
-  const ready = setTimeout(() => child.emit('message', { type: 'ready', url: 'http://127.0.0.1:4317' }), 80);
-  try {
-    assert.equal((await start).url, 'http://127.0.0.1:4317');
-  } finally {
-    clearTimeout(phase);
-    clearTimeout(ready);
-  }
-});
-
-test('desktop startup progress cannot bypass the overall startup deadline', async () => {
+test('desktop allows a silent initialization stage beyond twenty seconds', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const child = new EventEmitter();
   let killed = false;
   child.kill = () => { killed = true; };
-  const start = launchDaemon(() => child, {
-    entry: '/daemon', env: {}, cwd: '/', timeoutMs: 60, maxStartupMs: 90,
-  });
-  let phaseNumber = 0;
-  const phase = setInterval(() => child.emit('message', {
-    type: 'startup-phase', phase: `Initializing stage ${++phaseNumber}`,
-  }), 20);
-  try {
-    await assert.rejects(start, /maximum startup time/);
-    assert.equal(killed, true);
-  } finally {
-    clearInterval(phase);
+  const start = launchDaemon(() => child, { entry: '/daemon', env: {}, cwd: '/' });
+  child.emit('message', { type: 'startup-phase', phase: 'Checking SQLite integrity' });
+  t.mock.timers.tick(30_000);
+  assert.equal(killed, false);
+  child.emit('message', { type: 'ready', url: 'http://127.0.0.1:4317' });
+  assert.equal((await start).url, 'http://127.0.0.1:4317');
+});
+
+test('desktop startup progress cannot extend the overall two-minute deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new EventEmitter();
+  let killed = false;
+  child.kill = () => { killed = true; };
+  const start = launchDaemon(() => child, { entry: '/daemon', env: {}, cwd: '/' });
+  const failure = assert.rejects(start, /120 seconds.*Hydrating runtime state/);
+  for (let stage = 1; stage <= 11; stage++) {
+    t.mock.timers.tick(10_000);
+    child.emit('message', { type: 'startup-phase', phase: `Initializing stage ${stage}` });
   }
+  child.emit('message', { type: 'startup-phase', phase: 'Hydrating runtime state' });
+  t.mock.timers.tick(10_000);
+  await failure;
+  assert.equal(killed, true);
 });

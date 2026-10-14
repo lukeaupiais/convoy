@@ -1,6 +1,6 @@
 /** Supervises the daemon utility process without exposing it to the renderer. */
 export function launchDaemon(fork, {
-  entry, env, cwd, onExit, timeoutMs = 20_000, maxStartupMs = 120_000,
+  entry, env, cwd, onExit, timeoutMs = 120_000,
 }) {
   const child = fork(entry, [], {
     cwd,
@@ -14,17 +14,15 @@ export function launchDaemon(fork, {
     let settled = false;
     let started = false;
     let startupPhase = 'Starting daemon process';
+    // Synchronous persistence initialization cannot report liveness while it runs.
+    // Bound total startup time rather than treating a silent stage as a failure.
     const timer = setTimeout(() => fail(new Error(
-      `Convoy daemon startup made no progress for ${timeoutMs / 1000} seconds. Last startup phase: ${startupPhase}.`,
+      `Convoy daemon did not start within ${timeoutMs / 1000} seconds. Last startup phase: ${startupPhase}.`,
     )), timeoutMs);
-    const deadline = setTimeout(() => fail(new Error(
-      `Convoy daemon exceeded the maximum startup time of ${maxStartupMs / 1000} seconds. Last startup phase: ${startupPhase}.`,
-    )), maxStartupMs);
     function fail(error) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      clearTimeout(deadline);
       child.kill();
       reject(error);
     }
@@ -33,7 +31,6 @@ export function launchDaemon(fork, {
           && typeof message.phase === 'string' && message.phase.trim()
           && message.phase !== startupPhase) {
         startupPhase = message.phase;
-        timer.refresh();
       }
       if (message?.type === 'startup-error')
         fail(new Error(message.message || 'Convoy daemon failed to start.'));
@@ -41,7 +38,6 @@ export function launchDaemon(fork, {
         settled = true;
         started = true;
         clearTimeout(timer);
-        clearTimeout(deadline);
         resolve({ child, url: message.url });
       }
     });
