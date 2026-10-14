@@ -20,6 +20,11 @@ let runtime;
 let lockPath;
 let stopping = false;
 
+function startupPhase(phase) {
+  console.log(`Convoy daemon startup: ${phase}`);
+  process.parentPort?.postMessage({ type: 'startup-phase', phase });
+}
+
 async function shutdown(code = 0) {
   if (stopping) return;
   stopping = true;
@@ -45,11 +50,13 @@ process.parentPort?.on('message', (event) => {
 });
 
 async function main() {
+  startupPhase('Checking configuration');
   const { root, legacyDirectory, staticDirectory, workerDirectory } = daemonPaths();
   const configuration = serverConfiguration();
   if (staticDirectory) await access(join(staticDirectory, 'index.html'));
   await mkdir(root, { recursive: true, mode: 0o700 });
   const candidateLockPath = join(root, 'daemon.lock');
+  startupPhase('Acquiring state lock');
   try {
     const pid = Number(await readFile(candidateLockPath, 'utf8'));
     try {
@@ -70,7 +77,9 @@ async function main() {
     await lock.close();
   }
 
+  startupPhase('Loading authentication');
   auth = await createAuth(root);
+  startupPhase('Loading deployment identity');
   const deployment = await createDeploymentIdentity(root, {
     displayName: process.env.CONVOY_DISPLAY_NAME ?? 'Local Convoy',
     publicOrigin: configuration.publicOrigin,
@@ -107,7 +116,9 @@ async function main() {
     providerAdapters,
     credentialBrokerFactory: ({ authorize, resolveSubscription }) =>
       createCredentialBroker(join(root, 'credentials'), { authorize, resolveSubscription }),
+    onStartupPhase: startupPhase,
   });
+  startupPhase('Starting HTTP server');
   server = createApp({
     runtime,
     auth,

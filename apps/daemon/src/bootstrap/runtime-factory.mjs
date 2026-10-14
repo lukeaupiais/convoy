@@ -9,8 +9,9 @@ import { createTicketSources } from '../adapters/ticket-sources.mjs';
  * Filesystem composition for production, tests, and smoke scripts.
  * The control plane itself receives ports and knows nothing about paths.
  */
-export async function createRuntime({ directory, legacyDirectory, persistenceBackend, databaseUrl, importLegacy, onPersistenceFailure, ...dependencies }) {
+export async function createRuntime({ directory, legacyDirectory, persistenceBackend, databaseUrl, importLegacy, onPersistenceFailure, onStartupPhase = () => {}, ...dependencies }) {
   if (!directory) throw new Error('A runtime state directory is required.');
+  onStartupPhase('Loading persisted runtime');
   const persistence = await createPersistence({
     directory,
     legacyDirectory,
@@ -19,6 +20,7 @@ export async function createRuntime({ directory, legacyDirectory, persistenceBac
     databaseUrl,
     importLegacy,
     onFatal: onPersistenceFailure,
+    onStartupPhase,
   });
   const externalTickets = createTicketSources({
     linear: createLinearTickets(),
@@ -26,5 +28,6 @@ export async function createRuntime({ directory, legacyDirectory, persistenceBac
       allowedPrivateOrigins: (process.env.CONVOY_TICKET_SOURCE_PRIVATE_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean),
     }),
   });
+  onStartupPhase('Initializing control plane');
   return createControlPlaneRuntime({ externalTickets, ...dependencies, persistence });
 }

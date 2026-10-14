@@ -3,7 +3,7 @@ import { mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRowStore } from './row-store.mjs';
 
-export async function createSqliteStore(directory, fallback, storeId, existingMarker = false, onFatal) {
+export async function createSqliteStore(directory, fallback, storeId, existingMarker = false, onFatal, onStartupPhase = () => {}) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const path = join(directory, 'state.sqlite');
   let newDatabase = false;
@@ -22,12 +22,14 @@ export async function createSqliteStore(directory, fallback, storeId, existingMa
       if (error.code !== 'ENOENT') throw new Error('Legacy runtime state is unreadable. Refusing to migrate it.');
     }
   }
+  onStartupPhase('Opening SQLite database');
   const db = new DatabaseSync(path);
   try {
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     const version = db.prepare('PRAGMA user_version').get().user_version;
     if (version > 1 || (!newDatabase && version !== 1))
       throw new Error('Unsupported SQLite runtime schema version.');
+    onStartupPhase('Checking SQLite integrity');
     if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok')
       throw new Error('SQLite runtime state failed its integrity check.');
     db.exec(`CREATE TABLE IF NOT EXISTS state_items (
@@ -44,13 +46,18 @@ export async function createSqliteStore(directory, fallback, storeId, existingMa
     }
     if (newDatabase) db.exec('PRAGMA user_version=1');
     const select = db.prepare('SELECT bucket, item_key, ordinal, payload FROM state_items');
-    if (!newDatabase && select.all().length === 0)
+    if (!newDatabase && !db.prepare('SELECT 1 FROM state_items LIMIT 1').get())
       throw new Error('SQLite runtime state is empty. Refusing to replace it.');
     const upsert = db.prepare(`INSERT INTO state_items (bucket,item_key,ordinal,payload) VALUES (?,?,?,?)
       ON CONFLICT(bucket,item_key) DO UPDATE SET ordinal=excluded.ordinal,payload=excluded.payload`);
     const remove = db.prepare('DELETE FROM state_items WHERE bucket=? AND item_key=?');
     const store = await createRowStore({
-      load: async () => select.all().map((row) => ({ bucket: row.bucket, key: row.item_key, position: row.ordinal, payload: row.payload })),
+      load: async () => {
+        onStartupPhase('Reading SQLite runtime rows');
+        const rows = select.all();
+        onStartupPhase('Hydrating runtime state');
+        return rows.map((row) => ({ bucket: row.bucket, key: row.item_key, position: row.ordinal, payload: row.payload }));
+      },
       commit: async (changed, removed) => {
         db.exec('BEGIN IMMEDIATE');
         try {

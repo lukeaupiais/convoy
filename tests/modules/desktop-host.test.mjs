@@ -52,3 +52,46 @@ test('desktop opens only credential-free HTTPS links externally', () => {
   assert.equal(externalWebLink('http://example.com'), null);
   assert.equal(externalWebLink('https://user:pass@example.com'), null);
 });
+
+test('desktop startup timeout identifies the last reported initialization phase', async () => {
+  const child = new EventEmitter();
+  let killed = false;
+  child.kill = () => { killed = true; };
+  const start = launchDaemon(() => child, { entry: '/daemon', env: {}, cwd: '/', timeoutMs: 20 });
+  child.emit('message', { type: 'startup-phase', phase: 'Loading persisted runtime' });
+  await assert.rejects(start, /Loading persisted runtime/);
+  assert.equal(killed, true);
+});
+
+test('desktop allows startup to continue while initialization phases make progress', async () => {
+  const child = new EventEmitter();
+  child.kill = () => {};
+  const start = launchDaemon(() => child, { entry: '/daemon', env: {}, cwd: '/', timeoutMs: 60 });
+  const phase = setTimeout(() => child.emit('message', { type: 'startup-phase', phase: 'Hydrating runtime state' }), 40);
+  const ready = setTimeout(() => child.emit('message', { type: 'ready', url: 'http://127.0.0.1:4317' }), 80);
+  try {
+    assert.equal((await start).url, 'http://127.0.0.1:4317');
+  } finally {
+    clearTimeout(phase);
+    clearTimeout(ready);
+  }
+});
+
+test('desktop startup progress cannot bypass the overall startup deadline', async () => {
+  const child = new EventEmitter();
+  let killed = false;
+  child.kill = () => { killed = true; };
+  const start = launchDaemon(() => child, {
+    entry: '/daemon', env: {}, cwd: '/', timeoutMs: 60, maxStartupMs: 90,
+  });
+  let phaseNumber = 0;
+  const phase = setInterval(() => child.emit('message', {
+    type: 'startup-phase', phase: `Initializing stage ${++phaseNumber}`,
+  }), 20);
+  try {
+    await assert.rejects(start, /maximum startup time/);
+    assert.equal(killed, true);
+  } finally {
+    clearInterval(phase);
+  }
+});

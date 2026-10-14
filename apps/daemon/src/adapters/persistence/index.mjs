@@ -8,7 +8,7 @@ import { createSqliteStore } from './sqlite-store.mjs';
 import { createPostgresStore } from './postgres-store.mjs';
 
 /** Build the daemon's persistence ports. Only the composition root calls this. */
-export async function createPersistence({ directory, legacyDirectory, initialState, backend = 'file', databaseUrl, importLegacy = false, onFatal }) {
+export async function createPersistence({ directory, legacyDirectory, initialState, backend = 'file', databaseUrl, importLegacy = false, onFatal, onStartupPhase = () => {} }) {
   if (!['file', 'sqlite', 'postgres'].includes(backend))
     throw new Error('Unknown persistence backend.');
   if (backend === 'file') {
@@ -20,6 +20,7 @@ export async function createPersistence({ directory, legacyDirectory, initialSta
   let storeId;
   let existingMarker = false;
   if (backend !== 'file') {
+    onStartupPhase('Opening persistence metadata');
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const markerPath = join(directory, 'storage.json');
     let marker;
@@ -42,7 +43,7 @@ export async function createPersistence({ directory, legacyDirectory, initialSta
     storeId = marker.storeId;
   }
   const store = backend === 'sqlite'
-    ? await createSqliteStore(directory, initialState, storeId, existingMarker, onFatal)
+    ? await createSqliteStore(directory, initialState, storeId, existingMarker, onFatal, onStartupPhase)
     : backend === 'postgres'
       ? await createPostgresStore(directory, initialState, databaseUrl, importLegacy, storeId, existingMarker, onFatal)
       : backend === 'file'
