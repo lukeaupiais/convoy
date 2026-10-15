@@ -157,6 +157,53 @@ test('a single unconfigured detail remains visible with its source field name', 
     artifacts: [],
     details: { disposition: 'Hold for inspection' },
   });
-  assert.match(html, /<details class="workflow-output-details" open="">/);
+  assert.match(html, /<dl class="workflow-output-fields">/);
+  assert.doesNotMatch(html, /Details · 1/);
   assert.match(html, /<dt>disposition<\/dt><dd>Hold for inspection<\/dd>/);
+});
+
+test('retained output identifies its producing activity and revision separately from the current step', () => {
+  const html = render({
+    nodeId: 'measure',
+    step: 'Measure samples',
+    revision: 7,
+    summary: 'Measured values',
+    artifacts: [],
+  });
+  assert.match(html, /Observe result/);
+  assert.match(html, /Output from Measure samples/);
+  assert.match(html, /Revision 7/);
+});
+
+test('summary renders safe Markdown structure while detail values retain their exact text', () => {
+  const html = render({
+    nodeId: 'observe',
+    step: 'Observe result',
+    revision: 1,
+    summary: '# Findings\n\nFirst paragraph.\n\n- Measured **twice**\n- <script>alert(1)</script>',
+    details: { release_note: 'Keep **literal** characters.' },
+    artifacts: [],
+  });
+  assert.match(html, /<h2>Findings<\/h2>/);
+  assert.match(html, /<p>First paragraph\.<\/p>/);
+  assert.match(html, /<li>Measured <strong>twice<\/strong><\/li>/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /<dd>Keep \*\*literal\*\* characters\.<\/dd>/);
+});
+
+test('a summary explicitly marked primary remains visible beside a single unconfigured detail', () => {
+  const html = render(
+    {
+      nodeId: 'observe',
+      step: 'Observe result',
+      summary: 'Main analysis',
+      artifacts: [],
+      details: { schedule: 'Next week' },
+    },
+    [{ source: 'summary', primary: true }],
+  );
+  assert.match(html, /Main analysis/);
+  assert.match(html, /<dt>schedule<\/dt>/);
+  assert.doesNotMatch(html, /workflow-supporting-summary/);
 });

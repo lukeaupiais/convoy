@@ -22,14 +22,14 @@
 }
 .ticket-window-controls {
   display: flex;
-  gap: 3px;
+  gap: 6px;
   margin-left: auto;
 }
 .ticket-window-controls > button {
   display: grid;
-  width: 24px;
-  height: 22px;
-  min-height: 22px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
   place-items: center;
   padding: 0;
   border: 1px solid var(--line);
@@ -40,14 +40,13 @@
 }
 .ticket-options-menu {
   position: absolute;
-  top: 30px;
-  right: 4px;
+  top: 58px;
+  right: 28px;
   z-index: 20;
   display: grid;
   width: 190px;
   padding: 3px;
-  border: 2px solid;
-  border-color: var(--line);
+  border: 1px solid var(--line);
   background: var(--surface);
   box-shadow: none;
 }
@@ -302,7 +301,6 @@
 }
 
 /* Ticket dialogs have one presentation, independent of the page that opens them. */
-.detail.task-detail.ticket-detail,
 .new-task.dialog {
   --ink: #e8e7df;
   --muted: #a6b6bb;
@@ -324,60 +322,23 @@
   box-shadow: 3px 3px #080f18;
 }
 
-body :is(.ticket-detail, .new-task.dialog) :is(input, textarea, select, .select-trigger) {
+body .new-task.dialog :is(input, textarea, select, .select-trigger) {
   background: #15242e;
   color: #e8e7df;
   border-color: #526872;
   border-radius: 0;
   box-shadow: none;
 }
-body
-  :is(.ticket-detail, .new-task.dialog)
-  :is(label, h2, h3, legend, .task-id, .description, .field-hint) {
+body .new-task.dialog :is(label, h2, h3, legend, .task-id, .description, .field-hint) {
   color: #d3dcd8;
 }
-body
-  .ticket-detail
-  :is(.ticket-window-controls button, .secondary, .ticket-back, .inspector-tabs button) {
-  background: #293e47;
-  color: #e8e7df;
-  border: 1px solid #526872;
-  border-radius: 0;
-  box-shadow: none;
-}
-body :is(.ticket-detail, .new-task.dialog) .primary {
+body .new-task.dialog .primary {
   background: #c7ac76;
   color: #15242e;
   border-color: #c7ac76;
   box-shadow: none;
 }
-body .ticket-detail .inspector-tabs button.selected {
-  background: #304a51;
-  color: #8db9ac;
-}
-body .ticket-detail .detail-top {
-  border-bottom: 1px solid #384e58;
-  padding-bottom: 13px;
-}
-body .ticket-detail .ticket-property-grid {
-  background: #293e47;
-  border: 1px solid #384e58;
-  border-radius: 0;
-}
-body .ticket-detail .ticket-options-menu {
-  background: #20313b;
-  color: #e8e7df;
-  border: 1px solid #526872;
-  box-shadow: 3px 3px #080f18;
-}
-body .ticket-detail .ticket-options-menu button {
-  color: #e8e7df;
-}
-body .ticket-detail .ticket-options-menu button:is(:hover, :focus-visible) {
-  background: #304a51;
-  color: #8db9ac;
-}
-body:has(:is(.ticket-detail, .new-task.dialog)) .select-popover {
+body:has(.new-task.dialog) .select-popover {
   --ink: #e8e7df;
   --muted: #a6b6bb;
   --line: #384e58;
@@ -388,13 +349,178 @@ body:has(:is(.ticket-detail, .new-task.dialog)) .select-popover {
   font-family: var(--font-system);
   box-shadow: 3px 3px #080f18;
 }
-body:has(:is(.ticket-detail, .new-task.dialog)) .select-options > button {
+body:has(.new-task.dialog) .select-options > button {
   color: #e8e7df;
   border-radius: 0;
 }
-body:has(:is(.ticket-detail, .new-task.dialog))
-  .select-options
-  > button:is(:hover, [aria-selected='true']) {
+body:has(.new-task.dialog) .select-options > button:is(:hover, [aria-selected='true']) {
   background: #304a51;
   color: #8db9ac;
+}
+
+/* Ticket reading surface. The shell, controls, and portalled selects share tokens. */
+body .detail.task-detail.ticket-detail {
+  --ink: #e8e7df;
+  --muted: #a6b6bb;
+  --accent: #8db9ac;
+  --accent-hover: #a5ccbf;
+  --sea: #8db9ac;
+  --paper: #15242e;
+  --surface: #20313b;
+  --surface-2: #293e47;
+  --line: #384e58;
+  --line-strong: #526872;
+  --danger: #e1b4a6;
+  --raised: none;
+  --inset: none;
+  padding: 0;
+  color: var(--ink);
+  background: var(--surface);
+  font-family: var(--font-system);
+  border: 1px solid #526872;
+  border-radius: 5px;
+  box-shadow: 0 24px 90px #080f1866;
+  scrollbar-color: #526872 var(--surface);
+}
+body .ticket-detail .detail-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  min-height: 54px;
+  margin: 0;
+  padding: 10px 20px;
+  background: var(--paper);
+  border: 0;
+}
+body .ticket-detail .detail-top .task-id {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+body .ticket-detail .ticket-window-controls button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+body .ticket-detail .ticket-window-controls button:enabled:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+body .ticket-detail .ticket-options-menu {
+  top: 48px;
+  right: 16px;
+  padding: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  box-shadow: 0 8px 24px #080f1866;
+}
+body .ticket-detail .ticket-options-menu button {
+  min-height: 34px;
+  color: var(--ink);
+}
+body .ticket-detail .ticket-options-menu button:is(:hover, :focus-visible) {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+body .ticket-detail .inspector-pane {
+  padding: 24px;
+}
+body .ticket-workspace-dialog .inspector-pane {
+  padding: 0;
+}
+body .ticket-detail :is(input, textarea, select, .select-trigger) {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  box-shadow: none;
+}
+body .ticket-detail :is(label, h2, h3, legend, .description, .field-hint) {
+  color: var(--ink);
+}
+body .ticket-detail :is(.secondary, .ticket-back, .inspector-tabs button) {
+  min-height: 32px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  box-shadow: 0 1px 2px #080f181a;
+}
+body .ticket-detail :is(.secondary, .ticket-back):enabled:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+body .ticket-detail .primary {
+  min-height: 34px;
+  background: #c7ac76;
+  color: var(--paper);
+  border: 1px solid #c7ac76;
+  border-radius: 3px;
+  box-shadow: none;
+}
+body .ticket-detail .primary:enabled:hover {
+  background: #c7ac76;
+  filter: brightness(1.08);
+}
+body .ticket-detail .inspector-tabs button.selected {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+body .ticket-workspace-dialog .ticket-edit-form {
+  padding: 28px 32px;
+}
+body .ticket-detail .ticket-property-grid {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+body .ticket-detail .secondary:disabled {
+  opacity: 0.5;
+}
+body:has(.ticket-detail) .select-popover {
+  --ink: #e8e7df;
+  --muted: #a6b6bb;
+  --line: #384e58;
+  background: #20313b;
+  color: #e8e7df;
+  border: 1px solid #526872;
+  border-radius: 3px;
+  font-family: var(--font-system);
+  box-shadow: 0 8px 24px #080f1866;
+}
+body:has(.ticket-detail) .select-options > button {
+  color: #e8e7df;
+  border-radius: 2px;
+}
+body:has(.ticket-detail) .select-options > button:is(:hover, [aria-selected='true']) {
+  background: #293e47;
+  color: #8db9ac;
+}
+@media (max-width: 600px) {
+  body .detail.task-detail.ticket-detail {
+    max-height: calc(var(--viewport-height, 100dvh) - 20px);
+    margin: 0;
+    border-radius: 3px;
+  }
+  body .ticket-detail .detail-top {
+    padding: 8px 12px;
+  }
+  body .ticket-detail .ticket-window-controls button {
+    width: 40px;
+    height: 40px;
+  }
+  body .ticket-workspace-dialog .ticket-edit-form {
+    padding: 20px 16px;
+  }
+  body .ticket-detail .ticket-options-menu {
+    top: 50px;
+    right: 12px;
+  }
 }

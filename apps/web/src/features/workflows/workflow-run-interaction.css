@@ -60,10 +60,8 @@
   overflow-wrap: anywhere;
 }
 .workflow-submission-summary.is-collapsed {
-  display: -webkit-box;
+  max-height: 15rem;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 6;
 }
 .workflow-summary-toggle {
   margin-top: 5px;
@@ -887,4 +885,169 @@
   z-index: 1;
   padding: 12px 0 0;
   background: var(--surface);
+}
+
+/* Activity output keeps source identity separate from the current execution step. */
+.workflow-output-provenance {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 16px 0 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.workflow-output-provenance small {
+  white-space: nowrap;
+  font-size: 11px;
+}
+.workflow-output-summary {
+  min-width: 0;
+}
+.workflow-output-summary .workflow-output-label {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.workflow-submission-summary {
+  margin: 0;
+  white-space: normal;
+}
+.workflow-submission-summary .workflow-markdown {
+  font-family: var(--font-system);
+  font-size: 14px;
+  line-height: 1.75;
+}
+.workflow-submission-summary .workflow-markdown > :first-child {
+  margin-top: 0;
+}
+.workflow-submission-summary .workflow-markdown > :last-child {
+  margin-bottom: 0;
+}
+.workflow-submission-summary .workflow-markdown p {
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+}
+.workflow-submission-summary .workflow-markdown pre {
+  overflow: auto;
+  max-width: 100%;
+}
+.workflow-output-summary .workflow-summary-toggle {
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 5px 0;
+  font-weight: 600;
+}
+.workflow-submission .workflow-output-fields {
+  margin: 12px 0 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.workflow-output-fields dt {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.workflow-submission .workflow-output-fields dd {
+  font-size: 14px;
+  line-height: 1.75;
+}
+.workflow-run-interaction > .workflow-collection-controls {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.workflow-run-interaction > .workflow-collection-controls:empty {
+  display: none;
+}
+.workflow-activity-history {
+  margin: 0;
+  padding: 0;
+}
+.workflow-activity-history > summary {
+  padding: 8px 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.workflow-activity-history ol {
+  gap: 0;
+  margin: 12px 0 0 5px;
+  padding: 0 0 0 18px;
+  border-left: 1px solid var(--line);
+  list-style: none;
+}
+.workflow-activity-history li {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 12px;
+  padding: 0 0 22px;
+}
+.workflow-activity-history li::before {
+  position: absolute;
+  top: 4px;
+  left: -22px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--sea);
+  content: '';
+}
+.workflow-history-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.workflow-history-outcome {
+  color: var(--sea);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.workflow-activity-history time {
+  grid-column: 1 / -1;
+  font-size: 11px;
+}
+@media (max-width: 600px) {
+  .workflow-submission .workflow-output-fields {
+    padding: 14px;
+  }
+  .workflow-output-summary .workflow-summary-toggle {
+    min-height: 40px;
+  }
+}
+
+.workflow-submission .workflow-supporting-summary {
+  padding: 10px 0;
+}
+.workflow-submission .workflow-supporting-summary > summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.workflow-submission .workflow-supporting-summary[open] > summary {
+  margin-bottom: 14px;
+}
+.workflow-submission-summary .workflow-markdown {
+  margin: 0;
+  padding: 0;
+}
+
+.workflow-state-labels .workflow-run-link {
+  grid-column: auto;
+  justify-self: end;
+  text-align: right;
+}
+.workflow-submission .workflow-primary-detail {
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.workflow-primary-detail > strong {
+  color: var(--muted);
+  font-size: 12px;
 }

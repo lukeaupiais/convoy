@@ -1,6 +1,6 @@
 import { writableTicketStatuses } from '../integrations';
 import { useEffect, useRef, useState } from 'react';
-import { FileText, Paperclip, X } from 'lucide-react';
+import { Bot, FileText, Flag, FolderKanban, Paperclip, Pencil, X } from 'lucide-react';
 import {
   command,
   owns,
@@ -109,6 +109,7 @@ function TicketFiles({
   if (!editing && !files.length) return null;
   return (
     <section className="ticket-files" aria-label="Attachments">
+      <h3>Attachments</h3>
       <div className="ticket-file-list">
         {files.map((file) => (
           <div className="ticket-file" key={file.id}>
@@ -500,8 +501,8 @@ export function TicketDetails({
       <section className="ticket-summary ticket-workspace">
         <header className="ticket-workspace-heading">
           <div>
-            <h2>{ticket.title}</h2>
             <span className="ticket-status">{ticket.status}</span>
+            <h2>{ticket.title}</h2>
           </div>
           <button
             className="secondary"
@@ -509,9 +510,32 @@ export function TicketDetails({
             title={!runtimeAvailable ? 'Reconnect to refresh before editing.' : undefined}
             onClick={() => setEditing(true)}
           >
+            <Pencil size={13} aria-hidden="true" />
             Edit
           </button>
         </header>
+        <dl className="ticket-overview-properties" aria-label="Ticket properties">
+          <div>
+            <dt>
+              <FolderKanban size={14} aria-hidden="true" /> Project
+            </dt>
+            <dd>{project?.name ?? ticket.projectId}</dd>
+          </div>
+          <div>
+            <dt>
+              <Flag size={14} aria-hidden="true" /> Priority
+            </dt>
+            <dd>{ticket.priority}</dd>
+          </div>
+          {ticket.agent && ticket.agent !== 'Unassigned' && (
+            <div>
+              <dt>
+                <Bot size={14} aria-hidden="true" /> Agent
+              </dt>
+              <dd>{ticket.agent}</dd>
+            </div>
+          )}
+        </dl>
         {message && (
           <p className="ticket-feedback" role="status">
             {message}
@@ -828,25 +852,10 @@ export function TicketDetails({
             {session?.flow && <WorkflowActivityHistory session={session} />}
           </div>
           <aside className="ticket-context" aria-label="Ticket context">
-            <section className="ticket-context-group">
-              <dl className="ticket-context-facts">
-                <div>
-                  <dt>Project</dt>
-                  <dd>{project?.name ?? ticket.projectId}</dd>
-                </div>
-                {ticket.agent && ticket.agent !== 'Unassigned' && (
-                  <div>
-                    <dt>Agent</dt>
-                    <dd>{ticket.agent}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt>Priority</dt>
-                  <dd>{ticket.priority}</dd>
-                </div>
-              </dl>
-            </section>
-            <details className="ticket-context-more ticket-context-related">
+            <details
+              className="ticket-context-more ticket-context-related"
+              open={related.length > 0 || undefined}
+            >
               <summary>Related tickets{related.length > 0 ? ` · ${related.length}` : ''}</summary>
               <div className="ticket-related-content">
                 {related.map(({ relation, other }) => (
