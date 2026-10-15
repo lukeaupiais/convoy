@@ -90,6 +90,22 @@ export function workflowAttentionLabel(session: Session) {
   return undefined;
 }
 
+/** Only known textual captures are eligible for inline preview. */
+export function workflowArtifactPreviewKind(
+  artifact?: Pick<WorkflowSubmissionArtifact, 'mime' | 'name' | 'path'>,
+) {
+  const mime = (artifact?.mime ?? '').split(';')[0].trim().toLowerCase();
+  if (
+    mime === 'text/markdown' ||
+    ((!mime || mime === 'text/plain') &&
+      /\.(?:md|markdown|mdown)$/i.test(artifact?.name || artifact?.path || ''))
+  )
+    return 'markdown';
+  if (mime === 'application/json' || mime.endsWith('+json')) return 'json';
+  if (mime === 'text/plain') return 'text';
+  return 'download';
+}
+
 export function workflowArtifactCollection(submission?: WorkflowSubmission) {
   const artifacts =
     submission?.artifacts.filter(

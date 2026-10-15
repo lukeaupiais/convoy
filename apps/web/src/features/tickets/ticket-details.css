@@ -695,3 +695,17 @@ body .ticket-detail .ticket-file-preview > section {
 body .ticket-detail .ticket-files > p {
   color: #e1b4a6;
 }
+
+.ticket-description-disclosure {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.ticket-description-disclosure > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.ticket-description-disclosure[open] > summary {
+  margin-bottom: 14px;
+}

@@ -13,6 +13,9 @@ captured output and files, supported pending interactions, linked communication,
 and concise disclosed history. Empty optional sections are omitted. Instructions,
 logs, runner identifiers, mutable workspace changes, and operational recovery
 remain accessible through execution details and supported menu actions.
+When a ticket has a workflow activity, it precedes the disclosed ticket description.
+Explicitly designated primary detail material precedes the supporting summary;
+a single unconfigured detail remains visible under its original field name.
 
 Published node presentation bindings may select a summary, declared detail field,
 or captured artifact, with an optional label and one primary selection. Bindings
@@ -32,11 +35,16 @@ Captured Markdown, text, and JSON have previews; other formats use metadata and
 download. Inspection preserves the selected revision during unrelated snapshot
 updates and identifies superseded captures. Missing required material blocks the
 affected decision. Preview and download recheck authorized content access.
+Decisions remain disabled while the reader displays a superseded revision. Opening
+the current revision restores the current activity's available controls.
 
-The inspector supports keyboard file selection, focus containment, Escape, and
-focus return. Closing it inside a ticket dialog closes only the inspector. Narrow
-screens use a full-width overlay. Content is escaped or rendered through the safe
-Markdown renderer rather than executing captured HTML or SVG.
+The inspector expands within the activity workspace, keeping its decision controls
+available. It supports keyboard file selection, Escape, and focus return to the
+collection opener. Escape inside the reader closes only the reader. Narrow screens
+stack the collection navigator above the material. Markdown previews retain a source
+view; Markdown file names may identify text captured with a plain-text media type.
+Content is escaped or rendered through the safe Markdown renderer rather than
+executing captured HTML or SVG.
 
 ## Communication and recovery
 

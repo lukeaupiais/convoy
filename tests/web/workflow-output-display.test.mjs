@@ -132,3 +132,31 @@ test('empty collections are omitted and bound fields without labels retain their
   assert.match(html, /<dt>quantity<\/dt><dd>24<\/dd>/);
   assert.doesNotMatch(html, /Details ·/);
 });
+
+test('an explicitly designated review field leads the summary across unrelated workflows', () => {
+  for (const field of ['decision_memo', 'count_reconciliation']) {
+    const html = render(
+      {
+        nodeId: 'observe',
+        summary: 'Supporting analysis',
+        artifacts: [],
+        details: { [field]: 'Material to decide on' },
+      },
+      [{ source: 'detail', field, label: 'Review material', primary: true }],
+    );
+    assert.ok(html.indexOf('Material to decide on') < html.indexOf('Supporting analysis'));
+    assert.match(html, /workflow-supporting-summary/);
+    assert.doesNotMatch(html, /<dialog/);
+  }
+});
+
+test('a single unconfigured detail remains visible with its source field name', () => {
+  const html = render({
+    nodeId: 'observe',
+    summary: 'Result',
+    artifacts: [],
+    details: { disposition: 'Hold for inspection' },
+  });
+  assert.match(html, /<details class="workflow-output-details" open="">/);
+  assert.match(html, /<dt>disposition<\/dt><dd>Hold for inspection<\/dd>/);
+});
