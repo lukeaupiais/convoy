@@ -617,7 +617,11 @@ export function WorkflowRunInteraction({
   const flow = session.flow;
   const nodes = session.workflow?.nodes ?? session.workflow?.steps ?? [];
   const node = flow ? nodes.find((item) => item.id === flow.nodeId) : undefined;
-  const { submission, bindings } = workflowRunOutput(session);
+  const { submission, bindings, sourceNodeId } = workflowRunOutput(session);
+  const outputSourceName =
+    sourceNodeId && sourceNodeId !== flow?.nodeId
+      ? (nodes.find((item) => item.id === sourceNodeId)?.name ?? submission?.step ?? sourceNodeId)
+      : undefined;
   const [feedback, setFeedback] = useState('');
   const [feedbackDraftContext, setFeedbackDraftContext] = useState('');
   const [feedbackBusy, setFeedbackBusy] = useState(false);
@@ -626,7 +630,7 @@ export function WorkflowRunInteraction({
   const [showFeedback, setShowFeedback] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [summaryOverflows, setSummaryOverflows] = useState(false);
-  const summaryRef = useRef<HTMLParagraphElement>(null);
+  const summaryRef = useRef<HTMLDivElement>(null);
   const [inspecting, setInspecting] = useState(false);
   const [inspectionStale, setInspectionStale] = useState(false);
   const working = hostWorking || inspectionStale;
@@ -698,7 +702,12 @@ export function WorkflowRunInteraction({
     ([key]) => !visibleDetailBindings.some((binding) => binding.field === key),
   );
   const statusText = flow ? workflowStatusLabel(flow.status) : undefined;
-  const summaryLabel = bindings.find((binding) => binding.source === 'summary')?.label;
+  const summaryBinding = bindings.find((binding) => binding.source === 'summary');
+  const summaryLabel = summaryBinding?.label;
+  const discloseSummary = Boolean(
+    primaryDetail ||
+      (otherDetailEntries.length === 1 && !visibleDetailBindings.length && !summaryBinding?.primary),
+  );
   useEffect(() => {
     const element = summaryRef.current;
     if (!element || summaryExpanded) return;
@@ -707,7 +716,7 @@ export function WorkflowRunInteraction({
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [submission?.summary, summaryExpanded, inspecting]);
+  }, [submission?.summary, summaryExpanded, inspecting, discloseSummary]);
   const deliveryStatus = String(flow?.actionResult?.deliveryStatus ?? '');
   const deliveryNeedsAttention =
     flow?.actionResult?.awaitingDelivery === true ||
@@ -1262,29 +1271,29 @@ export function WorkflowRunInteraction({
     }
   }
   const summaryContent = (
-    <>
-              {!primaryDetail && summaryLabel && summaryLabel !== 'Summary' && (
-                <strong className="workflow-output-label">{summaryLabel}</strong>
-              )}
-              <p
-                ref={summaryRef}
-                id={`workflow-submission-summary-${session.id}`}
-                className={`workflow-submission-summary${!summaryExpanded ? ' is-collapsed' : ''}`}
-              >
-                {submission?.summary}
-              </p>
-              {(summaryOverflows || summaryExpanded) && (
-                <button
-                  type="button"
-                  className="workflow-summary-toggle"
-                  aria-controls={`workflow-submission-summary-${session.id}`}
-                  aria-expanded={summaryExpanded}
-                  onClick={() => setSummaryExpanded((value) => !value)}
-                >
-                  {summaryExpanded ? 'Show less' : 'Show more'}
-                </button>
-              )}
-    </>
+    <section className="workflow-output-summary" aria-label={summaryLabel || 'Summary'}>
+      {!discloseSummary && (summaryLabel || Object.keys(details).length > 0) && (
+        <h3 className="workflow-output-label">{summaryLabel || 'Summary'}</h3>
+      )}
+      <div
+        ref={summaryRef}
+        id={`workflow-submission-summary-${session.id}`}
+        className={`workflow-submission-summary${!summaryExpanded ? ' is-collapsed' : ''}`}
+      >
+        <WorkflowArtifactContent text={submission?.summary ?? ''} />
+      </div>
+      {(summaryOverflows || summaryExpanded) && (
+        <button
+          type="button"
+          className="workflow-summary-toggle"
+          aria-controls={`workflow-submission-summary-${session.id}`}
+          aria-expanded={summaryExpanded}
+          onClick={() => setSummaryExpanded((value) => !value)}
+        >
+          {summaryExpanded ? 'Show less' : 'Show full summary'}
+        </button>
+      )}
+    </section>
   );
   if (!flow) return null;
   const attentionLabel = workflowAttentionLabel(session);
@@ -1296,7 +1305,7 @@ export function WorkflowRunInteraction({
     >
       <header className="workflow-run-heading">
         <div className="workflow-activity-title">
-          <small>Current activity</small>
+          <small>{flow.status === 'completed' ? 'Latest activity' : 'Current activity'}</small>
           <h2>{node?.name ?? session.workflow?.name ?? 'Workflow activity'}</h2>
         </div>
         <div className="workflow-state-labels">
@@ -1306,16 +1315,16 @@ export function WorkflowRunInteraction({
           {attentionLabel && statusText && statusText !== attentionLabel && (
             <small aria-label={`Execution status: ${statusText}`}>{statusText}</small>
           )}
+          {onOpenWorkflowRun && associatedWorkflowRunId && (
+            <button
+              type="button"
+              className="workflow-run-link"
+              onClick={() => onOpenWorkflowRun(associatedWorkflowRunId)}
+            >
+              Workflow run ↗
+            </button>
+          )}
         </div>
-        {onOpenWorkflowRun && associatedWorkflowRunId && (
-          <button
-            type="button"
-            className="workflow-run-link"
-            onClick={() => onOpenWorkflowRun(associatedWorkflowRunId)}
-          >
-            Workflow run ↗
-          </button>
-        )}
       </header>
       {session.status === 'queued' && session.queueReason && (
         <p className="workflow-queue-reason">{session.queueReason}</p>
@@ -1407,18 +1416,26 @@ export function WorkflowRunInteraction({
       )}
       {submission && (
         <div className="workflow-submission" aria-label="Activity output">
+          {(outputSourceName || submission.revision !== undefined) && (
+            <div className="workflow-output-provenance">
+              <span>{outputSourceName ? `Output from ${outputSourceName}` : 'Output'}</span>
+              {submission.revision !== undefined && <small>Revision {submission.revision}</small>}
+            </div>
+          )}
           {primaryDetail && (
             <div className="workflow-primary-detail">
               <strong>{primaryDetail.label || primaryDetail.field}</strong>
               <p>{details[primaryDetail.field!]}</p>
             </div>
           )}
-          {primaryDetail ? (
+          {discloseSummary ? (
             <details className="workflow-supporting-summary">
               <summary>{summaryLabel || 'Summary'}</summary>
               {summaryContent}
             </details>
-          ) : summaryContent}
+          ) : (
+            summaryContent
+          )}
           {visibleDetailBindings.filter((binding) => binding !== primaryDetail).length > 0 && (
             <dl>
               {visibleDetailBindings
@@ -1431,11 +1448,17 @@ export function WorkflowRunInteraction({
                 ))}
             </dl>
           )}
-          {otherDetailEntries.length > 0 && (
-            <details
-              className="workflow-output-details"
-              open={otherDetailEntries.length === 1 && !primaryDetail}
-            >
+          {otherDetailEntries.length === 1 && !primaryDetail ? (
+            <dl className="workflow-output-fields">
+              {otherDetailEntries.map(([field, value]) => (
+                <div key={field}>
+                  <dt>{field}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : otherDetailEntries.length > 0 ? (
+            <details className="workflow-output-details">
               <summary>Details · {otherDetailEntries.length}</summary>
               <dl>
                 {otherDetailEntries.map(([field, value]) => (
@@ -1446,7 +1469,7 @@ export function WorkflowRunInteraction({
                 ))}
               </dl>
             </details>
-          )}
+          ) : null}
         </div>
       )}
       <SubmissionCollections
@@ -1704,8 +1727,8 @@ export function WorkflowActivityHistory({ session }: { session: Session }) {
       <ol>
         {history.map((item, index) => (
           <li key={`${item.nodeName}:${index}`}>
-            <span>{item.nodeName}</span>
-            <span>{item.outcome}</span>
+            <span className="workflow-history-name">{item.nodeName}</span>
+            <span className="workflow-history-outcome">{item.outcome}</span>
             {item.at && <time dateTime={item.at}>{formatRecordedAt(item.at)}</time>}
           </li>
         ))}

@@ -15,7 +15,11 @@ logs, runner identifiers, mutable workspace changes, and operational recovery
 remain accessible through execution details and supported menu actions.
 When a ticket has a workflow activity, it precedes the disclosed ticket description.
 Explicitly designated primary detail material precedes the supporting summary;
-a single unconfigured detail remains visible under its original field name.
+a single unconfigured detail remains visible under its original field name,
+with the summary disclosed separately unless the summary is explicitly primary.
+Retained output identifies its producing activity and captured revision separately
+from the current activity. Summaries render safe Markdown; detail values preserve
+their exact text.
 
 Published node presentation bindings may select a summary, declared detail field,
 or captured artifact, with an optional label and one primary selection. Bindings
