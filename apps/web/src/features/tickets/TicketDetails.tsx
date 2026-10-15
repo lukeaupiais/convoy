@@ -466,6 +466,35 @@ export function TicketDetails({
     setNewFieldValue('');
     setFieldError('');
   }
+  const descriptionContent = (
+    <>
+      {ticket.description ? (
+        <>
+          <div
+            id={`ticket-description-${ticket.id}`}
+            className={
+              descriptionIsLong && !descriptionExpanded ? 'ticket-description-collapsed' : undefined
+            }
+          >
+            <MarkdownDocument text={ticket.description} />
+          </div>
+          {descriptionIsLong && (
+            <button
+              type="button"
+              className="ticket-description-toggle"
+              aria-controls={`ticket-description-${ticket.id}`}
+              aria-expanded={descriptionExpanded}
+              onClick={() => setDescriptionExpanded((value) => !value)}
+            >
+              {descriptionExpanded ? 'Show less' : 'Show more'}
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="ticket-empty">No description.</p>
+      )}
+    </>
+  );
   if (!editing)
     return (
       <section className="ticket-summary ticket-workspace">
@@ -490,36 +519,6 @@ export function TicketDetails({
         )}
         <div className="ticket-workspace-grid">
           <div className="ticket-workspace-main">
-            <section className="ticket-record-content" aria-label="Ticket description">
-              <h3>Description</h3>
-              {ticket.description ? (
-                <>
-                  <div
-                    id={`ticket-description-${ticket.id}`}
-                    className={
-                      descriptionIsLong && !descriptionExpanded
-                        ? 'ticket-description-collapsed'
-                        : undefined
-                    }
-                  >
-                    <MarkdownDocument text={ticket.description} />
-                  </div>
-                  {descriptionIsLong && (
-                    <button
-                      type="button"
-                      className="ticket-description-toggle"
-                      aria-controls={`ticket-description-${ticket.id}`}
-                      aria-expanded={descriptionExpanded}
-                      onClick={() => setDescriptionExpanded((value) => !value)}
-                    >
-                      {descriptionExpanded ? 'Show less' : 'Show more'}
-                    </button>
-                  )}
-                </>
-              ) : (
-                <p className="ticket-empty">No description.</p>
-              )}
-            </section>
             {session?.flow && (
               <section className="ticket-agent-activity" aria-label="Workflow">
                 <WorkflowRunInteraction
@@ -547,18 +546,54 @@ export function TicketDetails({
                     canPrepareActivityApproval: !!session && runtimeAvailable,
                     canShowPreparedActivityApproval: !!session && owns(session) && runtimeAvailable,
                     approvalControlKey: session && owns(session) ? session.lease?.id : undefined,
-                    approvalContextKey: JSON.stringify([state.currentUser?.id, state.activeContext?.id, state.activeContext?.projectId, state.activeContext?.principal]),
-                    prepareActivityApproval: approvalTargetNodeId ? async () => {
-                      if (!session) throw new Error('Workflow session is unavailable.');
-                      if (!runtimeAvailable) throw new Error('Reconnect to refresh before preparing approval.');
-                      if (!owns(session)) await command('claim', { sessionId: session.id, label: 'Ticket workflow' });
-                      return (await command('prepareWorkflowActivity', { workflowRunId: session.flow!.id,
-                        gateInstance: session.flow!.instance, targetNodeId: approvalTargetNodeId })).result;
-                    } : undefined,
-                    approveGate: (reservation) => void actWorkflow('approveGate', { instance: session.flow!.instance,
-                      ...(reservation ? { activityReservationId: reservation.id, activityReservationDigest: reservation.digest } : {}) }),
+                    approvalContextKey: JSON.stringify([
+                      state.currentUser?.id,
+                      state.activeContext?.id,
+                      state.activeContext?.projectId,
+                      state.activeContext?.principal,
+                    ]),
+                    prepareActivityApproval: approvalTargetNodeId
+                      ? async () => {
+                          if (!session) throw new Error('Workflow session is unavailable.');
+                          if (!runtimeAvailable)
+                            throw new Error('Reconnect to refresh before preparing approval.');
+                          if (!owns(session))
+                            await command('claim', {
+                              sessionId: session.id,
+                              label: 'Ticket workflow',
+                            });
+                          return (
+                            await command('prepareWorkflowActivity', {
+                              workflowRunId: session.flow!.id,
+                              gateInstance: session.flow!.instance,
+                              targetNodeId: approvalTargetNodeId,
+                            })
+                          ).result;
+                        }
+                      : undefined,
+                    approveGate: (reservation) =>
+                      void actWorkflow('approveGate', {
+                        instance: session.flow!.instance,
+                        ...(reservation
+                          ? {
+                              activityReservationId: reservation.id,
+                              activityReservationDigest: reservation.digest,
+                            }
+                          : {}),
+                      }),
                   }}
                 />
+              </section>
+            )}
+            {session?.flow ? (
+              <details className="ticket-record-content ticket-description-disclosure">
+                <summary>Description</summary>
+                {descriptionContent}
+              </details>
+            ) : (
+              <section className="ticket-record-content" aria-label="Ticket description">
+                <h3>Description</h3>
+                {descriptionContent}
               </section>
             )}
             {hasActivity && (
@@ -751,8 +786,7 @@ export function TicketDetails({
                     {thread?.messages
                       .filter(
                         (entry) =>
-                          entry.body === uncertainReply.body &&
-                          entry.direction === 'outbound',
+                          entry.body === uncertainReply.body && entry.direction === 'outbound',
                       )
                       .map((entry) => (
                         <button
@@ -785,7 +819,12 @@ export function TicketDetails({
                 )}
               </section>
             )}
-            <TicketFiles ticket={ticket} editing={false} runtimeAvailable={runtimeAvailable} revisionChanged={setRevision} />
+            <TicketFiles
+              ticket={ticket}
+              editing={false}
+              runtimeAvailable={runtimeAvailable}
+              revisionChanged={setRevision}
+            />
             {session?.flow && <WorkflowActivityHistory session={session} />}
           </div>
           <aside className="ticket-context" aria-label="Ticket context">

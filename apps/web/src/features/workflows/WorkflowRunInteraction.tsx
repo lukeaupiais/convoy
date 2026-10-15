@@ -17,6 +17,7 @@ import { artifactMarkdownBlocks } from './artifact-markdown';
 import {
   workflowActivityHistory,
   workflowArtifactCollection,
+  workflowArtifactPreviewKind,
   workflowAttentionLabel,
   approvalControlInvalidated,
   workflowDecisionLabel,
@@ -226,19 +227,22 @@ function SubmissionCollections({
   submission,
   label,
   primaryArtifactId,
+  onInspectionChange,
+  onStaleChange,
 }: {
   sessionId: string;
   submission?: WorkflowSubmission;
   label?: string;
   primaryArtifactId?: string;
+  onInspectionChange: (open: boolean) => void;
+  onStaleChange: (stale: boolean) => void;
 }) {
   const [inspectedSubmission, setInspectedSubmission] = useState<WorkflowSubmission>();
   const [inspectedSessionId, setInspectedSessionId] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [referenceIndex, setReferenceIndex] = useState<number | null>(null);
   const opener = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const returnScroll = useRef({ left: 0, top: 0 });
+  const readerRef = useRef<HTMLElement>(null);
   const sourceSessionId = inspectedSessionId || sessionId;
   const sessionIdentity = useRef(sessionId);
   const inspectedArtifacts = useMemo(
@@ -260,10 +264,11 @@ function SubmissionCollections({
   const inspectedReferences = inspectedSubmission?.references ?? [];
   const currentReferences = submission?.references ?? [];
   const rowReferences = currentReferences.length ? currentReferences : inspectedReferences;
-  const selectedReference = referenceIndex === null ? undefined : inspectedReferences[referenceIndex];
+  const selectedReference =
+    referenceIndex === null ? undefined : inspectedReferences[referenceIndex];
   const selected =
     referenceIndex === null
-      ? inspectedArtifacts.find((item) => item.id === selectedId) ?? inspectedPrimary
+      ? (inspectedArtifacts.find((item) => item.id === selectedId) ?? inspectedPrimary)
       : undefined;
   const stale =
     !!inspectedSubmission &&
@@ -272,12 +277,12 @@ function SubmissionCollections({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [downloadError, setDownloadError] = useState('');
-  const mime = (selected?.mime ?? '').split(';')[0].trim().toLowerCase();
-  const markdown =
-    mime === 'text/markdown' || (!mime && /\.md(?:own)?$/i.test(selected?.path ?? ''));
-  const plain = mime === 'text/plain';
-  const json = mime === 'application/json' || mime.endsWith('+json');
-  const supportedText = markdown || plain || json;
+  const [showSource, setShowSource] = useState(false);
+  const previewKind = workflowArtifactPreviewKind(selected);
+  const markdown = previewKind === 'markdown';
+  const plain = previewKind === 'text';
+  const json = previewKind === 'json';
+  const supportedText = previewKind !== 'download';
   async function downloadSelected() {
     if (!selected) return;
     setDownloadError('');
@@ -299,23 +304,25 @@ function SubmissionCollections({
   useEffect(() => {
     if (sessionIdentity.current === sessionId) return;
     sessionIdentity.current = sessionId;
-    dialogRef.current?.close();
     setInspectedSubmission(undefined);
     setInspectedSessionId('');
   }, [sessionId]);
   useEffect(() => {
-    if (!inspectedSubmission) return;
-    const dialog = dialogRef.current;
-    if (dialog && !dialog.open) dialog.showModal();
-  }, [inspectedSubmission]);
+    onInspectionChange(!!inspectedSubmission);
+    if (inspectedSubmission) readerRef.current?.focus({ preventScroll: true });
+  }, [inspectedSubmission, onInspectionChange]);
   useEffect(() => {
-    dialogRef.current
+    onStaleChange(!!inspectedSubmission && stale);
+  }, [inspectedSubmission, stale, onStaleChange]);
+  useEffect(() => {
+    readerRef.current
       ?.querySelector<HTMLElement>('nav [aria-current="true"]')
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [inspectedSubmission, selected?.id, referenceIndex]);
   useEffect(() => {
     setError('');
     setDownloadError('');
+    setShowSource(false);
     if (!selected || !supportedText) {
       setContent('');
       setLoading(false);
@@ -362,59 +369,57 @@ function SubmissionCollections({
   }
   return (
     <>
-      {rowArtifacts.length > 0 && (
-        <div className="workflow-files-row" aria-label="Captured output collection">
-          <span className="workflow-files-label">
-            {label ?? 'Captured files'} · {rowArtifacts.length}{' '}
-            {rowArtifacts.length === 1 ? 'item' : 'items'}
-          </span>
+      <div className="workflow-collection-controls">
+        {rowArtifacts.length > 0 && (
+          <div className="workflow-files-row" aria-label="Captured output collection">
+            <button
+              type="button"
+              className="workflow-inspector-open secondary"
+              ref={opener}
+              aria-label={`Open ${label ?? 'captured files'} collection, ${rowArtifacts.length} ${rowArtifacts.length === 1 ? 'item' : 'items'}`}
+              onClick={(event) => {
+                opener.current = event.currentTarget;
+                setReferenceIndex(null);
+                setSelectedId((currentPrimary ?? inspectedPrimary)?.id ?? '');
+                setInspectedSessionId(sessionId);
+                setInspectedSubmission(
+                  currentArtifacts.length > 0 ? submission : (inspectedSubmission ?? submission),
+                );
+              }}
+            >
+              {label ?? 'Files'} · {rowArtifacts.length}
+            </button>
+          </div>
+        )}
+        {rowReferences.length > 0 && (
           <button
             type="button"
-            className="workflow-inspector-open secondary"
-            ref={opener}
-            aria-label={`Open ${label ?? 'captured files'} collection, ${rowArtifacts.length} ${rowArtifacts.length === 1 ? 'item' : 'items'}`}
+            className="workflow-reference-open workflow-inspector-open secondary"
+            aria-label={`Open references, ${rowReferences.length} ${rowReferences.length === 1 ? 'reference' : 'references'}`}
             onClick={(event) => {
               opener.current = event.currentTarget;
-              returnScroll.current = { left: window.scrollX, top: window.scrollY };
-              setReferenceIndex(null);
-              setSelectedId((currentPrimary ?? inspectedPrimary)?.id ?? '');
+              setReferenceIndex(0);
               setInspectedSessionId(sessionId);
               setInspectedSubmission(
-                currentArtifacts.length > 0 ? submission : (inspectedSubmission ?? submission),
+                currentReferences.length > 0 ? submission : inspectedSubmission,
               );
             }}
           >
-            Open collection
+            References · {rowReferences.length}
           </button>
-        </div>
-      )}
-      {rowReferences.length > 0 && (
-        <button
-          type="button"
-          className="workflow-reference-open workflow-inspector-open secondary"
-          aria-label={`Open references, ${rowReferences.length} ${rowReferences.length === 1 ? 'reference' : 'references'}`}
-          onClick={(event) => {
-            opener.current = event.currentTarget;
-            returnScroll.current = { left: window.scrollX, top: window.scrollY };
-            setReferenceIndex(0);
-            setInspectedSessionId(sessionId);
-            setInspectedSubmission(currentReferences.length > 0 ? submission : inspectedSubmission);
-          }}
-        >
-          References · {rowReferences.length}
-        </button>
-      )}
+        )}
+      </div>
       {inspectedSubmission && (
-        <dialog
-          ref={dialogRef}
+        <section
+          ref={readerRef}
           className="workflow-inspector"
           aria-labelledby="workflow-inspector-title"
-          onClose={() => {
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return;
+            event.stopPropagation();
             setInspectedSubmission(undefined);
-            requestAnimationFrame(() => {
-              opener.current?.focus({ preventScroll: true });
-              window.scrollTo({ ...returnScroll.current, behavior: 'instant' });
-            });
+            opener.current?.focus({ preventScroll: true });
           }}
         >
           <header>
@@ -427,8 +432,15 @@ function SubmissionCollections({
                 {referenceIndex === null ? (label ?? 'Captured files') : 'References'}
               </h2>
             </div>
-            <button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>
-              Close
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setInspectedSubmission(undefined);
+                opener.current?.focus({ preventScroll: true });
+              }}
+            >
+              Back to activity
             </button>
           </header>
           {stale && (
@@ -442,7 +454,9 @@ function SubmissionCollections({
                     setReferenceIndex(
                       referenceIndex !== null && currentReferences.length > 0
                         ? 0
-                        : currentArtifacts.length > 0 ? null : 0,
+                        : currentArtifacts.length > 0
+                          ? null
+                          : 0,
                     );
                     setSelectedId(currentPrimary?.id ?? '');
                     setInspectedSessionId(sessionId);
@@ -458,29 +472,31 @@ function SubmissionCollections({
           )}
           <div className="workflow-inspector-content">
             <nav aria-label="Captured output collections">
-              {referenceIndex === null && inspectedArtifacts.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  aria-current={item.id === selected?.id ? 'true' : undefined}
-                  onClick={() => {
-                    setReferenceIndex(null);
-                    setSelectedId(item.id);
-                  }}
-                >
-                  {item.name}
-                </button>
-              ))}
-              {referenceIndex !== null && inspectedReferences.map((ref, index) => (
-                <button
-                  type="button"
-                  key={`reference:${index}`}
-                  aria-current={referenceIndex === index ? 'true' : undefined}
-                  onClick={() => setReferenceIndex(index)}
-                >
-                  {ref.path}:{ref.startLine}–{ref.endLine}
-                </button>
-              ))}
+              {referenceIndex === null &&
+                inspectedArtifacts.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    aria-current={item.id === selected?.id ? 'true' : undefined}
+                    onClick={() => {
+                      setReferenceIndex(null);
+                      setSelectedId(item.id);
+                    }}
+                  >
+                    {item.name}
+                  </button>
+                ))}
+              {referenceIndex !== null &&
+                inspectedReferences.map((ref, index) => (
+                  <button
+                    type="button"
+                    key={`reference:${index}`}
+                    aria-current={referenceIndex === index ? 'true' : undefined}
+                    onClick={() => setReferenceIndex(index)}
+                  >
+                    {ref.path}:{ref.startLine}–{ref.endLine}
+                  </button>
+                ))}
             </nav>
             <section
               aria-label={referenceIndex === null ? 'Selected captured file' : 'Selected reference'}
@@ -489,7 +505,8 @@ function SubmissionCollections({
                 <>
                   <div className="workflow-material-meta">
                     <span>
-                      {selectedReference.path}:{selectedReference.startLine}–{selectedReference.endLine}
+                      {selectedReference.path}:{selectedReference.startLine}–
+                      {selectedReference.endLine}
                     </span>
                   </div>
                   <div className="workflow-material-body">
@@ -510,6 +527,15 @@ function SubmissionCollections({
                 <>
                   <div className="workflow-material-meta">
                     <span>{selected.name}</span>
+                    {markdown && (
+                      <button
+                        type="button"
+                        aria-pressed={showSource}
+                        onClick={() => setShowSource((value) => !value)}
+                      >
+                        {showSource ? 'Preview' : 'Source'}
+                      </button>
+                    )}
                     <button type="button" onClick={() => void downloadSelected()}>
                       Download
                     </button>
@@ -524,9 +550,9 @@ function SubmissionCollections({
                           Download captured material
                         </button>
                       </div>
-                    ) : markdown ? (
+                    ) : markdown && !showSource ? (
                       <WorkflowArtifactContent text={content} />
-                    ) : plain || json ? (
+                    ) : markdown || plain || json ? (
                       <pre>{rendered}</pre>
                     ) : (
                       <p>
@@ -565,7 +591,7 @@ function SubmissionCollections({
               )}
             </section>
           </div>
-        </dialog>
+        </section>
       )}
     </>
   );
@@ -573,7 +599,7 @@ function SubmissionCollections({
 
 export function WorkflowRunInteraction({
   session,
-  working = false,
+  working: hostWorking = false,
   actions = {},
   activityReservation,
   onRecovery,
@@ -599,6 +625,11 @@ export function WorkflowRunInteraction({
   const [answer, setAnswer] = useState('');
   const [showFeedback, setShowFeedback] = useState(false);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [summaryOverflows, setSummaryOverflows] = useState(false);
+  const summaryRef = useRef<HTMLParagraphElement>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectionStale, setInspectionStale] = useState(false);
+  const working = hostWorking || inspectionStale;
   const [preparedReservation, setPreparedReservation] = useState<WorkflowActivityReservation>();
   const [preparedReservationGate, setPreparedReservationGate] = useState('');
   const [preparedReservationContext, setPreparedReservationContext] = useState('');
@@ -668,8 +699,15 @@ export function WorkflowRunInteraction({
   );
   const statusText = flow ? workflowStatusLabel(flow.status) : undefined;
   const summaryLabel = bindings.find((binding) => binding.source === 'summary')?.label;
-  const summaryIsLong =
-    (submission?.summary.length ?? 0) > 420 || (submission?.summary.split('\n').length ?? 0) > 6;
+  useEffect(() => {
+    const element = summaryRef.current;
+    if (!element || summaryExpanded) return;
+    const measure = () => setSummaryOverflows(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [submission?.summary, summaryExpanded, inspecting]);
   const deliveryStatus = String(flow?.actionResult?.deliveryStatus ?? '');
   const deliveryNeedsAttention =
     flow?.actionResult?.awaitingDelivery === true ||
@@ -1050,6 +1088,7 @@ export function WorkflowRunInteraction({
       );
   }
   async function performHumanTask(action: () => Promise<void>) {
+    if (working || humanTaskBusy || !humanTaskCanOperate) return;
     setHumanTaskBusy(true);
     setHumanTaskError('');
     try {
@@ -1191,7 +1230,8 @@ export function WorkflowRunInteraction({
         (canShowPreparedApproval && activityReservation?.preview ? activityReservation : undefined))
       : undefined;
   async function prepareActivityApproval() {
-    if (working || !canPrepareApproval || !actions.prepareActivityApproval || reservationBusy) return;
+    if (working || !canPrepareApproval || !actions.prepareActivityApproval || reservationBusy)
+      return;
     const request = ++reservationRequest.current;
     const gateKey = approvalGateKey;
     const contextKey = actions.approvalContextKey ?? '';
@@ -1221,11 +1261,39 @@ export function WorkflowRunInteraction({
       if (request === reservationRequest.current) setReservationBusy(false);
     }
   }
+  const summaryContent = (
+    <>
+              {!primaryDetail && summaryLabel && summaryLabel !== 'Summary' && (
+                <strong className="workflow-output-label">{summaryLabel}</strong>
+              )}
+              <p
+                ref={summaryRef}
+                id={`workflow-submission-summary-${session.id}`}
+                className={`workflow-submission-summary${!summaryExpanded ? ' is-collapsed' : ''}`}
+              >
+                {submission?.summary}
+              </p>
+              {(summaryOverflows || summaryExpanded) && (
+                <button
+                  type="button"
+                  className="workflow-summary-toggle"
+                  aria-controls={`workflow-submission-summary-${session.id}`}
+                  aria-expanded={summaryExpanded}
+                  onClick={() => setSummaryExpanded((value) => !value)}
+                >
+                  {summaryExpanded ? 'Show less' : 'Show more'}
+                </button>
+              )}
+    </>
+  );
   if (!flow) return null;
   const attentionLabel = workflowAttentionLabel(session);
   const associatedWorkflowRunId = session.workflowRunId ?? flow.id;
   return (
-    <section className="workflow-run-interaction" aria-label="Current activity">
+    <section
+      className={`workflow-run-interaction${inspecting ? ' is-inspecting' : ''}`}
+      aria-label="Current activity"
+    >
       <header className="workflow-run-heading">
         <div className="workflow-activity-title">
           <small>Current activity</small>
@@ -1239,16 +1307,16 @@ export function WorkflowRunInteraction({
             <small aria-label={`Execution status: ${statusText}`}>{statusText}</small>
           )}
         </div>
+        {onOpenWorkflowRun && associatedWorkflowRunId && (
+          <button
+            type="button"
+            className="workflow-run-link"
+            onClick={() => onOpenWorkflowRun(associatedWorkflowRunId)}
+          >
+            Workflow run ↗
+          </button>
+        )}
       </header>
-      {onOpenWorkflowRun && associatedWorkflowRunId && (
-        <button
-          type="button"
-          className="workflow-run-link"
-          onClick={() => onOpenWorkflowRun(associatedWorkflowRunId)}
-        >
-          View workflow run
-        </button>
-      )}
       {session.status === 'queued' && session.queueReason && (
         <p className="workflow-queue-reason">{session.queueReason}</p>
       )}
@@ -1339,32 +1407,18 @@ export function WorkflowRunInteraction({
       )}
       {submission && (
         <div className="workflow-submission" aria-label="Activity output">
-          {summaryLabel && summaryLabel !== 'Summary' && (
-            <strong className="workflow-output-label">{summaryLabel}</strong>
-          )}
-          <p
-            id={`workflow-submission-summary-${session.id}`}
-            className={`workflow-submission-summary${summaryIsLong && !summaryExpanded ? ' is-collapsed' : ''}`}
-          >
-            {submission.summary}
-          </p>
-          {summaryIsLong && (
-            <button
-              type="button"
-              className="workflow-summary-toggle"
-              aria-controls={`workflow-submission-summary-${session.id}`}
-              aria-expanded={summaryExpanded}
-              onClick={() => setSummaryExpanded((value) => !value)}
-            >
-              {summaryExpanded ? 'Show less' : 'Show more'}
-            </button>
-          )}
           {primaryDetail && (
             <div className="workflow-primary-detail">
               <strong>{primaryDetail.label || primaryDetail.field}</strong>
               <p>{details[primaryDetail.field!]}</p>
             </div>
           )}
+          {primaryDetail ? (
+            <details className="workflow-supporting-summary">
+              <summary>{summaryLabel || 'Summary'}</summary>
+              {summaryContent}
+            </details>
+          ) : summaryContent}
           {visibleDetailBindings.filter((binding) => binding !== primaryDetail).length > 0 && (
             <dl>
               {visibleDetailBindings
@@ -1378,7 +1432,10 @@ export function WorkflowRunInteraction({
             </dl>
           )}
           {otherDetailEntries.length > 0 && (
-            <details className="workflow-output-details">
+            <details
+              className="workflow-output-details"
+              open={otherDetailEntries.length === 1 && !primaryDetail}
+            >
               <summary>Details · {otherDetailEntries.length}</summary>
               <dl>
                 {otherDetailEntries.map(([field, value]) => (
@@ -1398,6 +1455,8 @@ export function WorkflowRunInteraction({
         submission={submission}
         label={artifactBinding?.label}
         primaryArtifactId={submission?.primaryArtifactId}
+        onInspectionChange={setInspecting}
+        onStaleChange={setInspectionStale}
       />
       {deliveryNeedsAttention && (
         <p role="status" className="workflow-delivery-state">
@@ -1472,7 +1531,7 @@ export function WorkflowRunInteraction({
               setHumanReview(undefined);
               setHumanReviewContext('');
             }}
-            disabled={!humanTaskCanOperate || humanTaskBusy}
+            disabled={working || !humanTaskCanOperate || humanTaskBusy}
             onSubmit={() => void performHumanTask(submitConfiguredResponse)}
             onCaptureDocument={(file) =>
               void performHumanTask(async () => captureConfiguredDocument(file))
@@ -1488,106 +1547,107 @@ export function WorkflowRunInteraction({
           {humanTaskError && <p role="alert">{humanTaskError}</p>}
         </>
       )}
-      {(flow.status === 'waiting_gate' ||
-        (flow.status === 'awaiting_continue' && (actions.continueRun || actions.rework))) && (
-        <footer className="workflow-interaction-footer">
-          {flow.status === 'waiting_gate' && (
-            <>
-              {(node?.kind !== 'human' || node.legacyHumanTask) && (
-                <>
-                  {actions.requiresActivityReservation &&
-                    !activeReservation &&
-                    canPrepareApproval && (
-                      <button
-                        className="secondary"
-                        disabled={working || reservationBusy}
-                        onClick={() => void prepareActivityApproval()}
+      {!showFeedback &&
+        (flow.status === 'waiting_gate' ||
+          (flow.status === 'awaiting_continue' && (actions.continueRun || actions.rework))) && (
+          <footer className="workflow-interaction-footer">
+            {flow.status === 'waiting_gate' && (
+              <>
+                {(node?.kind !== 'human' || node.legacyHumanTask) && (
+                  <>
+                    {actions.requiresActivityReservation &&
+                      !activeReservation &&
+                      canPrepareApproval && (
+                        <button
+                          className="secondary"
+                          disabled={working || reservationBusy}
+                          onClick={() => void prepareActivityApproval()}
+                        >
+                          Review action
+                        </button>
+                      )}
+                    {activeReservation?.preview && (
+                      <div
+                        className="workflow-approval-preview"
+                        aria-label="Prepared activity approval"
                       >
-                        Review action
+                        <strong>Prepared action · {activeReservation.preview.activity}</strong>
+                        {activeReservation.preview.resources?.model && (
+                          <small>Model: {activeReservation.preview.resources.model}</small>
+                        )}
+                        {activeReservation.preview.action && (
+                          <small>{activeReservation.preview.action}</small>
+                        )}
+                        {activeReservation.preview.summary && (
+                          <p>{activeReservation.preview.summary}</p>
+                        )}
+                        {activeReservation.preview.body && (
+                          <blockquote>{activeReservation.preview.body}</blockquote>
+                        )}
+                        <details>
+                          <summary>Prepared values</summary>
+                          <pre>
+                            {JSON.stringify(
+                              {
+                                input: activeReservation.preview.input,
+                                intent: activeReservation.preview.intent,
+                                ...(activeReservation.preview.resources
+                                  ? { resources: activeReservation.preview.resources }
+                                  : {}),
+                              },
+                              null,
+                              2,
+                            )}
+                          </pre>
+                        </details>
+                      </div>
+                    )}
+                    {actionError && <p role="alert">{actionError}</p>}
+                    {reservationError && <p role="alert">{reservationError}</p>}
+                    {approvalReady &&
+                    actions.approveGate &&
+                    (!actions.requiresActivityReservation || !!activeReservation) ? (
+                      <button
+                        className="primary"
+                        disabled={working || feedbackBusy || reservationBusy}
+                        onClick={() => actions.approveGate?.(activeReservation)}
+                      >
+                        {workflowDecisionLabel(node, 'approved')}
+                      </button>
+                    ) : actions.requiresActivityReservation &&
+                      !activeReservation ? null : approvalMaterialRequired && !submission ? (
+                      <p role="alert">Reviewed material is unavailable. Refresh before deciding.</p>
+                    ) : (
+                      <p role="alert">No supported approval outcome is configured.</p>
+                    )}
+                    {canRevise && actions.requestChanges && !showFeedback && (
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={working || feedbackBusy}
+                        onClick={() => {
+                          if (!working && !feedbackBusy) setShowFeedback(true);
+                        }}
+                      >
+                        {workflowDecisionLabel(node, 'changes_requested')}
                       </button>
                     )}
-                  {activeReservation?.preview && (
-                    <div
-                      className="workflow-approval-preview"
-                      aria-label="Prepared activity approval"
-                    >
-                      <strong>Prepared action · {activeReservation.preview.activity}</strong>
-                      {activeReservation.preview.resources?.model && (
-                        <small>Model: {activeReservation.preview.resources.model}</small>
-                      )}
-                      {activeReservation.preview.action && (
-                        <small>{activeReservation.preview.action}</small>
-                      )}
-                      {activeReservation.preview.summary && (
-                        <p>{activeReservation.preview.summary}</p>
-                      )}
-                      {activeReservation.preview.body && (
-                        <blockquote>{activeReservation.preview.body}</blockquote>
-                      )}
-                      <details>
-                        <summary>Prepared values</summary>
-                        <pre>
-                          {JSON.stringify(
-                            {
-                              input: activeReservation.preview.input,
-                              intent: activeReservation.preview.intent,
-                              ...(activeReservation.preview.resources
-                                ? { resources: activeReservation.preview.resources }
-                                : {}),
-                            },
-                            null,
-                            2,
-                          )}
-                        </pre>
-                      </details>
-                    </div>
-                  )}
-                  {actionError && <p role="alert">{actionError}</p>}
-                  {reservationError && <p role="alert">{reservationError}</p>}
-                  {approvalReady &&
-                  actions.approveGate &&
-                  (!actions.requiresActivityReservation || !!activeReservation) ? (
-                    <button
-                      className="primary"
-                      disabled={working || feedbackBusy || reservationBusy}
-                      onClick={() => actions.approveGate?.(activeReservation)}
-                    >
-                      {workflowDecisionLabel(node, 'approved')}
-                    </button>
-                  ) : actions.requiresActivityReservation &&
-                    !activeReservation ? null : approvalMaterialRequired && !submission ? (
-                    <p role="alert">Reviewed material is unavailable. Refresh before deciding.</p>
-                  ) : (
-                    <p role="alert">No supported approval outcome is configured.</p>
-                  )}
-                  {canRevise && actions.requestChanges && !showFeedback && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={working || feedbackBusy}
-                      onClick={() => {
-                        if (!working && !feedbackBusy) setShowFeedback(true);
-                      }}
-                    >
-                      {workflowDecisionLabel(node, 'changes_requested')}
-                    </button>
-                  )}
-                </>
-              )}
-            </>
-          )}
-          {flow.status === 'awaiting_continue' && actions.continueRun && (
-            <button className="primary" disabled={working} onClick={actions.continueRun}>
-              Continue workflow
-            </button>
-          )}
-          {flow.status === 'awaiting_continue' && actions.rework && (
-            <button className="secondary" disabled={working} onClick={actions.rework}>
-              Rework activity
-            </button>
-          )}
-        </footer>
-      )}
+                  </>
+                )}
+              </>
+            )}
+            {flow.status === 'awaiting_continue' && actions.continueRun && (
+              <button className="primary" disabled={working} onClick={actions.continueRun}>
+                Continue workflow
+              </button>
+            )}
+            {flow.status === 'awaiting_continue' && actions.rework && (
+              <button className="secondary" disabled={working} onClick={actions.rework}>
+                Rework activity
+              </button>
+            )}
+          </footer>
+        )}
       {showFeedback && flow.status === 'waiting_gate' && canRevise && actions.requestChanges && (
         <form className="workflow-feedback" onSubmit={(event) => void submitFeedback(event)}>
           <label>

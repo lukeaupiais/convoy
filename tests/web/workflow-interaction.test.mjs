@@ -16,6 +16,7 @@ const js = ts.transpileModule(
 const {
   workflowActivityHistory,
   workflowArtifactCollection,
+  workflowArtifactPreviewKind,
   workflowAttentionLabel,
   approvalControlInvalidated,
   workflowDecisionCapabilities,
@@ -624,4 +625,28 @@ test('workflow fallback decisions match exact supported outcomes before wildcard
     ]),
     { approve: true, requestChanges: true },
   );
+});
+
+test('artifact previews recognize Markdown text captures without reinterpreting binary or active formats', () => {
+  assert.equal(workflowArtifactPreviewKind({ name: 'review.md', mime: 'text/plain' }), 'markdown');
+  assert.equal(
+    workflowArtifactPreviewKind({ name: 'summary.MARKDOWN', mime: 'text/plain; charset=utf-8' }),
+    'markdown',
+  );
+  assert.equal(workflowArtifactPreviewKind({ path: 'notes.mdown' }), 'markdown');
+  assert.equal(workflowArtifactPreviewKind({ name: 'report', mime: 'text/markdown' }), 'markdown');
+  assert.equal(
+    workflowArtifactPreviewKind({ name: 'response', mime: 'application/problem+json' }),
+    'json',
+  );
+  assert.equal(workflowArtifactPreviewKind({ name: 'trace.log', mime: 'text/plain' }), 'text');
+  assert.equal(
+    workflowArtifactPreviewKind({ name: 'misnamed.md', mime: 'application/pdf' }),
+    'download',
+  );
+  assert.equal(
+    workflowArtifactPreviewKind({ name: 'diagram.svg', mime: 'image/svg+xml' }),
+    'download',
+  );
+  assert.equal(workflowArtifactPreviewKind({ name: 'page.html', mime: 'text/html' }), 'download');
 });
