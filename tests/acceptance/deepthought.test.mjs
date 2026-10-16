@@ -91,7 +91,7 @@ test(
     const definitions = { operation: 'definitions', symbol: 'Widget.execute' };
     capabilities.validate(session, null, 'code_intelligence', definitions);
     const result = await execution.tool(session, 'code_intelligence', definitions);
-    assert.equal(result.matches[0].symbol, 'Widget.execute');
+    assert.equal(result.matches[0].definition.symbol, 'Widget.execute');
     assert.equal(result.status, 'succeeded');
     const references = {
       operation: 'references',
