@@ -140,6 +140,7 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
     const child = spawn(command, argv, {
       cwd: '/',
       env: environment,
+      detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const stdout = [];
@@ -147,11 +148,25 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
       error,
       stderrBytes = 0,
       force;
+    const signalGroup = (signal) => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch (cause) {
+        if (cause.code !== 'ESRCH') error ??= cause;
+      }
+    };
     const stop = (message) => {
       if (error) return;
       error = new Error(message);
-      child.kill('SIGTERM');
-      force = setTimeout(() => child.kill('SIGKILL'), 250);
+      signalGroup('SIGTERM');
+      force = setTimeout(() => {
+        signalGroup('SIGKILL');
+        // An exited leader can leave inherited pipes open in a descendant.
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }, 250);
     };
     const abort = () => stop('DeepThought query cancelled.');
     const timer = setTimeout(() => stop('DeepThought query timed out.'), timeoutMs);
@@ -172,6 +187,7 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
       error ??= cause;
     });
     child.once('close', (code) => {
+      signalGroup('SIGKILL');
       clearTimeout(timer);
       clearTimeout(force);
       signal?.removeEventListener('abort', abort);
