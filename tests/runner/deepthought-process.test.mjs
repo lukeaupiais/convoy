@@ -11,7 +11,7 @@ async function identity(pid) {
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
     return { state: fields[0], start: fields[19] };
   } catch (error) {
-    if (error.code === 'ENOENT') return undefined;
+    if (error.code === 'ENOENT' || error.code === 'ESRCH') return undefined;
     throw error;
   }
 }
