@@ -91,7 +91,7 @@ for (const worker of ['source', ...(process.env.CONVOY_TEST_COMPILED_WORKER ? ['
         tool: 'extension.deepthought.query',
         args: { operation: 'definitions', symbol: 'portable' },
       });
-      assert.equal(result.matches[0].symbol, 'portable');
+      assert.equal(result.matches[0].definition.symbol, 'portable');
     },
   );
 }
@@ -121,9 +121,9 @@ test(
     assert.equal(result.status, 'succeeded');
     assert.deepEqual(result.capabilities, ['definitions']);
     assert.equal(result.matches.length, 1);
-    assert.equal(result.matches[0].file, 'source.py');
-    assert.equal(result.matches[0].symbol, 'Widget.execute');
-    assert.equal(result.matches[0].line, 2);
+    assert.equal(result.matches[0].definition.file, 'source.py');
+    assert.equal(result.matches[0].definition.symbol, 'Widget.execute');
+    assert.equal(result.matches[0].definition.line, 2);
     await assert.rejects(access(join(root, '__pycache__')));
   },
 );
@@ -171,13 +171,24 @@ test('workspace-owned SDK executables and external aliases never run a host prob
     await rm(root, { recursive: true, force: true });
   });
   const canary = join(root, 'HOST_EXECUTED');
-  await writeFile(join(root, 'python'), `#!/bin/sh\nprintf executed > '${canary}'\n`, { mode: 0o700 });
+  await writeFile(join(root, 'python'), `#!/bin/sh\nprintf executed > '${canary}'\n`, {
+    mode: 0o700,
+  });
   await symlink(join(root, 'python'), join(runtime, 'python'));
   await symlink(root, join(runtime, 'venv'));
-  for (const provisioned of [join(root, 'python'), join(runtime, 'python'), join(runtime, 'venv/python')]) {
+  for (const provisioned of [
+    join(root, 'python'),
+    join(runtime, 'python'),
+    join(runtime, 'venv/python'),
+  ]) {
     await assert.rejects(async () => {
       const adapter = await createDeepThoughtAdapter({ python: provisioned });
-      await adapter({ extension, tool: 'extension.deepthought.query', args: { operation: 'definitions' }, workingDirectory: root });
+      await adapter({
+        extension,
+        tool: 'extension.deepthought.query',
+        args: { operation: 'definitions' },
+        workingDirectory: root,
+      });
     }, /outside the assigned working directory/);
     await assert.rejects(access(canary));
   }
@@ -272,8 +283,8 @@ test(
       );
     const result = await invoke({ operation: 'definitions' });
     assert.equal(result.status, 'partial');
-    assert(result.matches.some((d) => d.symbol === 'owned'));
-    assert(!result.matches.some((d) => d.symbol === 'Confidential'));
+    assert(result.matches.some((d) => d.definition.symbol === 'owned'));
+    assert(!result.matches.some((d) => d.definition.symbol === 'Confidential'));
     await assert.rejects(access(join(root, 'EXECUTED')));
     for (const index of ['../secret.scip', '/etc/passwd', 'a/../secret.scip', 'a\\b.scip'])
       await assert.rejects(invoke({ operation: 'definitions', index }), /canonical/);
@@ -296,7 +307,7 @@ test(
       { deepthought: adapter },
     );
     assert.deepEqual(
-      scoped.matches.map((d) => d.symbol),
+      scoped.matches.map((d) => d.definition.symbol),
       ['Nested'],
     );
   },
@@ -327,6 +338,10 @@ test(
     const adapter = await createDeepThoughtAdapter({ python });
     await assert.rejects(
       invoke(adapter, undefined, { ...extension, hash: '0'.repeat(64) }),
+      /revision/,
+    );
+    await assert.rejects(
+      invoke(adapter, undefined, { ...extension, revision: 'sdk-0.2.0a1-adapter-1' }),
       /revision/,
     );
     const cancel = new AbortController();
@@ -393,7 +408,8 @@ test(
     );
     const allowed = { ...request, accessMode: 'contained', executionProfile: 'inspect', execution };
     assert.equal(
-      (await executeRunner(allowed, undefined, undefined, undefined, adapters)).matches[0].symbol,
+      (await executeRunner(allowed, undefined, undefined, undefined, adapters)).matches[0]
+        .definition.symbol,
       'Scoped',
     );
     await assert.rejects(
@@ -406,5 +422,89 @@ test(
       ),
       /bound assignment/,
     );
+  },
+);
+
+test(
+  'runner forwards canonical SDK query records and applies its response budget inside the engine',
+  { skip: !python },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'convoy-deepthought-query-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await copyFile('tests/support/deepthought/typescript.scip', join(root, 'index.scip'));
+    await writeFile(
+      join(root, 'source.py'),
+      Array.from({ length: 40 }, (_, i) => `def f_${'x'.repeat(150)}_${i}(): pass`).join('\n'),
+    );
+    const budget = 4096;
+    const adapter = await createDeepThoughtAdapter({ python, maxOutputBytes: budget });
+    const direct = String.raw`
+import json, sys
+from pathlib import Path
+from deepthought import QueryRequest, analyze_repository, compose_graph, ingest_scip, query_graph
+root=Path(sys.argv[1]); args=json.loads(sys.argv[2]); budget=int(sys.argv[3])
+source=(ingest_scip(root/args['index'], repository_id='workspace', max_index_bytes=10000000)
+    if 'index' in args else analyze_repository(root, repository_id='workspace', max_files=200, max_file_bytes=1000000, max_total_bytes=10000000))
+request=QueryRequest(args['operation'], 'workspace', symbol=args.get('symbol'), file=args.get('file'),
+    limit=args.get('limit',20), max_output_bytes=budget)
+print(query_graph(compose_graph([source]), request).to_json())
+`;
+    for (const args of [
+      { operation: 'definitions', limit: 100 },
+      {
+        operation: 'references',
+        index: 'index.scip',
+        symbol:
+          'scip-typescript npm deepthought-typescript-fixture 0.0.0 other/`helpers.ts`/helper().',
+      },
+      { operation: 'dependencies', index: 'index.scip', file: 'main.ts' },
+    ]) {
+      const expected = spawnSync(
+        python,
+        ['-I', '-B', '-c', direct, root, JSON.stringify(args), String(budget)],
+        { encoding: 'utf8', timeout: 10000 },
+      );
+      assert.equal(expected.status, 0, expected.stderr || String(expected.error));
+      assert(Buffer.byteLength(expected.stdout) <= budget);
+      const result = await executeRunner(
+        {
+          action: 'extension',
+          workspace: root,
+          adapter: 'deepthought',
+          extension,
+          tool: 'extension.deepthought.query',
+          args,
+        },
+        undefined,
+        undefined,
+        undefined,
+        { deepthought: adapter },
+      );
+      assert.deepEqual(result, JSON.parse(expected.stdout));
+      assert.equal(result.artifact_type, 'query');
+      assert.equal(result.schema_version, '1');
+      if (args.operation === 'definitions') {
+        assert.equal(result.total_matches, 40);
+        assert(result.matches.length > 0 && result.matches.length < 40);
+        assert.equal(result.truncated, true);
+        assert(
+          result.matches.every(
+            (row) => row.id && row.source_snapshot_id && row.definition.native_id === null,
+          ),
+        );
+      }
+    }
+    for (const args of [
+      { operation: 'definitions', file: 'source.py' },
+      { operation: 'references', symbol: 'helper', file: 'source.py' },
+      { operation: 'dependencies', file: 'source.py', symbol: 'helper' },
+      { operation: 'definitions', symbol: '   ' },
+      { operation: 'definitions', max_output_bytes: 32000 },
+    ]) {
+      await assert.rejects(
+        adapter({ extension, tool: 'extension.deepthought.query', args, workingDirectory: root }),
+        /accept a|Invalid DeepThought/,
+      );
+    }
   },
 );

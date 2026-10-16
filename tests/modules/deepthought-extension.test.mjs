@@ -53,6 +53,19 @@ test('DeepThought tools require a reviewed pinned manifest and an installed assi
       }),
     /Invalid extension/,
   );
+  for (const args of [
+    { operation: 'references' },
+    { operation: 'definitions', symbol: '   ' },
+    { operation: 'definitions', file: 'main.py' },
+    { operation: 'references', symbol: 'helper', file: 'main.py' },
+    { operation: 'dependencies', file: 'main.py', symbol: 'helper' },
+    { operation: 'definitions', max_output_bytes: 32768 },
+  ]) {
+    assert.throws(
+      () => capabilities.validate(session, null, 'code_intelligence', args),
+      /Invalid extension/,
+    );
+  }
 });
 
 test('session extensions retain the same immutable execution descriptor as built-in runner tools', async () => {

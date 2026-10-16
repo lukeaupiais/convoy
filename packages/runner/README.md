@@ -11,7 +11,7 @@ Tests live in `tests/runner`.
 ## Local code intelligence
 
 The optional `deepthought` extension adapter uses the separately provisioned
-DeepThought SDK 0.2.0a1 on Linux. It does not install packages, execute indexers,
+DeepThought SDK 0.2.1a1 on Linux. It does not install packages, execute indexers,
 call models, or start a service. Configure `CONVOY_DEEPTHOUGHT_PYTHON` with an
 absolute virtualenv Python path on each runner host, outside assigned workspaces.
 Local and SSH workers use the same adapter and protocol; remote workers need
@@ -32,6 +32,19 @@ configuration. Source and index reads, process time and output are bounded.
 Results retain snapshot identity, capabilities, diagnostics, coverage and explicit
 resolution states; dependency edges describe references, not calls. Match limits
 and truncated candidate/witness lists are reported explicitly.
+
+The adapter invokes the SDK's `query_graph` interface and returns query schema 1
+without reshaping its results. Definition matches include graph identity and a
+nested `definition` containing the symbol and source location. Reference targets
+and dependency witnesses retain their identities, counts and truncation flags.
+The SDK receives the runner's output budget when it is at least 1024 bytes;
+smaller transport limits are enforced independently by the runner. Input
+confinement, process deadlines and cancellation remain runner responsibilities.
+
+This changes the extension revision to `sdk-0.2.1a1-adapter-2`. Existing reviewed
+profiles are not rewritten: publish and review the new manifest, update the
+profile's exact revision/hash, and provision SDK 0.2.1a1 on the selected runner
+before granting the new revision. The adapter rejects old revisions and SDKs.
 
 Foreground and supervised shell commands accept up to 32,000 characters, so
 ordinary multiline scripts and evidence writes fit in one operation. Oversized
