@@ -7,14 +7,14 @@ import { dirname, isAbsolute, relative } from 'node:path';
 export const deepThoughtExtensionManifest = {
   id: 'deepthought',
   kind: 'executor',
-  revision: 'sdk-0.2.1a1-adapter-2',
+  revision: 'sdk-0.2.4a1-adapter-3',
   execution: { location: 'runner', adapter: 'deepthought' },
   tools: [
     {
       id: 'query',
       name: 'code_intelligence',
       description:
-        'Read local definitions, SCIP references or witnessed file dependencies. References are not proven calls. Indexes must already exist in the assigned working directory.',
+        'Read local definitions, SCIP references or witnessed file dependencies. References are not proven calls. Indexes must already exist in the assigned working directory. Recorded-file consistency is reported separately and does not certify whole-workspace freshness.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -98,11 +98,11 @@ function sandboxArgs(prefixes, root) {
   ];
 }
 const bridge = String.raw`
-import json, sys, os, stat, tempfile
+import json, sys, os, stat, subprocess, tempfile
 from pathlib import Path
 from deepthought import QueryRequest, analyze_repository, ingest_scip, compose_graph, query_graph
 from deepthought import __version__
-if __version__!='0.2.1a1':
+if __version__!='0.2.4a1':
     raise ValueError('Installed SDK no longer matches the pinned adapter')
 a=json.load(sys.stdin)
 root=Path('/work')
@@ -129,9 +129,26 @@ if 'index' in a:
         os.close(directory)
 else:
     source=analyze_repository(root, repository_id='workspace', max_files=200, max_file_bytes=1000000, max_total_bytes=10000000)
+with tempfile.NamedTemporaryFile(dir='/tmp') as captured:
+    captured.write(source.to_json().encode('utf-8'))
+    captured.flush()
+    checked=subprocess.run([sys.executable,'-I','-B','-m','deepthought','check-source',str(root),captured.name,
+        '--repository-id','workspace','--max-artifact-bytes','10000000','--max-files','200',
+        '--max-file-bytes','1000000','--max-total-bytes','10000000',
+        '--max-output-bytes',str(a['max_output_bytes'])],capture_output=True)
+if checked.returncode not in (0,1):
+    raise ValueError('Recorded source consistency check failed')
+evidence={'engine_version':__version__,'source_consistency':json.loads(checked.stdout)}
+# Adding nonempty JSON members costs exactly their serialized object size.
+evidence_bytes=len(json.dumps(evidence,sort_keys=True,ensure_ascii=False,allow_nan=False).encode('utf-8'))
 request=QueryRequest(a['operation'], 'workspace', symbol=a.get('symbol'), file=a.get('file'),
-    limit=a.get('limit',20), max_output_bytes=a['max_output_bytes'])
-print(query_graph(compose_graph([source]), request).to_json())
+    limit=a.get('limit',20), max_output_bytes=a['max_output_bytes']-evidence_bytes)
+result=query_graph(compose_graph([source]), request).to_dict()
+result.update(evidence)
+output=json.dumps(result,sort_keys=True,ensure_ascii=False,allow_nan=False)
+if len(output.encode('utf-8'))+1>a['max_output_bytes']:
+    raise ValueError('Combined query and consistency output exceeds its budget')
+print(output)
 `;
 
 function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } = {}) {
@@ -246,11 +263,11 @@ export async function createDeepThoughtAdapter({
     );
     const checked = JSON.parse(probe);
     if (
-      checked.version !== '0.2.1a1' ||
+      checked.version !== '0.2.4a1' ||
       !Array.isArray(checked.prefixes) ||
       checked.prefixes.some((p) => typeof p !== 'string' || !isAbsolute(p) || p === '/')
     )
-      throw new Error('DeepThought adapter requires SDK 0.2.1a1 and bounded runtime prefixes.');
+      throw new Error('DeepThought adapter requires SDK 0.2.4a1 and bounded runtime prefixes.');
     await runProcess(
       '/usr/bin/bwrap',
       [
@@ -260,7 +277,7 @@ export async function createDeepThoughtAdapter({
         '-I',
         '-B',
         '-c',
-        "from deepthought import QueryRequest, query_graph; import deepthought,socket,errno; s=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',9))\nexcept OSError as e: assert e.errno in (errno.ENETUNREACH,errno.EHOSTUNREACH)\nelse: raise RuntimeError('Network isolation unavailable')\nassert deepthought.__version__=='0.2.1a1'",
+        "from deepthought import QueryRequest, query_graph; import deepthought,socket,errno; s=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',9))\nexcept OSError as e: assert e.errno in (errno.ENETUNREACH,errno.EHOSTUNREACH)\nelse: raise RuntimeError('Network isolation unavailable')\nassert deepthought.__version__=='0.2.4a1'",
       ],
       { signal, timeoutMs: 5000, maxOutputBytes: 4000 },
     );
