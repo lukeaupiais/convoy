@@ -93,6 +93,11 @@ test(
     const result = await execution.tool(session, 'code_intelligence', definitions);
     assert.equal(result.matches[0].definition.symbol, 'Widget.execute');
     assert.equal(result.status, 'succeeded');
+    assert.equal(result.engine_version, '0.2.4a1');
+    assert.equal(result.workspace_freshness, 'unverified');
+    assert.equal(result.source_consistency.scope, 'recorded_files');
+    assert.equal(result.source_consistency.snapshot_id, result.snapshot_id);
+    assert.equal(result.source_consistency.status, 'unchanged');
     const references = {
       operation: 'references',
       index: 'index.scip',
@@ -103,5 +108,9 @@ test(
     const referenced = await execution.tool(session, 'code_intelligence', references);
     assert.equal(referenced.total_matches, 3);
     assert.equal(referenced.status, 'partial');
+    assert.equal(referenced.engine_version, '0.2.4a1');
+    assert.equal(referenced.source_consistency.snapshot_id, referenced.snapshot_id);
+    assert.equal(referenced.source_consistency.status, 'unverified');
+    assert.equal(referenced.workspace_freshness, 'unverified');
   },
 );

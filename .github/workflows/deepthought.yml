@@ -33,7 +33,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
           python -m venv /tmp/convoy-deepthought-sdk
-          /tmp/convoy-deepthought-sdk/bin/python -m pip install 'deepthought-analysis-engine[python,typescript,scip] @ git+https://github.com/lukeaupiais/DeepThought.git@6c007ec5cb1ccd24107db13e3a0bd178de1a83e9'
+          /tmp/convoy-deepthought-sdk/bin/python -m pip install 'deepthought-analysis-engine[python,typescript,scip] @ git+https://github.com/lukeaupiais/DeepThought.git@5e80a0074566e4d890a41f6d453f94cda44289d5'
           npm ci
       - name: Validate consumer architecture and build
         run: |
