@@ -16,6 +16,7 @@ jobs:
       CONVOY_TEST_DEEPTHOUGHT_PYTHON: /tmp/convoy-deepthought-sdk/bin/python
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       CONVOY_TEST_COMPILED_WORKER: ./dist-worker/convoy-worker-linux-x64
+      CONVOY_TEST_DEEPTHOUGHT_SSH: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -31,7 +32,8 @@ jobs:
       - name: Provision isolated runtime and pinned SDK
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes bubblewrap openssh-server
+          sudo mkdir -p /run/sshd
           python -m venv /tmp/convoy-deepthought-sdk
           /tmp/convoy-deepthought-sdk/bin/python -m pip install 'deepthought-analysis-engine[python,typescript,scip] @ git+https://github.com/lukeaupiais/DeepThought.git@5e80a0074566e4d890a41f6d453f94cda44289d5'
           npm ci
@@ -43,4 +45,4 @@ jobs:
           npm run build:worker
       - name: Exercise real SDK, runner and portable worker integration
         timeout-minutes: 3
-        run: node --test --test-timeout=60000 --test-concurrency=1 tests/acceptance/deepthought.test.mjs tests/modules/deepthought-extension.test.mjs tests/runner/deepthought*.test.mjs tests/runner/working-directory.test.mjs
+        run: node --test --test-timeout=60000 --test-concurrency=1 tests/acceptance/deepthought.test.mjs tests/acceptance/deepthought-ssh.test.mjs tests/modules/deepthought-extension.test.mjs tests/runner/deepthought*.test.mjs tests/runner/working-directory.test.mjs

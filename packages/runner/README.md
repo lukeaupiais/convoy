@@ -61,8 +61,22 @@ profiles are not rewritten: publish and review the new manifest, update the
 profile's exact revision/hash, and provision SDK 0.2.4a1 on the selected runner
 before granting the new revision. The adapter rejects old revisions and SDKs. The dedicated integration workflow
 installs immutable SDK commit `5e80a0074566e4d890a41f6d453f94cda44289d5`.
-Both source and compiled workers are tested locally without Theia. Local/SSH
-workers share this implementation; actual SSH acceptance is a separate gate.
+Both source and compiled workers are tested locally without Theia. The dedicated
+workflow also runs a real loopback SSH server with disposable keys and home
+storage. It uses strict host-key verification, the production worker uploader,
+and a reviewed capability profile/session grant. Coverage includes source edits,
+SCIP uncertainty, assignment/revision rejection, an unprovisioned remote runtime,
+and worker exit after channel closure. This proves SSH protocol execution on one
+machine; acceptance on a separately provisioned host remains a separate gate.
+
+To run this acceptance locally after building the worker, set
+`CONVOY_TEST_DEEPTHOUGHT_SSH=1`, `CONVOY_TEST_DEEPTHOUGHT_PYTHON` to the installed
+SDK's absolute Python path, and `CONVOY_TEST_COMPILED_WORKER` to the built worker.
+Run `node --test --test-timeout=60000 tests/acceptance/deepthought-ssh.test.mjs`.
+OpenSSH client/server and functioning Bubblewrap are required; set
+`CONVOY_TEST_SSHD` if the server is outside `/usr/sbin/sshd`. An explicit SSH opt-in
+with missing prerequisites fails rather than skipping. The test starts only a
+loopback listener and removes its temporary keys, worker copy and workspace.
 
 Foreground and supervised shell commands accept up to 32,000 characters, so
 ordinary multiline scripts and evidence writes fit in one operation. Oversized
