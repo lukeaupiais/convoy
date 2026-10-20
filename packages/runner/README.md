@@ -66,7 +66,7 @@ workflow also runs a real loopback SSH server with disposable keys and home
 storage. It uses strict host-key verification, the production worker uploader,
 and a reviewed capability profile/session grant. Coverage includes source edits,
 SCIP uncertainty, assignment/revision rejection, an unprovisioned remote runtime,
-and worker exit after channel closure. This proves SSH protocol execution on one
+worker exit after connection termination, and graceful exit on SSH stdin EOF. This proves SSH protocol execution on one
 machine; acceptance on a separately provisioned host remains a separate gate.
 
 To run this acceptance locally after building the worker, set

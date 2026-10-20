@@ -16,6 +16,7 @@ import { createRunners } from '../../apps/daemon/src/adapters/runners/runners.mj
 import { createWorkerDeployment } from '../../apps/daemon/src/adapters/runners/worker-deployment.mjs';
 import { connectWorker } from '../../apps/daemon/src/adapters/runners/worker-client.mjs';
 import {
+  createRpc,
   deepThoughtExtensionManifest,
   processRun,
   sshArgs,
@@ -250,6 +251,41 @@ test(
         }),
         /revision or tool/,
       );
+    });
+    await t.test('worker exits naturally when SSH stdin reaches EOF', async () => {
+      const child = spawn('ssh', [...artifact.args, artifact.command], {
+        env: { PATH: process.env.PATH },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.stderr.resume();
+      const rpc = createRpc(child.stdout, child.stdin);
+      t.after(() => {
+        rpc.close();
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+      });
+      const hello = await rpc.call('hello');
+      const result = await rpc.call('execute', {
+        action: 'extension',
+        operationId: randomUUID(),
+        workspace,
+        adapter: 'deepthought',
+        extension: { id: published.id, revision: published.revision, hash: published.hash },
+        tool: 'extension.deepthought.query',
+        args: { operation: 'definitions' },
+        execution: {
+          version: 1,
+          workspace,
+          assignmentToken: session.assignment.token,
+          policyDigest: grant.digest,
+          grant,
+        },
+      });
+      assert.equal(result.matches[0].definition.symbol, 'After');
+      const exited = once(child, 'close', { signal: AbortSignal.timeout(5000) });
+      child.stdin.end();
+      assert.deepEqual(await exited, [0, null], 'EOF must allow a clean SSH/worker exit');
+      assert.throws(() => process.kill(hello.pid, 0), { code: 'ESRCH' });
+      rpc.close();
     });
     await t.test('unprovisioned remote runtime is not advertised and rejects queries', async () => {
       const client = connectWorker({
