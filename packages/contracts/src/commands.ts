@@ -915,6 +915,15 @@ type RuntimeCommandKnownResults = {
   removeTicketFile: Ticket;
   saveBoard: Board;
   saveBoardTemplate: BoardTemplate;
+  setBoardPlacement: {
+    ticketId: number;
+    boardId: string;
+    placement: Pick<BoardPlacement, 'columnId' | 'swimlaneKey'>;
+    fromColumnId: string;
+    toColumnId: string;
+    ticketFieldsChanged: { field: string; from: unknown; to: unknown }[];
+    revision: number;
+  };
   saveEnvironment: Environment;
   saveProject: Project;
   saveRunnerPool: RunnerPool;

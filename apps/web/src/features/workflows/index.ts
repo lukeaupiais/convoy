@@ -6,6 +6,7 @@ export {
   WorkflowActivityHistory,
   WorkflowRunDetails,
   WorkflowRunInteraction,
+  WorkflowRecoveryNotice,
   WorkflowArtifactContent,
   workflowHumanTaskActions,
 } from './WorkflowRunInteraction';
@@ -14,6 +15,7 @@ export {
   workflowActivityHistory,
   workflowDecisionCapabilities,
   workflowNeedsRecovery,
+  workflowAttentionLabel,
   workflowRunOutput,
   workflowStatusLabel,
   requiredGateActivityTarget,

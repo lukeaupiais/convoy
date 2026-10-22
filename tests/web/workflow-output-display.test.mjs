@@ -46,7 +46,7 @@ async function compile(path) {
   modules.set(path, url);
   return url;
 }
-const { WorkflowRunInteraction } = await import(
+const { WorkflowRunInteraction, WorkflowRecoveryNotice } = await import(
   await compile(
     fileURLToPath(
       new URL('../../apps/web/src/features/workflows/WorkflowRunInteraction.tsx', import.meta.url),
@@ -73,12 +73,13 @@ function render(submission, bindings = [], example = {}) {
       status: 'waiting_event',
       history: [],
       lastSubmission: submission,
+      ...example.flow,
     },
   };
   return renderToStaticMarkup(createElement(WorkflowRunInteraction, { session }));
 }
 
-test('unconfigured details retain field names while configured labels and prominence remain visible', () => {
+test('unconfigured details use readable labels while configured labels and prominence remain visible', () => {
   for (const example of [
     { board: 'Quarterly Journal', workType: 'Essay', ticketStatus: 'Copy desk' },
     { board: 'Warehouse North', workType: 'CycleCount', ticketStatus: 'Awaiting recount' },
@@ -94,9 +95,9 @@ test('unconfigured details retain field names while configured labels and promin
       example,
     );
     assert.match(html, /<strong>Finding<\/strong>/);
-    assert.match(html, /Details · 2/);
-    assert.match(html, /<dt>sample_size<\/dt><dd>32<\/dd>/);
-    assert.match(html, /<dt>confidence<\/dt><dd>High<\/dd>/);
+    assert.match(html, /<summary>Additional output<\/summary>/);
+    assert.match(html, /<dt>Sample size<\/dt><dd>32<\/dd>/);
+    assert.match(html, /<dt>Confidence<\/dt><dd>High<\/dd>/);
     assert.doesNotMatch(html, /Supporting output|References ·/);
   }
 });
@@ -120,7 +121,7 @@ test('reference-only output exposes a bounded collection without dumping excerpt
   assert.doesNotMatch(html, /Captured excerpt|region-119|Captured files|Details ·|<dialog/);
 });
 
-test('empty collections are omitted and bound fields without labels retain their names', () => {
+test('empty collections are omitted and bound fields without labels use readable names', () => {
   assert.doesNotMatch(
     render({ nodeId: 'observe', summary: 'Waiting', artifacts: [], references: [] }),
     /Details ·|References ·|Captured files/,
@@ -129,7 +130,7 @@ test('empty collections are omitted and bound fields without labels retain their
     { nodeId: 'observe', summary: 'Result', artifacts: [], details: { quantity: '24' } },
     [{ source: 'detail', field: 'quantity' }],
   );
-  assert.match(html, /<dt>quantity<\/dt><dd>24<\/dd>/);
+  assert.match(html, /<dt>Quantity<\/dt><dd>24<\/dd>/);
   assert.doesNotMatch(html, /Details ·/);
 });
 
@@ -150,7 +151,7 @@ test('an explicitly designated review field leads the summary across unrelated w
   }
 });
 
-test('a single unconfigured detail remains visible with its source field name', () => {
+test('a single unconfigured detail remains visible with a readable field label', () => {
   const html = render({
     nodeId: 'observe',
     summary: 'Result',
@@ -159,20 +160,27 @@ test('a single unconfigured detail remains visible with its source field name', 
   });
   assert.match(html, /<dl class="workflow-output-fields">/);
   assert.doesNotMatch(html, /Details · 1/);
-  assert.match(html, /<dt>disposition<\/dt><dd>Hold for inspection<\/dd>/);
+  assert.match(html, /<dt>Disposition<\/dt><dd>Hold for inspection<\/dd>/);
 });
 
-test('retained output identifies its producing activity and revision separately from the current step', () => {
-  const html = render({
-    nodeId: 'measure',
-    step: 'Measure samples',
-    revision: 7,
-    summary: 'Measured values',
-    artifacts: [],
-  });
-  assert.match(html, /Observe result/);
-  assert.match(html, /Output from Measure samples/);
-  assert.match(html, /Revision 7/);
+test('secondary analysis opens independently without execution metadata in the ticket', () => {
+  for (const producer of ['Measure samples', 'Edit manuscript']) {
+    const html = render({
+      nodeId: 'previous-step',
+      step: producer,
+      revision: 7,
+      summary: 'Captured analysis',
+      artifacts: [],
+      details: { result: 'Material to review' },
+    });
+    assert.match(html, /<small>Current step<\/small>/);
+    assert.match(html, /<h2>Observe result<\/h2>/);
+    assert.match(html, /<details class="workflow-supporting-summary workflow-output-disclosure"><summary>Analysis<\/summary>/);
+    assert.ok(html.indexOf('Material to review') < html.indexOf('<summary>Analysis</summary>'));
+    assert.doesNotMatch(html, /Produced by|Submission revision|<summary>Details<\/summary>/);
+    assert.ok(!html.includes(producer));
+    assert.match(html, /Captured analysis/);
+  }
 });
 
 test('summary renders safe Markdown structure while detail values retain their exact text', () => {
@@ -204,6 +212,234 @@ test('a summary explicitly marked primary remains visible beside a single unconf
     [{ source: 'summary', primary: true }],
   );
   assert.match(html, /Main analysis/);
-  assert.match(html, /<dt>schedule<\/dt>/);
+  assert.match(html, /<dt>Schedule<\/dt>/);
   assert.doesNotMatch(html, /workflow-supporting-summary/);
+});
+
+test('unconfigured field labels are readable across unrelated workflows without changing values', () => {
+  for (const [field, label] of [
+    ['decisionMemo', 'Decision memo'],
+    ['count_reconciliation', 'Count reconciliation'],
+  ]) {
+    const html = render({
+      nodeId: 'observe',
+      summary: 'Analysis',
+      artifacts: [],
+      details: { [field]: 'Keep exact_material.' },
+    });
+    assert.ok(html.includes(`<dt>${label}</dt><dd>Keep exact_material.</dd>`));
+  }
+  const configured = render(
+    {
+      nodeId: 'observe',
+      summary: 'Analysis',
+      artifacts: [],
+      details: { decisionMemo: 'Captured text' },
+    },
+    [{ source: 'detail', field: 'decisionMemo', label: 'Decision document' }],
+  );
+  assert.match(configured, /<dt>Decision document<\/dt>/);
+});
+
+test('failed activity leads with recovery and keeps the exact recorded error in a closed disclosure', () => {
+  const html = render(undefined, [], {
+    status: 'failed',
+    flow: { status: 'failed' },
+    events: [{ seq: 1, type: 'submission_rejected', message: 'Expected <countValue>.' }],
+  });
+  assert.doesNotMatch(html, />Recovery required</);
+  assert.match(html, /Step failed/);
+  assert.match(html, /Expected &lt;countValue&gt;\./);
+  assert.doesNotMatch(html, /<summary>Details<\/summary>/);
+  assert.doesNotMatch(html, /<small aria-label="Execution status/);
+});
+
+test('uncertain assignment takes precedence over an older failed event in recovery', () => {
+  const html = renderToStaticMarkup(
+    createElement(WorkflowRecoveryNotice, {
+      session: {
+        status: 'failed',
+        flow: { status: 'failed' },
+        assignment: { state: 'uncertain', message: 'Inspect the original runner.' },
+        events: [{ type: 'submission_rejected', message: 'Old validation error' }],
+      },
+    }),
+  );
+  assert.match(html, /Execution outcome uncertain/);
+  assert.match(html, /Inspect the original runner\./);
+  assert.doesNotMatch(html, /Old validation error|Step failed/);
+});
+
+// Isolate the ticket presentation from session controls; the browser check covers
+// their real composition. Any accidental command during render fails this test.
+const ticketSource = await readFile(
+  new URL('../../apps/web/src/features/tickets/TicketExecution.tsx', import.meta.url),
+  'utf8',
+);
+let ticketJs = ts
+  .transpileModule(ticketSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+      jsx: ts.JsxEmit.ReactJSX,
+    },
+  })
+  .outputText.replace(/^import\s+['"][^'"]+\.css['"];?\s*$/gm, '');
+const stubUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`;
+const ticketImports = {
+  '../../shared/api/runtime': stubUrl(
+    'export const owns = () => false; export const command = () => { throw new Error("Unexpected render mutation"); };',
+  ),
+  '../../shared/lib/browser': stubUrl('export const newId = () => "test";'),
+  '../../shared/ui/Select': stubUrl('export const Select = () => null;'),
+  '../sessions': stubUrl('export const SessionControls = ({advancedContent}) => advancedContent;'),
+  '../library': stubUrl(
+    'export const ProfilePicker = () => null; export const profileRef = () => undefined;',
+  ),
+  '../workflows': stubUrl(
+    'export const WorkflowRecoveryNotice = ({children}) => children; export const WorkflowRunDetails = () => "Technical evidence";',
+  ),
+};
+ticketJs = ticketJs.replace(
+  /from ['"]([^'"]+)['"]/g,
+  (_, name) => `from '${ticketImports[name] ?? import.meta.resolve(name)}'`,
+);
+const { TicketExecution } = await import(stubUrl(ticketJs));
+
+test('ticket recovery leads with controls and keeps technical evidence collapsed, including when disconnected', () => {
+  for (const example of [
+    { board: 'Quarterly Journal', workType: 'Essay', status: 'Copy desk' },
+    { board: 'Warehouse North', workType: 'CycleCount', status: 'Awaiting recount' },
+  ]) {
+    for (const runtimeAvailable of [true, false]) {
+      for (const uncertain of [false, true]) {
+        const session = {
+          id: 'session',
+          activeTicketId: 42,
+          status: 'failed',
+          flow: { id: 'run', instance: 'exact-attempt', nodeId: 'process', status: 'failed' },
+          workflow: { nodes: [{ id: 'process', name: 'Process material' }] },
+          ...(uncertain ? { assignment: { state: 'uncertain' } } : {}),
+        };
+        const html = renderToStaticMarkup(
+          createElement(TicketExecution, {
+            ticket: { id: 42, executionSessionId: 'session', projectId: 'project', ...example },
+            state: { sessions: [session], projects: [], workflows: [], models: [] },
+            runtimeAvailable,
+            focusRecovery: true,
+          }),
+        );
+        assert.ok(html.indexOf('Continue workflow') >= 0);
+        assert.ok(html.indexOf('Continue workflow') < html.indexOf('Technical evidence'));
+        assert.match(html, /<details class="execution-evidence"><summary>Execution details/);
+        assert.equal(
+          /<button class="primary" disabled="">Continue workflow/.test(html),
+          !runtimeAvailable || uncertain,
+        );
+      }
+    }
+  }
+});
+
+const sessionSource = await readFile(
+  new URL('../../apps/web/src/features/sessions/RuntimeViews.tsx', import.meta.url),
+  'utf8',
+);
+let sessionJs = ts
+  .transpileModule(sessionSource, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+      jsx: ts.JsxEmit.ReactJSX,
+    },
+  })
+  .outputText.replace(/^import\s+['"][^'"]+\.css['"];?\s*$/gm, '');
+const sessionImports = {
+  '../../shared/api/runtime': stubUrl(
+    'export const owns = () => false; export const useRuntime = () => ({}); export const command = () => { throw new Error("Unexpected render mutation"); };',
+  ),
+  './sessionMonitor': stubUrl(
+    'export const liveModel = () => null; export const sessionProjectId = () => null; export const sessionStatus = () => null;',
+  ),
+  '../library': stubUrl('export const SessionCapabilities = () => null;'),
+  '../workflows': stubUrl(
+    'export const WorkflowActivityHistory = () => null; export const WorkflowRunDetails = () => null; export const WorkflowRunInteraction = () => null; export const requiredGateActivityTarget = () => undefined; export const workflowHumanTaskActions = () => ({});',
+  ),
+};
+sessionJs = sessionJs.replace(
+  /from ['"]([^'"]+)['"]/g,
+  (_, name) => `from '${sessionImports[name] ?? import.meta.resolve(name)}'`,
+);
+const { SessionControls } = await import(stubUrl(sessionJs));
+
+test('session details collapse ordinary metadata but open for unresolved outcomes and disconnects', () => {
+  const session = {
+    id: 'session',
+    activeTicketId: 42,
+    status: 'failed',
+    instructions: [],
+    flow: { id: 'run', instance: 'attempt', nodeId: 'node', status: 'failed' },
+  };
+  for (const example of [
+    { expectedOpen: false },
+    { expectedOpen: true, runtimeAvailable: false },
+    {
+      expectedOpen: true,
+      assignment: { state: 'uncertain', message: 'Inspect original execution.' },
+    },
+    {
+      expectedOpen: true,
+      effects: [{ effectKey: 'run:attempt:node', status: 'uncertain', operation: 'update_ticket' }],
+    },
+    {
+      expectedOpen: true,
+      decisions: [{ ticketId: 42, status: 'failed', workflowVersion: 1, triggerKey: 'automation' }],
+    },
+    {
+      expectedOpen: false,
+      effects: [
+        { effectKey: 'another-run:attempt:node', status: 'uncertain', operation: 'update_ticket' },
+      ],
+    },
+  ]) {
+    const html = renderToStaticMarkup(
+      createElement(SessionControls, {
+        session: { ...session, ...(example.assignment ? { assignment: example.assignment } : {}) },
+        state: {
+          workflows: [],
+          runners: [],
+          workflowEffects: example.effects,
+          automationDecisions: example.decisions,
+        },
+        disclosure: true,
+        openRecovery: true,
+        showWorkflowInteraction: false,
+        runtimeAvailable: example.runtimeAvailable ?? true,
+      }),
+    );
+    assert.equal(
+      html.startsWith('<details class="session-controls-disclosure" open="">'),
+      example.expectedOpen,
+    );
+    if (example.effects?.[0].effectKey === 'run:attempt:node') {
+      assert.match(html, /Confirm applied/);
+      assert.match(html, /disabled=""/);
+    }
+  }
+});
+
+
+test('existing prose labels are scannable without rewriting output or guessing customer sections', () => {
+  for (const label of ['Measured samples', 'Editorial decision']) {
+    const html = render({
+      nodeId: 'observe',
+      summary: `${label}: Keep **recorded** content.\n\nhttps://example.test/path\n\nUnlabelled paragraph.`,
+      artifacts: [],
+      details: { result: 'Review material' },
+    });
+    assert.ok(html.includes(`<strong class="workflow-paragraph-label">${label}:</strong>`));
+    assert.match(html, /Keep <strong>recorded<\/strong> content\./);
+    assert.match(html, /<p>https:\/\/example\.test\/path<\/p><p>Unlabelled paragraph\.<\/p>/);
+    assert.doesNotMatch(html, /class="workflow-paragraph-label">https/);
+  }
 });

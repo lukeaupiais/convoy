@@ -22,6 +22,10 @@ It is the transaction/orchestration layer, not a home for every rule.
 - `work-execution.mjs` and `workflow-references.mjs` expose narrow cross-owner
   queries instead of allowing Work to traverse another module's storage.
 
+Runtime snapshot views share the same authorization scope. `overview` omits
+sessions; `attention` includes only session status and decision summaries without
+execution history or capability expansion. Exact session reads retain details.
+
 Workflow run start/control/read commands are authorized here against the
 persisted project and run principal, then delegated to Workflows. Run ownership,
 legacy session adoption, lease lifecycle, attempts, and read DTO policy stay in

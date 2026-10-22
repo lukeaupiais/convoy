@@ -1,6 +1,21 @@
 import { writableTicketStatuses } from '../integrations';
 import { useEffect, useRef, useState } from 'react';
-import { Bot, FileText, Flag, FolderKanban, Paperclip, Pencil, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bot,
+  CircleAlert,
+  FileText,
+  Flag,
+  Paperclip,
+  Pencil,
+  Plus,
+  ExternalLink,
+  ChevronDown,
+  RefreshCw,
+  Workflow,
+  X,
+} from 'lucide-react';
 import {
   command,
   owns,
@@ -13,7 +28,12 @@ import {
 import { Select } from '../../shared/ui/Select';
 import { ExecutionProfileEditor, PlacementEditor } from '../projects';
 import { WorkflowArtifactContent as MarkdownDocument } from '../workflows';
-import { WorkflowActivityHistory, WorkflowRunInteraction, requiredGateActivityTarget, workflowHumanTaskActions } from '../workflows';
+import {
+  WorkflowRunInteraction,
+  workflowAttentionLabel,
+  requiredGateActivityTarget,
+  workflowHumanTaskActions,
+} from '../workflows';
 import { ticketWorkflowActions } from './workflow-actions';
 import {
   clearSubmittedTicketReplyDraft,
@@ -28,7 +48,9 @@ import {
   ticketThreadScopeKey,
   useTicketReplyDraft,
 } from './ticket-thread-state';
+import { TicketExecution } from './TicketExecution';
 import './ticket-details.css';
+import './ticket-workspace.css';
 
 const fileUrl = (ticketId: number, file: ContextFile) =>
   `/api/tickets/${ticketId}/attachments/${file.id}`;
@@ -196,7 +218,6 @@ export function TicketDetails({
   onRun,
   runtimeAvailable = true,
   onSelectTicket,
-  onRecovery,
   onOpenWorkflowRun,
 }: {
   state: RuntimeState;
@@ -205,10 +226,11 @@ export function TicketDetails({
   onRun: () => void;
   runtimeAvailable?: boolean;
   onSelectTicket: (id: number) => void;
-  onRecovery?: () => void;
   onOpenWorkflowRun?: (runId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [activePanel, setActivePanel] = useState<'overview' | 'workflow'>('overview');
+  const [recovering, setRecovering] = useState(false);
   const [preview, setPreview] = useState(false);
   const [description, setDescription] = useState(ticket.description);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
@@ -224,12 +246,15 @@ export function TicketDetails({
   const [publishing, setPublishing] = useState(false);
   const [remoteIssueId, setRemoteIssueId] = useState('');
   const [relatedTicketId, setRelatedTicketId] = useState('');
+  const [showRelatedEditor, setShowRelatedEditor] = useState(false);
+  const [relatedMode, setRelatedMode] = useState<'existing' | 'new'>('existing');
   const [relatedTitle, setRelatedTitle] = useState('');
   const [relatedBoardId, setRelatedBoardId] = useState('');
   const [linkBusy, setLinkBusy] = useState(false);
   const [replyBusyScopes, setReplyBusyScopes] = useState<Set<string>>(() => new Set());
   const replyAttempts = useRef(new Map<string, number>());
   const [showReplyComposer, setShowReplyComposer] = useState(false);
+  const [dismissedReplyDraft, setDismissedReplyDraft] = useState('');
   const initialThreadConnectionId =
     ticket.externalLinks?.find((link) => {
       const connection = state.ticketConnections?.find((source) => source.id === link.connectionId);
@@ -329,6 +354,8 @@ export function TicketDetails({
   const draftKeyRef = useRef(draftKey);
   draftKeyRef.current = draftKey;
   const replyDraft = useTicketReplyDraft(draftKey);
+  const replyComposerOpen =
+    showReplyComposer || (!!replyDraft.text && dismissedReplyDraft !== draftKey);
   const replyBusy = replyBusyScopes.has(draftKey);
   const descriptionIsLong =
     ticket.description.length > 480 || ticket.description.split(/\r?\n/).length > 8;
@@ -341,9 +368,10 @@ export function TicketDetails({
   const writableStatuses = writableTicketStatuses(ticket, state.ticketConnections ?? []);
   const statusChoices = [
     ...new Set([
-      ...(writableStatuses ?? statusBoards.flatMap((board) =>
-        board.columns.map((column) => column.value ?? column.name),
-      )),
+      ...(writableStatuses ??
+        statusBoards.flatMap((board) =>
+          board.columns.map((column) => column.value ?? column.name),
+        )),
       ticket.status,
     ]),
   ];
@@ -369,10 +397,20 @@ export function TicketDetails({
   const session = state.sessions.find(
     (value) => value.id === ticket.executionSessionId && value.activeTicketId === ticket.id,
   );
-  const approvalTargetNodeId = session ? requiredGateActivityTarget(session, state.workflowActivities) : undefined;
-  const preparedActivityReservation = session?.flow && state.workflowRuns?.find(run => run.id === session.flow?.id)?.activityReservations?.find(value =>
-    value.gateNodeId === session.flow?.nodeId && value.gateInstance === session.flow?.instance && value.targetNodeId === approvalTargetNodeId && !value.consumedAt);
-  const project = state.projects.find((value) => value.id === ticket.projectId);
+  const approvalTargetNodeId = session
+    ? requiredGateActivityTarget(session, state.workflowActivities)
+    : undefined;
+  const preparedActivityReservation =
+    session?.flow &&
+    state.workflowRuns
+      ?.find((run) => run.id === session.flow?.id)
+      ?.activityReservations?.find(
+        (value) =>
+          value.gateNodeId === session.flow?.nodeId &&
+          value.gateInstance === session.flow?.instance &&
+          value.targetNodeId === approvalTargetNodeId &&
+          !value.consumedAt,
+      );
   const syncNeedsReview = Boolean(
     ticket.externalPublish || ticket.externalLinks?.some((link) => link.syncState === 'error'),
   );
@@ -395,13 +433,13 @@ export function TicketDetails({
     threadSources.map(({ link }) => link.connectionId).join('|'),
   ]);
   useEffect(() => {
-    if (!session || !owns(session) || !runtimeAvailable) return;
+    if (!session || !owns(session) || !runtimeAvailable || recovering) return;
     const timer = setInterval(
       () => void command('heartbeat', { sessionId: session.id }).catch(() => {}),
       25000,
     );
     return () => clearInterval(timer);
-  }, [session?.id, session?.lease?.client, runtimeAvailable]);
+  }, [session?.id, session?.lease?.client, runtimeAvailable, recovering]);
   async function actWorkflow(action: RuntimeAction, input: object = {}): Promise<boolean> {
     if (!session || workflowWorking || !runtimeAvailable) return false;
     setWorkflowWorking(true);
@@ -499,364 +537,534 @@ export function TicketDetails({
   if (!editing)
     return (
       <section className="ticket-summary ticket-workspace">
-        <header className="ticket-workspace-heading">
-          <div>
-            <span className="ticket-status">{ticket.status}</span>
-            <h2>{ticket.title}</h2>
-          </div>
+        <header className="ticket-titlebar">
+          <h1 id={`ticket-title-${ticket.id}`}>{ticket.title}</h1>
           <button
-            className="secondary"
+            className="ticket-edit-button"
             disabled={!runtimeAvailable}
-            title={!runtimeAvailable ? 'Reconnect to refresh before editing.' : undefined}
+            title="Edit ticket"
+            aria-label="Edit ticket"
             onClick={() => setEditing(true)}
           >
-            <Pencil size={13} aria-hidden="true" />
-            Edit
+            <Pencil size={14} aria-hidden="true" /> Edit
           </button>
         </header>
-        <dl className="ticket-overview-properties" aria-label="Ticket properties">
-          <div>
-            <dt>
-              <FolderKanban size={14} aria-hidden="true" /> Project
-            </dt>
-            <dd>{project?.name ?? ticket.projectId}</dd>
-          </div>
-          <div>
-            <dt>
-              <Flag size={14} aria-hidden="true" /> Priority
-            </dt>
-            <dd>{ticket.priority}</dd>
-          </div>
-          {ticket.agent && ticket.agent !== 'Unassigned' && (
-            <div>
-              <dt>
-                <Bot size={14} aria-hidden="true" /> Agent
-              </dt>
-              <dd>{ticket.agent}</dd>
-            </div>
-          )}
-        </dl>
+
         {message && (
           <p className="ticket-feedback" role="status">
             {message}
           </p>
         )}
-        <div className="ticket-workspace-grid">
-          <div className="ticket-workspace-main">
+        <div className="ticket-layout">
+          <div className="ticket-content">
             {session?.flow && (
-              <section className="ticket-agent-activity" aria-label="Workflow">
-                <WorkflowRunInteraction
-                  key={session.id}
-                  session={session}
-                  activityReservation={preparedActivityReservation}
-                  working={workflowWorking || !runtimeAvailable}
-                  actionError={workflowError}
-                  onRecovery={onRecovery ?? onRun}
-                  onOpenWorkflowRun={onOpenWorkflowRun}
-                  actions={{
-                    ...ticketWorkflowActions(
-                      session,
-                      (action, input) => void actWorkflow(action, input),
-                      {
-                        requestChanges: (feedback) =>
-                          actWorkflow('requestChanges', {
-                            instance: session.flow!.instance,
-                            feedback,
-                          }),
-                      },
-                    ),
-                    ...workflowHumanTaskActions(session),
-                    requiresActivityReservation: !!approvalTargetNodeId,
-                    canPrepareActivityApproval: !!session && runtimeAvailable,
-                    canShowPreparedActivityApproval: !!session && owns(session) && runtimeAvailable,
-                    approvalControlKey: session && owns(session) ? session.lease?.id : undefined,
-                    approvalContextKey: JSON.stringify([
-                      state.currentUser?.id,
-                      state.activeContext?.id,
-                      state.activeContext?.projectId,
-                      state.activeContext?.principal,
-                    ]),
-                    prepareActivityApproval: approvalTargetNodeId
-                      ? async () => {
-                          if (!session) throw new Error('Workflow session is unavailable.');
-                          if (!runtimeAvailable)
-                            throw new Error('Reconnect to refresh before preparing approval.');
-                          if (!owns(session))
-                            await command('claim', {
-                              sessionId: session.id,
-                              label: 'Ticket workflow',
-                            });
-                          return (
-                            await command('prepareWorkflowActivity', {
-                              workflowRunId: session.flow!.id,
-                              gateInstance: session.flow!.instance,
-                              targetNodeId: approvalTargetNodeId,
-                            })
-                          ).result;
-                        }
-                      : undefined,
-                    approveGate: (reservation) =>
-                      void actWorkflow('approveGate', {
-                        instance: session.flow!.instance,
-                        ...(reservation
-                          ? {
-                              activityReservationId: reservation.id,
-                              activityReservationDigest: reservation.digest,
-                            }
-                          : {}),
-                      }),
-                  }}
-                />
-              </section>
-            )}
-            {session?.flow ? (
-              <details className="ticket-record-content ticket-description-disclosure">
-                <summary>Description</summary>
-                {descriptionContent}
-              </details>
-            ) : (
-              <section className="ticket-record-content" aria-label="Ticket description">
-                <h3>Description</h3>
-                {descriptionContent}
-              </section>
-            )}
-            {hasActivity && (
-              <section
-                id={`ticket-messages-${ticket.id}`}
-                className="ticket-activity"
-                aria-label="Ticket messages"
-                tabIndex={-1}
+              <div
+                className="ticket-tabs"
+                role="tablist"
+                aria-label="Ticket views"
+                onKeyDown={(event) => {
+                  const buttons = Array.from(
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+                  );
+                  const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+                  const next =
+                    event.key === 'Home'
+                      ? 0
+                      : event.key === 'End'
+                        ? buttons.length - 1
+                        : event.key === 'ArrowRight'
+                          ? (current + 1) % buttons.length
+                          : event.key === 'ArrowLeft'
+                            ? (current - 1 + buttons.length) % buttons.length
+                            : -1;
+                  if (next < 0) return;
+                  event.preventDefault();
+                  buttons[next]?.click();
+                  buttons[next]?.focus();
+                }}
               >
-                <div className="ticket-section-heading">
-                  <h3>Messages</h3>
-                  <div className="ticket-activity-actions">
-                    {(threadSources.length > 1 ||
-                      (selectedThreadConnectionIdForView &&
-                        !threadSources.some(
-                          ({ link }) => link.connectionId === selectedThreadConnectionIdForView,
-                        ))) && (
-                      <label className="ticket-thread-selector">
-                        <span>Connection</span>
-                        <Select
-                          value={selectedThreadConnectionIdForView}
-                          onChange={(event) => chooseThreadConnection(event.target.value)}
-                        >
-                          {selectedThreadConnectionIdForView &&
-                            !threadSources.some(
-                              ({ link }) => link.connectionId === selectedThreadConnectionIdForView,
-                            ) && (
-                              <option value={selectedThreadConnectionIdForView}>
-                                {selectedThreadConnection?.name ??
-                                  selectedThreadSource?.provider ??
-                                  selectedThreadConnectionIdForView}{' '}
-                                · unavailable
+                <button
+                  type="button"
+                  role="tab"
+                  id={`ticket-overview-tab-${ticket.id}`}
+                  aria-controls={`ticket-overview-panel-${ticket.id}`}
+                  aria-selected={activePanel === 'overview'}
+                  tabIndex={activePanel === 'overview' ? 0 : -1}
+                  onClick={() => setActivePanel('overview')}
+                >
+                  <FileText size={14} aria-hidden="true" /> Overview
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  id={`ticket-workflow-tab-${ticket.id}`}
+                  aria-controls={`ticket-workflow-panel-${ticket.id}`}
+                  aria-selected={activePanel === 'workflow'}
+                  tabIndex={activePanel === 'workflow' ? 0 : -1}
+                  onClick={() => setActivePanel('workflow')}
+                >
+                  <Workflow size={14} aria-hidden="true" /> Workflow
+                  {workflowAttentionLabel(session) && (
+                    <span className="ticket-attention-dot" title={workflowAttentionLabel(session)}>
+                      <span className="sr-only">{workflowAttentionLabel(session)}</span>
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+            <section
+              className="ticket-panel ticket-overview-panel"
+              id={`ticket-overview-panel-${ticket.id}`}
+              role={session?.flow ? 'tabpanel' : undefined}
+              aria-labelledby={session?.flow ? `ticket-overview-tab-${ticket.id}` : undefined}
+              hidden={!!session?.flow && activePanel !== 'overview'}
+            >
+              {session?.flow && workflowAttentionLabel(session) && (
+                <div className="ticket-attention" role="status">
+                  <CircleAlert size={16} aria-hidden="true" />
+                  <span>{workflowAttentionLabel(session)}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePanel('workflow');
+                      requestAnimationFrame(() =>
+                        document.getElementById(`ticket-workflow-tab-${ticket.id}`)?.focus(),
+                      );
+                    }}
+                  >
+                    Review workflow <ArrowRight size={14} aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+              <section className="ticket-record-content" aria-label="Ticket description">
+                {ticket.description ? (
+                  descriptionContent
+                ) : (
+                  <button
+                    className="ticket-text-action"
+                    disabled={!runtimeAvailable}
+                    onClick={() => setEditing(true)}
+                  >
+                    Add description
+                  </button>
+                )}
+              </section>
+              {hasActivity && (
+                <section
+                  id={`ticket-messages-${ticket.id}`}
+                  className="ticket-activity"
+                  aria-label="Ticket messages"
+                  tabIndex={-1}
+                >
+                  <div className="ticket-section-heading">
+                    <h3>Conversation</h3>
+                    <div className="ticket-activity-actions">
+                      {(threadSources.length > 1 ||
+                        (selectedThreadConnectionIdForView &&
+                          !threadSources.some(
+                            ({ link }) => link.connectionId === selectedThreadConnectionIdForView,
+                          ))) && (
+                        <label className="ticket-thread-selector">
+                          <span>Connection</span>
+                          <Select
+                            value={selectedThreadConnectionIdForView}
+                            onChange={(event) => chooseThreadConnection(event.target.value)}
+                          >
+                            {selectedThreadConnectionIdForView &&
+                              !threadSources.some(
+                                ({ link }) =>
+                                  link.connectionId === selectedThreadConnectionIdForView,
+                              ) && (
+                                <option value={selectedThreadConnectionIdForView}>
+                                  {selectedThreadConnection?.name ??
+                                    selectedThreadSource?.provider ??
+                                    selectedThreadConnectionIdForView}{' '}
+                                  · unavailable
+                                </option>
+                              )}
+                            {threadSources.map(({ link, connection }) => (
+                              <option key={link.connectionId} value={link.connectionId}>
+                                {connection.name}
                               </option>
-                            )}
-                          {threadSources.map(({ link, connection }) => (
-                            <option key={link.connectionId} value={link.connectionId}>
-                              {connection.name}
-                            </option>
-                          ))}
-                        </Select>
-                      </label>
+                            ))}
+                          </Select>
+                        </label>
+                      )}
+                      {canReadThread && (
+                        <button
+                          className="ticket-icon-action"
+                          aria-label="Refresh messages"
+                          title="Refresh messages"
+                          disabled={replyBusy || !runtimeAvailable}
+                          onClick={async () => {
+                            try {
+                              await command('syncExternalTicketThread', {
+                                ticketId: ticket.id,
+                                connectionId: selectedThreadConnectionIdForView,
+                              });
+                              setMessage('Messages refreshed.');
+                            } catch (error) {
+                              setMessage((error as Error).message);
+                            }
+                          }}
+                        >
+                          <RefreshCw size={14} aria-hidden="true" />
+                        </button>
+                      )}
+                      {canReply && replyComposerOpen && (
+                        <button
+                          className="secondary"
+                          disabled={!runtimeAvailable}
+                          onClick={() => {
+                            setShowReplyComposer(false);
+                            setDismissedReplyDraft(draftKey);
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {!canReadThread && thread?.messages.length ? (
+                    <p role="status">Connection unavailable. Showing saved messages.</p>
+                  ) : null}
+                  {thread?.messages.map((entry) => (
+                    <article className="ticket-message" key={entry.remoteId}>
+                      <div>
+                        <strong>{entry.authorRole}</strong>
+                        <time dateTime={entry.createdAt}>
+                          {new Date(entry.createdAt).toLocaleString()}
+                        </time>
+                        {entry.deliveryStatus && (
+                          <span>
+                            {entry.deliveryStatus[0].toUpperCase() + entry.deliveryStatus.slice(1)}
+                          </span>
+                        )}
+                      </div>
+                      <p>{entry.body}</p>
+                    </article>
+                  ))}
+                  {replies
+                    .filter(
+                      (reply) =>
+                        !thread?.messages.some((entry) => entry.remoteId === reply.remoteId),
+                    )
+                    .map((reply) => (
+                      <article className="ticket-message" key={reply.id}>
+                        <div>
+                          <strong>Reply</strong>
+                          {reply.createdAt && (
+                            <time dateTime={reply.createdAt}>
+                              {new Date(reply.createdAt).toLocaleString()}
+                            </time>
+                          )}
+                          <span>{reply.deliveryStatus ?? reply.status}</span>
+                        </div>
+                        <p>{reply.body}</p>
+                      </article>
+                    ))}
+                  {!thread?.messages.length && !replies.length && !canReply && (
+                    <p className="ticket-empty">
+                      {thread ? 'No messages yet.' : 'Messages not loaded.'}
+                    </p>
+                  )}
+                  {canReply && !replyComposerOpen && (
+                    <button
+                      className="ticket-reply-launcher"
+                      disabled={!runtimeAvailable}
+                      onClick={() => {
+                        setShowReplyComposer(true);
+                        requestAnimationFrame(() =>
+                          document
+                            .querySelector<HTMLTextAreaElement>(
+                              `#ticket-messages-${ticket.id} textarea`,
+                            )
+                            ?.focus(),
+                        );
+                      }}
+                    >
+                      <Pencil size={14} aria-hidden="true" />{' '}
+                      {replyDraft.text ? 'Continue draft…' : 'Write a reply…'}
+                    </button>
+                  )}
+                  {selectedThreadConnectionIdForView &&
+                    (canReply || replyDraft.text) &&
+                    replyComposerOpen && (
+                      <div className="ticket-reply-composer">
+                        <p className="ticket-reply-destination">
+                          {canReply
+                            ? `Sending through ${selectedThreadConnection?.name ?? selectedThreadConnectionIdForView}${(selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId) ? ` · ${selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId}` : ''}`
+                            : `Connection unavailable · ${selectedThreadConnection?.name ?? selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId ?? selectedThreadConnectionIdForView}`}
+                        </p>
+                        <textarea
+                          aria-label="Reply"
+                          placeholder="Write a reply…"
+                          value={replyDraft.text}
+                          disabled={!canReply}
+                          onChange={(event) => setTicketReplyDraft(draftKey, event.target.value)}
+                          maxLength={12000}
+                          rows={4}
+                        />
+                        <button
+                          className="secondary"
+                          disabled={
+                            !runtimeAvailable ||
+                            !canReply ||
+                            replyBusy ||
+                            !replyDraft.text.trim() ||
+                            Boolean(uncertainReply)
+                          }
+                          onClick={async () => {
+                            const submitted = replyDraft;
+                            const submittedText = submitted.text.trim();
+                            const submittedKey = draftKey;
+                            const connectionId = selectedThreadConnectionIdForView;
+                            const attempt = (replyAttempts.current.get(submittedKey) ?? 0) + 1;
+                            replyAttempts.current.set(submittedKey, attempt);
+                            setReplyBusyScopes((scopes) => new Set(scopes).add(submittedKey));
+                            try {
+                              await command('postExternalTicketReply', {
+                                requestId: ticketReplyRequestId(submittedKey, submitted.version),
+                                ticketId: ticket.id,
+                                connectionId,
+                                body: submittedText,
+                              });
+                              forgetTicketReplyRequestId(submittedKey, submitted.version);
+                              clearSubmittedTicketReplyDraft(submittedKey, submitted.version);
+                              if (
+                                ticketScopeRef.current === ticketScopeKey &&
+                                draftKeyRef.current === submittedKey
+                              )
+                                setMessage('Reply queued. Check delivery status in the source.');
+                            } catch (error) {
+                              if (
+                                ticketScopeRef.current === ticketScopeKey &&
+                                draftKeyRef.current === submittedKey
+                              )
+                                setMessage((error as Error).message);
+                            } finally {
+                              if (replyAttempts.current.get(submittedKey) === attempt) {
+                                replyAttempts.current.delete(submittedKey);
+                                setReplyBusyScopes((scopes) => {
+                                  const next = new Set(scopes);
+                                  next.delete(submittedKey);
+                                  return next;
+                                });
+                              }
+                            }
+                          }}
+                        >
+                          Send reply
+                        </button>
+                      </div>
                     )}
-                    {canReadThread && (
+                  {uncertainReply && (
+                    <div role="alert">
+                      <p>Reply outcome needs review in the source before another send.</p>
+                      <p>{uncertainReply.body}</p>
+                      {thread?.messages
+                        .filter(
+                          (entry) =>
+                            entry.body === uncertainReply.body && entry.direction === 'outbound',
+                        )
+                        .map((entry) => (
+                          <button
+                            key={entry.remoteId}
+                            className="secondary"
+                            disabled={replyBusy || !runtimeAvailable}
+                            onClick={() =>
+                              void reconcileReply(
+                                { requestId: uncertainReply.id, remoteId: entry.remoteId },
+                                'Reply matched to the source conversation.',
+                              )
+                            }
+                          >
+                            Confirm source message {entry.remoteId}
+                          </button>
+                        ))}
                       <button
                         className="secondary"
                         disabled={replyBusy || !runtimeAvailable}
-                        onClick={async () => {
-                          try {
-                            await command('syncExternalTicketThread', {
-                              ticketId: ticket.id,
-                              connectionId: selectedThreadConnectionIdForView,
-                            });
-                            setMessage('Messages refreshed.');
-                          } catch (error) {
-                            setMessage((error as Error).message);
-                          }
-                        }}
-                      >
-                        Refresh
-                      </button>
-                    )}
-                    {canReply && (
-                      <button
-                        className="secondary"
-                        disabled={!runtimeAvailable}
-                        onClick={() => setShowReplyComposer((value) => !value)}
-                      >
-                        {showReplyComposer ? 'Cancel' : 'Reply'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {!canReadThread && thread?.messages.length ? (
-                  <p role="status">Connection unavailable. Showing saved messages.</p>
-                ) : null}
-                {thread?.messages.map((entry) => (
-                  <article className="ticket-message" key={entry.remoteId}>
-                    <div>
-                      <strong>{entry.authorRole}</strong>
-                      <time dateTime={entry.createdAt}>
-                        {new Date(entry.createdAt).toLocaleString()}
-                      </time>
-                      {entry.deliveryStatus && (
-                        <span>
-                          {entry.deliveryStatus[0].toUpperCase() + entry.deliveryStatus.slice(1)}
-                        </span>
-                      )}
-                    </div>
-                    <p>{entry.body}</p>
-                  </article>
-                ))}
-                {replies
-                  .filter(
-                    (reply) => !thread?.messages.some((entry) => entry.remoteId === reply.remoteId),
-                  )
-                  .map((reply) => (
-                    <article className="ticket-message" key={reply.id}>
-                      <div>
-                        <strong>Reply</strong>
-                        {reply.createdAt && (
-                          <time dateTime={reply.createdAt}>
-                            {new Date(reply.createdAt).toLocaleString()}
-                          </time>
-                        )}
-                        <span>{reply.deliveryStatus ?? reply.status}</span>
-                      </div>
-                      <p>{reply.body}</p>
-                    </article>
-                  ))}
-                {!thread?.messages.length && !replies.length && (
-                  <p className="ticket-empty">
-                    {thread ? 'No messages yet.' : 'Messages not loaded.'}
-                  </p>
-                )}
-                {selectedThreadConnectionIdForView &&
-                  (canReply || replyDraft.text) &&
-                  (showReplyComposer || replyDraft.text) && (
-                    <div className="ticket-reply-composer">
-                      <p className="ticket-reply-destination">
-                        {canReply
-                          ? `Sending through ${selectedThreadConnection?.name ?? selectedThreadConnectionIdForView}${(selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId) ? ` · ${selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId}` : ''}`
-                          : `Connection unavailable · ${selectedThreadConnection?.name ?? selectedThreadSource?.remoteKey ?? selectedThreadSource?.remoteId ?? selectedThreadConnectionIdForView}`}
-                      </p>
-                      <textarea
-                        aria-label="Reply"
-                        placeholder="Write a reply…"
-                        value={replyDraft.text}
-                        disabled={!canReply}
-                        onChange={(event) => setTicketReplyDraft(draftKey, event.target.value)}
-                        maxLength={12000}
-                        rows={4}
-                      />
-                      <button
-                        className="secondary"
-                        disabled={
-                          !runtimeAvailable ||
-                          !canReply ||
-                          replyBusy ||
-                          !replyDraft.text.trim() ||
-                          Boolean(uncertainReply)
+                        onClick={() =>
+                          void reconcileReply(
+                            { requestId: uncertainReply.id, confirmNotPosted: true },
+                            'Marked not posted after review.',
+                          )
                         }
-                        onClick={async () => {
-                          const submitted = replyDraft;
-                          const submittedText = submitted.text.trim();
-                          const submittedKey = draftKey;
-                          const connectionId = selectedThreadConnectionIdForView;
-                          const attempt = (replyAttempts.current.get(submittedKey) ?? 0) + 1;
-                          replyAttempts.current.set(submittedKey, attempt);
-                          setReplyBusyScopes((scopes) => new Set(scopes).add(submittedKey));
-                          try {
-                            await command('postExternalTicketReply', {
-                              requestId: ticketReplyRequestId(submittedKey, submitted.version),
-                              ticketId: ticket.id,
-                              connectionId,
-                              body: submittedText,
-                            });
-                            forgetTicketReplyRequestId(submittedKey, submitted.version);
-                            clearSubmittedTicketReplyDraft(submittedKey, submitted.version);
-                            if (
-                              ticketScopeRef.current === ticketScopeKey &&
-                              draftKeyRef.current === submittedKey
-                            )
-                              setMessage('Reply queued. Check delivery status in the source.');
-                          } catch (error) {
-                            if (
-                              ticketScopeRef.current === ticketScopeKey &&
-                              draftKeyRef.current === submittedKey
-                            )
-                              setMessage((error as Error).message);
-                          } finally {
-                            if (replyAttempts.current.get(submittedKey) === attempt) {
-                              replyAttempts.current.delete(submittedKey);
-                              setReplyBusyScopes((scopes) => {
-                                const next = new Set(scopes);
-                                next.delete(submittedKey);
-                                return next;
-                              });
-                            }
-                          }
-                        }}
                       >
-                        Send reply
+                        Confirm no reply was posted
                       </button>
                     </div>
                   )}
-                {uncertainReply && (
-                  <div role="alert">
-                    <p>Reply outcome needs review in the source before another send.</p>
-                    <p>{uncertainReply.body}</p>
-                    {thread?.messages
-                      .filter(
-                        (entry) =>
-                          entry.body === uncertainReply.body && entry.direction === 'outbound',
-                      )
-                      .map((entry) => (
-                        <button
-                          key={entry.remoteId}
-                          className="secondary"
-                          disabled={replyBusy || !runtimeAvailable}
-                          onClick={() =>
-                            void reconcileReply(
-                              { requestId: uncertainReply.id, remoteId: entry.remoteId },
-                              'Reply matched to the source conversation.',
-                            )
-                          }
-                        >
-                          Confirm source message {entry.remoteId}
-                        </button>
-                      ))}
+                </section>
+              )}
+              <TicketFiles
+                ticket={ticket}
+                editing={false}
+                runtimeAvailable={runtimeAvailable}
+                revisionChanged={setRevision}
+              />
+            </section>
+            {session?.flow && (
+              <section
+                className="ticket-panel ticket-workflow-panel"
+                id={`ticket-workflow-panel-${ticket.id}`}
+                role="tabpanel"
+                aria-labelledby={`ticket-workflow-tab-${ticket.id}`}
+                hidden={activePanel !== 'workflow'}
+              >
+                {recovering ? (
+                  <>
                     <button
-                      className="secondary"
-                      disabled={replyBusy || !runtimeAvailable}
-                      onClick={() =>
-                        void reconcileReply(
-                          { requestId: uncertainReply.id, confirmNotPosted: true },
-                          'Marked not posted after review.',
-                        )
-                      }
+                      className="ticket-text-action"
+                      onClick={() => {
+                        setRecovering(false);
+                        requestAnimationFrame(() =>
+                          document.getElementById(`ticket-workflow-tab-${ticket.id}`)?.focus(),
+                        );
+                      }}
                     >
-                      Confirm no reply was posted
+                      <ArrowLeft size={14} aria-hidden="true" />
+                      Back to workflow
                     </button>
-                  </div>
+                    <TicketExecution
+                      state={state}
+                      ticket={ticket}
+                      runtimeAvailable={runtimeAvailable}
+                      focusRecovery
+                      onOpenWorkflowRun={onOpenWorkflowRun}
+                      onOpenTicketMessages={() => {
+                        setActivePanel('overview');
+                        requestAnimationFrame(() => {
+                          const messages = document.getElementById(`ticket-messages-${ticket.id}`);
+                          messages?.focus();
+                          messages?.scrollIntoView({ block: 'nearest' });
+                        });
+                      }}
+                    />
+                  </>
+                ) : (
+                  <>
+                    {session?.flow && (
+                      <section className="ticket-agent-activity" aria-label="Workflow">
+                        <WorkflowRunInteraction
+                          showHistory
+                          key={session.id}
+                          session={session}
+                          activityReservation={preparedActivityReservation}
+                          working={workflowWorking || !runtimeAvailable}
+                          actionError={workflowError}
+                          onRecovery={() => setRecovering(true)}
+                          onOpenWorkflowRun={onOpenWorkflowRun}
+                          actions={{
+                            ...ticketWorkflowActions(
+                              session,
+                              (action, input) => void actWorkflow(action, input),
+                              {
+                                requestChanges: (feedback) =>
+                                  actWorkflow('requestChanges', {
+                                    instance: session.flow!.instance,
+                                    feedback,
+                                  }),
+                              },
+                            ),
+                            ...workflowHumanTaskActions(session),
+                            requiresActivityReservation: !!approvalTargetNodeId,
+                            canPrepareActivityApproval: !!session && runtimeAvailable,
+                            canShowPreparedActivityApproval:
+                              !!session && owns(session) && runtimeAvailable,
+                            approvalControlKey:
+                              session && owns(session) ? session.lease?.id : undefined,
+                            approvalContextKey: JSON.stringify([
+                              state.currentUser?.id,
+                              state.activeContext?.id,
+                              state.activeContext?.projectId,
+                              state.activeContext?.principal,
+                            ]),
+                            prepareActivityApproval: approvalTargetNodeId
+                              ? async () => {
+                                  if (!session) throw new Error('Workflow session is unavailable.');
+                                  if (!runtimeAvailable)
+                                    throw new Error(
+                                      'Reconnect to refresh before preparing approval.',
+                                    );
+                                  if (!owns(session))
+                                    await command('claim', {
+                                      sessionId: session.id,
+                                      label: 'Ticket workflow',
+                                    });
+                                  return (
+                                    await command('prepareWorkflowActivity', {
+                                      workflowRunId: session.flow!.id,
+                                      gateInstance: session.flow!.instance,
+                                      targetNodeId: approvalTargetNodeId,
+                                    })
+                                  ).result;
+                                }
+                              : undefined,
+                            approveGate: (reservation) =>
+                              void actWorkflow('approveGate', {
+                                instance: session.flow!.instance,
+                                ...(reservation
+                                  ? {
+                                      activityReservationId: reservation.id,
+                                      activityReservationDigest: reservation.digest,
+                                    }
+                                  : {}),
+                              }),
+                          }}
+                        />
+                      </section>
+                    )}
+                  </>
                 )}
               </section>
             )}
-            <TicketFiles
-              ticket={ticket}
-              editing={false}
-              runtimeAvailable={runtimeAvailable}
-              revisionChanged={setRevision}
-            />
-            {session?.flow && <WorkflowActivityHistory session={session} />}
           </div>
-          <aside className="ticket-context" aria-label="Ticket context">
-            <details
-              className="ticket-context-more ticket-context-related"
-              open={related.length > 0 || undefined}
-            >
-              <summary>Related tickets{related.length > 0 ? ` · ${related.length}` : ''}</summary>
+          <aside className="ticket-sidebar" aria-label="Ticket context">
+            <section className="ticket-properties-panel">
+              <h3 className="sr-only">Properties</h3>
+              <dl className="ticket-property-list" aria-label="Ticket properties">
+                <div>
+                  <dt>Status</dt>
+                  <dd className="ticket-status">{ticket.status}</dd>
+                </div>
+                <div>
+                  <dt title="Priority">
+                    <Flag size={14} aria-hidden="true" />
+                    <span>Priority</span>
+                  </dt>
+                  <dd>{ticket.priority}</dd>
+                </div>
+                {ticket.agent && ticket.agent !== 'Unassigned' && (
+                  <div>
+                    <dt title="Agent">
+                      <Bot size={14} aria-hidden="true" />
+                      <span>Agent</span>
+                    </dt>
+                    <dd>{ticket.agent}</dd>
+                  </div>
+                )}
+              </dl>
+            </section>
+            <section className="ticket-context-related" aria-label="Related tickets">
+              <div className="ticket-sidebar-heading">
+                <h3>Related tickets{related.length > 0 && <span>{related.length}</span>}</h3>
+                <button
+                  type="button"
+                  className="ticket-add-relation"
+                  aria-label={
+                    showRelatedEditor ? 'Cancel adding related ticket' : 'Add related ticket'
+                  }
+                  aria-expanded={showRelatedEditor}
+                  aria-controls={`related-ticket-editor-${ticket.id}`}
+                  disabled={linkBusy || !runtimeAvailable}
+                  onClick={() => setShowRelatedEditor((value) => !value)}
+                >
+                  {showRelatedEditor ? <X size={14} /> : <Plus size={14} />}
+                  {showRelatedEditor ? 'Cancel' : 'Add'}
+                </button>
+              </div>
               <div className="ticket-related-content">
                 {related.map(({ relation, other }) => (
                   <div className="ticket-related-row" key={relation.id}>
@@ -894,107 +1102,137 @@ export function TicketDetails({
                     </details>
                   </div>
                 ))}
-                <details className="ticket-related-add">
-                  <summary>{related.length ? 'Add another' : 'Add related ticket'}</summary>
-                  {availableRelatedTickets.length > 0 && (
-                    <>
-                      <label>
-                        Existing ticket
-                        <Select
-                          disabled={!runtimeAvailable}
-                          value={relatedTicketId}
-                          onChange={(event) => setRelatedTicketId(event.target.value)}
+                {showRelatedEditor && (
+                  <div className="ticket-relation-editor" id={`related-ticket-editor-${ticket.id}`}>
+                    <div
+                      className="ticket-relation-modes"
+                      role="group"
+                      aria-label="Add related ticket"
+                    >
+                      {availableRelatedTickets.length > 0 && (
+                        <button
+                          type="button"
+                          aria-pressed={relatedMode === 'existing'}
+                          disabled={linkBusy}
+                          onClick={() => setRelatedMode('existing')}
                         >
-                          <option value="">Choose ticket…</option>
-                          {availableRelatedTickets.map((value) => (
-                            <option key={value.id} value={value.id}>
-                              #{value.id} {value.title}
-                            </option>
-                          ))}
-                        </Select>
-                      </label>
+                          Link existing
+                        </button>
+                      )}
                       <button
-                        className="secondary"
-                        disabled={linkBusy || !runtimeAvailable || !relatedTicketId}
-                        onClick={async () => {
-                          setLinkBusy(true);
-                          try {
-                            const target = state.tickets.find(
-                              (value) => value.id === Number(relatedTicketId),
-                            );
-                            if (!target) throw new Error('Ticket no longer exists.');
-                            await command('linkTickets', {
-                              sourceTicketId: ticket.id,
-                              sourceRevision: revision,
-                              targetTicketId: target.id,
-                              targetRevision: target.revision,
-                            });
-                            setRelatedTicketId('');
-                            setMessage('Ticket linked.');
-                          } catch (error) {
-                            setMessage((error as Error).message);
-                          } finally {
-                            setLinkBusy(false);
-                          }
-                        }}
+                        type="button"
+                        aria-pressed={relatedMode === 'new' || !availableRelatedTickets.length}
+                        disabled={linkBusy}
+                        onClick={() => setRelatedMode('new')}
                       >
-                        Link ticket
+                        Create new
                       </button>
-                    </>
-                  )}
-                  <label>
-                    New ticket title
-                    <input
-                      value={relatedTitle}
-                      disabled={!runtimeAvailable}
-                      onChange={(event) => setRelatedTitle(event.target.value)}
-                      placeholder={ticket.title}
-                    />
-                  </label>
-                  {projectBoards.length > 0 && (
-                    <label>
-                      Board
-                      <Select
-                        value={relatedBoardId}
-                        disabled={!runtimeAvailable}
-                        onChange={(event) => setRelatedBoardId(event.target.value)}
-                      >
-                        <option value="">Project default</option>
-                        {projectBoards.map((board) => (
-                          <option key={board.id} value={board.id}>
-                            {board.name}
-                          </option>
-                        ))}
-                      </Select>
-                    </label>
-                  )}
-                  <button
-                    className="secondary"
-                    disabled={linkBusy || !runtimeAvailable}
-                    onClick={async () => {
-                      setLinkBusy(true);
-                      try {
-                        const result = await command('createRelatedTicket', {
-                          requestId: crypto.randomUUID(),
-                          sourceTicketId: ticket.id,
-                          sourceRevision: revision,
-                          title: relatedTitle.trim() || ticket.title,
-                          ...(relatedBoardId ? { boardId: relatedBoardId } : {}),
-                        });
-                        setRelatedTitle('');
-                        setMessage(`Ticket #${result.result.id} created and linked.`);
-                      } catch (error) {
-                        setMessage((error as Error).message);
-                      } finally {
-                        setLinkBusy(false);
-                      }
-                    }}
-                  >
-                    Create ticket
-                  </button>
-                </details>
+                    </div>
+                    {relatedMode === 'existing' && availableRelatedTickets.length > 0 ? (
+                      <div className="ticket-relation-form">
+                        <label>
+                          Existing ticket
+                          <Select
+                            disabled={!runtimeAvailable}
+                            value={relatedTicketId}
+                            onChange={(event) => setRelatedTicketId(event.target.value)}
+                          >
+                            <option value="">Choose ticket…</option>
+                            {availableRelatedTickets.map((value) => (
+                              <option key={value.id} value={value.id}>
+                                #{value.id} {value.title}
+                              </option>
+                            ))}
+                          </Select>
+                        </label>
+                        <button
+                          className="secondary"
+                          disabled={linkBusy || !runtimeAvailable || !relatedTicketId}
+                          onClick={async () => {
+                            setLinkBusy(true);
+                            try {
+                              const target = state.tickets.find(
+                                (value) => value.id === Number(relatedTicketId),
+                              );
+                              if (!target) throw new Error('Ticket no longer exists.');
+                              await command('linkTickets', {
+                                sourceTicketId: ticket.id,
+                                sourceRevision: revision,
+                                targetTicketId: target.id,
+                                targetRevision: target.revision,
+                              });
+                              setRelatedTicketId('');
+                              setShowRelatedEditor(false);
+                              setMessage('Ticket linked.');
+                            } catch (error) {
+                              setMessage((error as Error).message);
+                            } finally {
+                              setLinkBusy(false);
+                            }
+                          }}
+                        >
+                          Link ticket
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="ticket-relation-form">
+                        <label>
+                          Title
+                          <input
+                            value={relatedTitle}
+                            disabled={!runtimeAvailable}
+                            onChange={(event) => setRelatedTitle(event.target.value)}
+                            placeholder={ticket.title}
+                          />
+                        </label>
+                        {projectBoards.length > 0 && (
+                          <label>
+                            Board
+                            <Select
+                              value={relatedBoardId}
+                              disabled={!runtimeAvailable}
+                              onChange={(event) => setRelatedBoardId(event.target.value)}
+                            >
+                              <option value="">Project default</option>
+                              {projectBoards.map((board) => (
+                                <option key={board.id} value={board.id}>
+                                  {board.name}
+                                </option>
+                              ))}
+                            </Select>
+                          </label>
+                        )}
+                        <button
+                          className="secondary"
+                          disabled={linkBusy || !runtimeAvailable}
+                          onClick={async () => {
+                            setLinkBusy(true);
+                            try {
+                              const result = await command('createRelatedTicket', {
+                                requestId: crypto.randomUUID(),
+                                sourceTicketId: ticket.id,
+                                sourceRevision: revision,
+                                title: relatedTitle.trim() || ticket.title,
+                                ...(relatedBoardId ? { boardId: relatedBoardId } : {}),
+                              });
+                              setRelatedTitle('');
+                              setShowRelatedEditor(false);
+                              setMessage(`Ticket #${result.result.id} created and linked.`);
+                            } catch (error) {
+                              setMessage((error as Error).message);
+                            } finally {
+                              setLinkBusy(false);
+                            }
+                          }}
+                        >
+                          Create and link
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </details>
+            </section>
             {!session?.flow && (
               <section className="ticket-context-group">
                 <h3>Workflow</h3>
@@ -1004,11 +1242,23 @@ export function TicketDetails({
               </section>
             )}
             {(sourceLink || hasDetails) && (
-              <details className="ticket-context-more" open={syncNeedsReview || undefined}>
-                <summary>Source and details</summary>
+              <details
+                className="ticket-context-more ticket-source-panel"
+                open={syncNeedsReview || undefined}
+              >
+                <summary>
+                  {sourceLink || ticket.externalLinks?.length ? 'Source' : 'Details'}{' '}
+                  <ChevronDown size={14} aria-hidden="true" />
+                </summary>
                 {sourceLink && (
-                  <a href={sourceLink.url} target="_blank" rel="noopener noreferrer">
-                    Open in {sourceName} ↗
+                  <a
+                    className="ticket-source-link"
+                    href={sourceLink.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <span>{sourceName}</span>
+                    <ExternalLink size={14} aria-hidden="true" />
                   </a>
                 )}
                 {hasDetails && (
@@ -1276,150 +1526,162 @@ export function TicketDetails({
       }}
     >
       <fieldset className="ticket-edit-disabled" disabled={!runtimeAvailable || saving}>
-      <legend className="sr-only">Ticket fields</legend>
-      <label className="ticket-title-field">
-        <span>Title</span>
-        <textarea name="title" aria-label="Title" defaultValue={ticket.title} required rows={2} />
-      </label>
-      <div className="ticket-description-editor">
-        <div>
-          <button
-            type="button"
-            className={!preview ? 'selected' : ''}
-            onClick={() => setPreview(false)}
-          >
-            Write
-          </button>
-          <button
-            type="button"
-            className={preview ? 'selected' : ''}
-            onClick={() => setPreview(true)}
-          >
-            Preview
-          </button>
+        <legend className="sr-only">Ticket fields</legend>
+        <label className="ticket-title-field">
+          <span>Title</span>
+          <textarea name="title" aria-label="Title" defaultValue={ticket.title} required rows={2} />
+        </label>
+        <div className="ticket-description-editor">
+          <div>
+            <button
+              type="button"
+              className={!preview ? 'selected' : ''}
+              onClick={() => setPreview(false)}
+            >
+              Write
+            </button>
+            <button
+              type="button"
+              className={preview ? 'selected' : ''}
+              onClick={() => setPreview(true)}
+            >
+              Preview
+            </button>
+          </div>
+          {preview ? (
+            <MarkdownDocument text={description} />
+          ) : (
+            <textarea
+              aria-label="Description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+          )}
         </div>
-        {preview ? (
-          <MarkdownDocument text={description} />
-        ) : (
-          <textarea
-            aria-label="Description"
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-          />
-        )}
-      </div>
-      <TicketFiles ticket={ticket} editing runtimeAvailable={runtimeAvailable} revisionChanged={setRevision} />
-      <details className="ticket-properties">
-        <summary>Properties</summary>
-        <div className="ticket-property-grid">
-          <label>
-            Status
-            {sourceOwnsStatus && <input type="hidden" name="status" value={ticket.status} />}
-            {statusBoards.length ? (
-              <Select
-                name={sourceOwnsStatus ? undefined : 'status'}
-                disabled={sourceOwnsStatus}
-                defaultValue={ticket.status}
-              >
-                {statusChoices.map((value) => (
+        <TicketFiles
+          ticket={ticket}
+          editing
+          runtimeAvailable={runtimeAvailable}
+          revisionChanged={setRevision}
+        />
+        <details className="ticket-properties">
+          <summary>Properties</summary>
+          <div className="ticket-property-grid">
+            <label>
+              Status
+              {sourceOwnsStatus && <input type="hidden" name="status" value={ticket.status} />}
+              {statusBoards.length ? (
+                <Select
+                  name={sourceOwnsStatus ? undefined : 'status'}
+                  disabled={sourceOwnsStatus}
+                  defaultValue={ticket.status}
+                >
+                  {statusChoices.map((value) => (
+                    <option key={value}>{value}</option>
+                  ))}
+                </Select>
+              ) : (
+                <input
+                  name={sourceOwnsStatus ? undefined : 'status'}
+                  disabled={sourceOwnsStatus}
+                  defaultValue={ticket.status}
+                />
+              )}
+            </label>
+            <label>
+              Assigned agent
+              <Select name="agent" defaultValue={ticket.agent}>
+                {[
+                  ...new Set([
+                    'Unassigned',
+                    'Claude Code',
+                    'Codex',
+                    'OpenCode',
+                    'Pi',
+                    ticket.agent,
+                  ]),
+                ].map((value) => (
                   <option key={value}>{value}</option>
                 ))}
               </Select>
-            ) : (
-              <input
-                name={sourceOwnsStatus ? undefined : 'status'}
-                disabled={sourceOwnsStatus}
-                defaultValue={ticket.status}
-              />
-            )}
-          </label>
-          <label>
-            Assigned agent
-            <Select name="agent" defaultValue={ticket.agent}>
-              {[
-                ...new Set(['Unassigned', 'Claude Code', 'Codex', 'OpenCode', 'Pi', ticket.agent]),
-              ].map((value) => (
-                <option key={value}>{value}</option>
-              ))}
-            </Select>
-          </label>
-          <label>
-            Label
-            <input name="label" defaultValue={ticket.label} />
-          </label>
-          <label>
-            Priority
-            {ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external') && (
-              <input type="hidden" name="priority" value={ticket.priority} />
-            )}
-            <Select
-              name={
-                ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external')
-                  ? undefined
-                  : 'priority'
-              }
-              disabled={ticket.externalLinks?.some(
+            </label>
+            <label>
+              Label
+              <input name="label" defaultValue={ticket.label} />
+            </label>
+            <label>
+              Priority
+              {ticket.externalLinks?.some(
                 (link) => link.fieldOwnership?.priority === 'external',
-              )}
-              defaultValue={ticket.priority}
-            >
-              <option>Low</option>
-              <option>Medium</option>
-              <option>High</option>
-            </Select>
-          </label>
-        </div>
-        <details className="ticket-extra-fields">
-          <summary>Custom fields</summary>
-          <fieldset className="ticket-custom-fields">
-            <legend>Custom fields</legend>
-            {Object.entries(customFields).map(([key, value]) => (
-              <div className="ticket-custom-field" key={key}>
-                <input aria-label={`Custom field ${key} name`} value={key} readOnly />
+              ) && <input type="hidden" name="priority" value={ticket.priority} />}
+              <Select
+                name={
+                  ticket.externalLinks?.some((link) => link.fieldOwnership?.priority === 'external')
+                    ? undefined
+                    : 'priority'
+                }
+                disabled={ticket.externalLinks?.some(
+                  (link) => link.fieldOwnership?.priority === 'external',
+                )}
+                defaultValue={ticket.priority}
+              >
+                <option>Low</option>
+                <option>Medium</option>
+                <option>High</option>
+              </Select>
+            </label>
+          </div>
+          <details className="ticket-extra-fields">
+            <summary>Custom fields</summary>
+            <fieldset className="ticket-custom-fields">
+              <legend>Custom fields</legend>
+              {Object.entries(customFields).map(([key, value]) => (
+                <div className="ticket-custom-field" key={key}>
+                  <input aria-label={`Custom field ${key} name`} value={key} readOnly />
+                  <input
+                    aria-label={`Custom field ${key} value`}
+                    value={String(value ?? '')}
+                    onChange={(event) => patchField(key, event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Remove custom field ${key}`}
+                    onClick={() => removeField(key)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <div className="ticket-custom-field-add">
                 <input
-                  aria-label={`Custom field ${key} value`}
-                  value={String(value ?? '')}
-                  onChange={(event) => patchField(key, event.target.value)}
+                  aria-label="New custom field name"
+                  placeholder="Field name"
+                  value={newFieldName}
+                  onChange={(event) => {
+                    setNewFieldName(event.target.value);
+                    setFieldError('');
+                  }}
                 />
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label={`Remove custom field ${key}`}
-                  onClick={() => removeField(key)}
-                >
-                  ×
+                <input
+                  aria-label="New custom field value"
+                  placeholder="Value"
+                  value={newFieldValue}
+                  onChange={(event) => setNewFieldValue(event.target.value)}
+                />
+                <button type="button" className="secondary" onClick={addField}>
+                  Add
                 </button>
               </div>
-            ))}
-            <div className="ticket-custom-field-add">
-              <input
-                aria-label="New custom field name"
-                placeholder="Field name"
-                value={newFieldName}
-                onChange={(event) => {
-                  setNewFieldName(event.target.value);
-                  setFieldError('');
-                }}
-              />
-              <input
-                aria-label="New custom field value"
-                placeholder="Value"
-                value={newFieldValue}
-                onChange={(event) => setNewFieldValue(event.target.value)}
-              />
-              <button type="button" className="secondary" onClick={addField}>
-                Add
-              </button>
-            </div>
-            {fieldError && <p role="alert">{fieldError}</p>}
-          </fieldset>
+              {fieldError && <p role="alert">{fieldError}</p>}
+            </fieldset>
+          </details>
+          <details className="runtime-details">
+            <summary>Execution environment</summary>
+            <ExecutionProfileEditor state={state} target={ticket} ticket />
+            <PlacementEditor state={state} target={ticket} ticket />
+          </details>
         </details>
-        <details className="runtime-details">
-          <summary>Execution environment</summary>
-          <ExecutionProfileEditor state={state} target={ticket} ticket />
-          <PlacementEditor state={state} target={ticket} ticket />
-        </details>
-      </details>
       </fieldset>
       {message && <p role="alert">{message}</p>}
       <div className="ticket-edit-actions">

@@ -16,7 +16,7 @@ export function AttentionMenu({
   loadGlobal: boolean;
   open: (target: AttentionTarget) => void;
 }) {
-  const global = useRuntime(undefined, false, loadGlobal);
+  const global = useRuntime(undefined, 'attention', loadGlobal);
   const current = loadGlobal ? global.state : state;
   const disconnected = loadGlobal ? !!global.error : unavailable;
   const menu = useDetailsPopover();

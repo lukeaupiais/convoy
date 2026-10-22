@@ -1,37 +1,9 @@
-.detail.task-detail.ticket-detail.ticket-workspace-dialog {
-  width: min(1180px, calc(100vw - 80px));
-  overflow-x: hidden;
-}
 .ticket-detail .ticket-workspace {
   gap: 0;
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
-}
-.ticket-detail .ticket-workspace-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  margin: 0;
-  padding: 30px 32px 24px;
-}
-.ticket-detail .ticket-workspace-heading > div {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-body .ticket-detail .ticket-workspace-heading h2 {
-  margin: 0;
-  color: var(--ink);
-  font-size: clamp(24px, 2.4vw, 32px);
-  letter-spacing: -0.025em;
-  font-weight: 650;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
 }
 .ticket-status {
   display: inline-flex;
@@ -41,44 +13,16 @@ body .ticket-detail .ticket-workspace-heading h2 {
   border: 1px solid var(--line-strong);
   border-radius: 3px;
   background: var(--surface-2);
-  color: var(--accent);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   max-width: 100%;
   overflow-wrap: anywhere;
 }
-.ticket-workspace-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 240px;
-  gap: 0;
-  background: var(--paper);
-}
-.ticket-workspace-main {
-  min-width: 0;
-  display: grid;
-  align-content: start;
-  gap: 24px;
-  padding: 28px 32px 32px;
-}
-.ticket-context {
-  min-width: 0;
-  padding: 28px 20px;
-  border-left: 1px solid var(--line);
-  background: var(--surface);
-}
 .ticket-context-group + .ticket-context-group,
 .ticket-context-more {
-  margin-top: 23px;
-  padding-top: 21px;
-  border-top: 1px solid var(--line);
-}
-.ticket-context h3 {
-  margin: 0 0 14px;
-  color: var(--ink);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
+  margin-top: 0;
+  padding-top: 0;
 }
 .ticket-section-heading {
   display: flex;
@@ -105,10 +49,10 @@ body .ticket-detail .ticket-workspace-heading h2 {
 }
 .ticket-agent-activity {
   min-width: 0;
-  padding: 20px;
+  padding: 18px;
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
-  border-radius: 3px;
+  border-radius: 6px;
   background: var(--surface);
 }
 .ticket-options-menu[hidden] {
@@ -337,21 +281,6 @@ body .ticket-detail .ticket-workspace-heading h2 {
   margin: 0;
   color: var(--ink);
   overflow-wrap: anywhere;
-}
-@media (max-width: 760px) {
-  .ticket-workspace-grid {
-    grid-template-columns: 1fr;
-  }
-  .ticket-context {
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-  .ticket-workspace-main {
-    padding: 20px;
-  }
-  .detail.task-detail.ticket-detail.ticket-workspace-dialog {
-    width: 100%;
-  }
 }
 .ticket-activity-actions {
   display: flex;
@@ -582,9 +511,6 @@ body .ticket-detail .ticket-workspace-heading h2 {
   margin-bottom: 4px;
 }
 @media (max-width: 600px) {
-  .ticket-detail .ticket-workspace-heading h2 {
-    font-size: 22px;
-  }
   .ticket-header-actions {
     flex-wrap: wrap;
     justify-content: flex-end;
@@ -604,29 +530,6 @@ body .ticket-detail .ticket-workspace-heading h2 {
     max-height: none;
     font-size: 16px;
   }
-}
-
-.ticket-description-disclosure {
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-.ticket-description-disclosure > summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-}
-.ticket-description-disclosure[open] > summary {
-  margin-bottom: 14px;
-}
-
-.ticket-detail .ticket-workspace-heading > .secondary {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 6px;
-  min-height: 32px;
-  padding: 6px 12px;
 }
 .ticket-detail .ticket-section-heading {
   flex-wrap: wrap;
@@ -674,68 +577,16 @@ body .ticket-detail .ticket-workspace-heading h2 {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-@media (max-width: 760px) {
-  .ticket-detail .ticket-workspace-heading {
-    gap: 12px;
-    margin-bottom: 0;
-    padding: 24px 20px 20px;
-  }
-  .ticket-detail .ticket-context {
-    padding: 22px 20px;
-  }
-}
 @media (max-width: 600px) {
-  .ticket-detail .ticket-workspace-main {
-    padding: 20px 16px;
-  }
-  .ticket-detail .ticket-workspace-heading > .secondary,
-  .ticket-detail .ticket-activity-actions button,
-  .ticket-detail .ticket-context summary {
+  .ticket-detail .ticket-activity-actions button {
     min-height: 40px;
-  }
-  .ticket-detail .ticket-context summary {
-    align-content: center;
   }
   .ticket-detail .ticket-thread-selector {
     flex-wrap: wrap;
   }
 }
-
-.ticket-overview-properties {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px 28px;
-  margin: 0;
-  padding: 15px 32px;
-  border-block: 1px solid var(--line);
-  background: var(--surface-2);
-}
-.ticket-overview-properties > div {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  font-size: 12px;
-}
-.ticket-overview-properties dt {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-}
-.ticket-overview-properties dd {
-  margin: 0;
-  color: var(--ink);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.ticket-context > .ticket-context-more:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
-}
 .ticket-detail .ticket-activity {
-  padding-top: 24px;
+  padding-top: 16px;
   border-top: 1px solid var(--line);
 }
 .ticket-detail .ticket-feedback {
@@ -744,27 +595,7 @@ body .ticket-detail .ticket-workspace-heading h2 {
   border: 1px solid var(--line);
   background: var(--surface-2);
 }
-@media (max-width: 760px) {
-  .ticket-overview-properties {
-    gap: 12px 20px;
-    padding: 14px 20px;
-  }
-}
 @media (max-width: 600px) {
-  .ticket-detail .ticket-workspace-heading {
-    padding: 22px 16px 20px;
-  }
-  .ticket-detail .ticket-workspace-heading h2 {
-    font-size: 24px;
-  }
-  .ticket-overview-properties {
-    display: grid;
-    gap: 12px;
-    padding: 16px;
-  }
-  .ticket-overview-properties dt {
-    min-width: 74px;
-  }
   .ticket-detail .ticket-agent-activity {
     padding: 16px;
   }

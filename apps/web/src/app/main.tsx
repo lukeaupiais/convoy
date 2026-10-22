@@ -784,10 +784,6 @@ function App() {
                   onRun={() => dispatchTicketNavigation({ type: 'show', view: 'execution' })}
                   onOpenWorkflowRun={openWorkflowRun}
                   runtimeAvailable={!runtimeStale}
-                  onRecovery={() => {
-                    setTicketRecoveryRequested(true);
-                    dispatchTicketNavigation({ type: 'show', view: 'execution' });
-                  }}
                   onSelectTicket={(id) => {
                     setSelected(id);
                     dispatchTicketNavigation({ type: 'show', view: 'details' });

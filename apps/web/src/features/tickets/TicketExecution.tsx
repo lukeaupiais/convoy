@@ -13,7 +13,7 @@ import { Select } from '../../shared/ui/Select';
 import { SessionControls } from '../sessions';
 import './ticket-execution.css';
 import { ProfilePicker, profileRef } from '../library';
-import { WorkflowRunDetails } from '../workflows';
+import { WorkflowRecoveryNotice, WorkflowRunDetails } from '../workflows';
 
 export function TicketExecution({
   state,
@@ -63,7 +63,11 @@ export function TicketExecution({
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const request = useRef('');
+  const recoveryHeading = useRef<HTMLHeadingElement>(null);
   const [pendingRequest, setPendingRequest] = useState(false);
+  useEffect(() => {
+    if (focusRecovery) recoveryHeading.current?.focus();
+  }, [focusRecovery, session?.id]);
   const active = !!session?.flow && !['completed', 'cancelled'].includes(session.flow.status);
   const busy =
     !!session &&
@@ -162,68 +166,109 @@ export function TicketExecution({
       )}
       {session && (
         <>
-          {session.verificationRuntime && (
-            <details>
-              <summary>Verification runtime · {session.verificationRuntime.state}</summary>
-              {session.verificationRuntime.setupError && (
-                <p>{session.verificationRuntime.setupError}</p>
-              )}
-              {session.verificationResetRequested ? (
-                <p>Reset requested. Continue to prepare a new generation.</p>
-              ) : (
-                ['awaiting_submission', 'paused', 'interrupted', 'failed'].includes(
-                  session.status,
-                ) && (
-                  <button
-                    disabled={working || busy || !runtimeAvailable}
-                    onClick={() =>
-                      void act('resetVerificationRuntime', {
-                        runtimeId: session.verificationRuntime!.id,
-                        generation: session.verificationRuntime!.generation,
-                      })
-                    }
-                  >
-                    Reset runtime
-                  </button>
-                )
-              )}
-            </details>
+          {focusRecovery && (
+            <section className="ticket-recovery" aria-label="Ticket recovery">
+              <header>
+                <small>Current step</small>
+                <h2 ref={recoveryHeading} tabIndex={-1}>
+                  {(session.workflow?.nodes ?? session.workflow?.steps)?.find(
+                    (node) => node.id === session.flow?.nodeId,
+                  )?.name ?? 'Workflow step'}
+                </h2>
+              </header>
+              <WorkflowRecoveryNotice session={session}>
+                {session.flow?.instance &&
+                  ['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(
+                    session.flow.status,
+                  ) && (
+                    <button
+                      className="primary"
+                      disabled={
+                        working ||
+                        busy ||
+                        !runtimeAvailable ||
+                        session.assignment?.state === 'uncertain'
+                      }
+                      onClick={() =>
+                        void act('continueWorkflow', { instance: session.flow!.instance })
+                      }
+                    >
+                      {working ? 'Continuing…' : 'Continue workflow'}
+                    </button>
+                  )}
+              </WorkflowRecoveryNotice>
+            </section>
           )}
-          <details className="execution-evidence" open={focusRecovery || !runtimeAvailable}>
-            <summary>Execution details</summary>
-            <WorkflowRunDetails
-              session={session}
-              working={working || !runtimeAvailable}
-              onRefreshDiff={() => void act('diff')}
-            />
-            {session.flow?.instance &&
-              ['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(
-                session.flow.status,
-              ) && (
-                <button
-                  className="primary"
-                  disabled={working || !runtimeAvailable}
-                  onClick={() => void act('continueWorkflow', { instance: session.flow!.instance })}
-                >
-                  Continue workflow
-                </button>
-              )}
-            <p className="execution-note">
-              {session.workspace
-                ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
-                : (session.queueReason ?? 'No worktree provisioned')}
-              {session.assignment && ` · ${session.assignment.state}`}
-            </p>
-            <SessionControls
-              session={session}
-              state={state}
-              showWorkflowInteraction={false}
-              runtimeAvailable={runtimeAvailable}
-              openRecovery={focusRecovery}
-              onOpenTicketMessages={onOpenTicketMessages}
-              onOpenWorkflowRun={onOpenWorkflowRun}
-            />
-          </details>
+          <SessionControls
+            disclosure={focusRecovery}
+            session={session}
+            state={state}
+            showWorkflowInteraction={false}
+            runtimeAvailable={runtimeAvailable}
+            openRecovery={focusRecovery}
+            onOpenTicketMessages={onOpenTicketMessages}
+            onOpenWorkflowRun={onOpenWorkflowRun}
+            advancedContent={
+              <>
+                {session.verificationRuntime && (
+                  <details>
+                    <summary>Verification runtime · {session.verificationRuntime.state}</summary>
+                    {session.verificationRuntime.setupError && (
+                      <p>{session.verificationRuntime.setupError}</p>
+                    )}
+                    {session.verificationResetRequested ? (
+                      <p>Reset requested. Continue to prepare a new generation.</p>
+                    ) : (
+                      ['awaiting_submission', 'paused', 'interrupted', 'failed'].includes(
+                        session.status,
+                      ) && (
+                        <button
+                          disabled={working || busy || !runtimeAvailable}
+                          onClick={() =>
+                            void act('resetVerificationRuntime', {
+                              runtimeId: session.verificationRuntime!.id,
+                              generation: session.verificationRuntime!.generation,
+                            })
+                          }
+                        >
+                          Reset runtime
+                        </button>
+                      )
+                    )}
+                  </details>
+                )}
+                <details className="execution-evidence">
+                  <summary>Execution details</summary>
+                  <WorkflowRunDetails
+                    session={session}
+                    working={working || !runtimeAvailable}
+                    onRefreshDiff={() => void act('diff')}
+                  />
+                  {!focusRecovery &&
+                    session.flow?.instance &&
+                    ['paused', 'interrupted', 'failed', 'awaiting_submission'].includes(
+                      session.flow.status,
+                    ) && (
+                      <button
+                        className="primary"
+                        disabled={working || !runtimeAvailable}
+                        onClick={() =>
+                          void act('continueWorkflow', { instance: session.flow!.instance })
+                        }
+                      >
+                        Continue workflow
+                      </button>
+                    )}
+                  <p className="execution-note">
+                    {session.workspace
+                      ? `${state.runners.find((r) => r.id === session.runnerId)?.name ?? 'Runner'} · ${session.workspace.branch}`
+                      : (session.queueReason ?? 'No worktree provisioned')}
+                    {session.assignment && ` · ${session.assignment.state}`}
+                  </p>
+                </details>
+              </>
+            }
+          />
         </>
       )}
       {!active && !busy && (

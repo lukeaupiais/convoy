@@ -81,6 +81,20 @@ export function workflowStatusLabel(status: string) {
   );
 }
 
+/** Keep configured labels authoritative; make undeclared field keys readable. */
+export function workflowFieldLabel(field: string, label?: string) {
+  return (
+    label ||
+    field
+      .replace(
+        /([a-z0-9])([A-Z])/g,
+        (_, before: string, after: string) => `${before} ${after.toLowerCase()}`,
+      )
+      .replace(/[_-]+/g, ' ')
+      .replace(/^./, (value) => value.toUpperCase())
+  );
+}
+
 /** Required input and recovery state take precedence over execution progress. */
 export function workflowAttentionLabel(session: Session) {
   if (session.pendingQuestion) return 'Answer required';
