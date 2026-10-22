@@ -128,6 +128,7 @@ test('remote discovery and login stay public while runtime access fails closed',
 
   assert.equal((await call('/.well-known/convoy')).status, 200);
   assert.equal((await call('/api/runtime')).status, 401);
+  assert.equal((await call('/api/runtime?view=attention')).status, 401);
   assert.equal(
     (await call('/api/runtime', { headers: { Authorization: 'Basic unsafe' } })).status,
     401,
@@ -161,6 +162,13 @@ test('remote discovery and login stay public while runtime access fails closed',
     'command',
     { action: 'heartbeat', client: 'desktop' },
     { kind: 'user', userId: 'usr_ada' },
+  ]);
+  assert.equal((await call('/api/runtime?view=attention', {
+    headers: { ...authorization, 'X-Convoy-Client': 'board-client' },
+  })).status, 200);
+  assert.deepEqual(runtimeCalls[2], [
+    'snapshot', undefined, 'board-client',
+    { kind: 'user', userId: 'usr_ada' }, { view: 'attention' },
   ]);
 });
 

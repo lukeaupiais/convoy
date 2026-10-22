@@ -23,6 +23,7 @@ export function SessionControls({
   showWorkflowInteraction = true,
   runtimeAvailable = true,
   openRecovery = false,
+  disclosure = false,
   onOpenTicketMessages,
   onOpenWorkflowRun,
   onManageAgents,
@@ -36,6 +37,7 @@ export function SessionControls({
   showWorkflowInteraction?: boolean;
   runtimeAvailable?: boolean;
   openRecovery?: boolean;
+  disclosure?: boolean;
   onOpenTicketMessages?: () => void;
   onOpenWorkflowRun?: (runId: string) => void;
   onManageAgents?: () => void;
@@ -173,7 +175,10 @@ export function SessionControls({
         Workflow
         <select
           aria-label="Session workflow"
-          disabled={!runtimeAvailable || (settingsOnly && !!s.flow && !['completed', 'cancelled'].includes(s.flow.status))}
+          disabled={
+            !runtimeAvailable ||
+            (settingsOnly && !!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
+          }
           value={workflow}
           onChange={(e) => setWorkflow(e.target.value)}
         >
@@ -195,7 +200,10 @@ export function SessionControls({
               placeholder="Repository root"
               value={workingDirectory}
               disabled={
-                !runtimeAvailable || busy || working || (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
+                !runtimeAvailable ||
+                busy ||
+                working ||
+                (!!s.flow && !['completed', 'cancelled'].includes(s.flow.status))
               }
               onChange={(event) => setWorkingDirectory(event.target.value)}
             />
@@ -330,7 +338,7 @@ export function SessionControls({
       )}
     </>
   );
-  return (
+  const controls = (
     <div className="session-controls">
       {!compact && (
         <div className="runtime-toolbar">
@@ -367,9 +375,7 @@ export function SessionControls({
           {error}
         </p>
       )}
-      {!runtimeAvailable && (
-        <p role="status">Reconnect to refresh before changing this session.</p>
-      )}
+      {!runtimeAvailable && <p role="status">Reconnect to refresh before changing this session.</p>}
       {s.queueReason && <p role="status">Queued: {s.queueReason}</p>}
       {!compact && s.assignment && (
         <p className="muted">
@@ -636,9 +642,24 @@ export function SessionControls({
             </details>
           </>
         ) : (
-          inspection
+          <>
+            {inspection}
+            {advancedContent}
+          </>
         ))}
     </div>
+  );
+  if (!disclosure) return controls;
+  const recoveryRequiresInspection =
+    s.assignment?.state === 'uncertain' || !!pendingEffect || triggerFailures.length > 0;
+  return (
+    <details
+      className="session-controls-disclosure"
+      open={!!error || !runtimeAvailable || (openRecovery && recoveryRequiresInspection)}
+    >
+      <summary>Details</summary>
+      {controls}
+    </details>
   );
 }
 
@@ -745,7 +766,9 @@ export function RuntimeSessions({
               );
             })}
             {model.orphanEffects.map((effect) => {
-              const run = state.workflowRuns?.find((value) => effect.effectKey.startsWith(`${value.id}:`));
+              const run = state.workflowRuns?.find((value) =>
+                effect.effectKey.startsWith(`${value.id}:`),
+              );
               return (
                 <details className="live-alert" key={`effect:${effect.effectKey}`}>
                   <summary className="live-row">
@@ -759,7 +782,9 @@ export function RuntimeSessions({
                     <p>{effect.message ?? 'Inspect the effect before attempting recovery.'}</p>
                     <small>{effect.effectKey}</small>
                     {run && openWorkflowRun ? (
-                      <button onClick={() => openWorkflowRun(run.id)}>Open associated workflow run</button>
+                      <button onClick={() => openWorkflowRun(run.id)}>
+                        Open associated workflow run
+                      </button>
                     ) : (
                       <button onClick={openWorkflows}>Open workflows</button>
                     )}

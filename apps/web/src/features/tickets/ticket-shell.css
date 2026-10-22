@@ -361,7 +361,7 @@ body:has(.new-task.dialog) .select-options > button:is(:hover, [aria-selected='t
 /* Ticket reading surface. The shell, controls, and portalled selects share tokens. */
 body .detail.task-detail.ticket-detail {
   --ink: #e8e7df;
-  --muted: #a6b6bb;
+  --muted: #b2c1c5;
   --accent: #8db9ac;
   --accent-hover: #a5ccbf;
   --sea: #8db9ac;
@@ -378,7 +378,7 @@ body .detail.task-detail.ticket-detail {
   background: var(--surface);
   font-family: var(--font-system);
   border: 1px solid #526872;
-  border-radius: 5px;
+  border-radius: 8px;
   box-shadow: 0 24px 90px #080f1866;
   scrollbar-color: #526872 var(--surface);
 }
@@ -386,11 +386,12 @@ body .ticket-detail .detail-top {
   position: sticky;
   top: 0;
   z-index: 5;
-  min-height: 54px;
+  min-height: 46px;
   margin: 0;
-  padding: 10px 20px;
+  padding: 8px 20px;
   background: var(--paper);
   border: 0;
+  border-bottom: 1px solid var(--line);
 }
 body .ticket-detail .detail-top .task-id {
   min-width: 0;

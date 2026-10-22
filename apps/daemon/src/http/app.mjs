@@ -141,9 +141,10 @@ export function createApp({
         }
         return;
       }
-      if (req.url === '/api/runtime?view=overview' && req.method === 'GET')
+      if (['/api/runtime?view=overview', '/api/runtime?view=attention'].includes(req.url) && req.method === 'GET')
         return json(200, await runtime.snapshot(
-          undefined, req.headers['x-convoy-client'], requestIdentity.principal, { view: 'overview' },
+          undefined, req.headers['x-convoy-client'], requestIdentity.principal,
+          { view: req.url.endsWith('attention') ? 'attention' : 'overview' },
         ));
       if (
         /^\/api\/runtime(?:\/(?:\d{1,10}|chat-[a-f0-9-]{36}))?$/.test(req.url ?? '') &&

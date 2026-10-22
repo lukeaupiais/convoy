@@ -3,6 +3,49 @@
   gap: 18px;
   color: var(--ink);
 }
+.ticket-recovery {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.ticket-recovery header {
+  display: grid;
+  gap: 5px;
+}
+.ticket-recovery header small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ticket-recovery header h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.ticket-execution .workflow-blocking-state {
+  margin: 0;
+}
+.ticket-recovery .workflow-blocking-state {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.ticket-recovery .workflow-recovery-reason {
+  flex-basis: auto;
+}
+.ticket-recovery .workflow-recovery-reason strong::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+  content: '';
+}
 .execution-setup > summary {
   cursor: pointer;
   font-size: 13px;

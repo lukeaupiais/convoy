@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import type {
   Session,
   WorkflowActivityReservation,
@@ -25,6 +25,7 @@ import {
   workflowNeedsRecovery,
   workflowRunOutput,
   workflowStatusLabel,
+  workflowFieldLabel,
   workflowFeedbackContextKey,
   submitWorkflowFeedback,
 } from './workflow-interaction';
@@ -151,7 +152,13 @@ function InlineMarkdown({ text }: { text: string }) {
   );
 }
 
-export function WorkflowArtifactContent({ text }: { text: string }) {
+export function WorkflowArtifactContent({
+  text,
+  sectionLabels = false,
+}: {
+  text: string;
+  sectionLabels?: boolean;
+}) {
   return (
     <article className="workflow-markdown artifact-markdown">
       {artifactMarkdownBlocks(text).map((block, index) => {
@@ -208,9 +215,21 @@ export function WorkflowArtifactContent({ text }: { text: string }) {
               </table>
             </div>
           );
+        // Emphasize an existing short prose label without interpreting its meaning.
+        const label = sectionLabels
+          ? block.text.match(/^([\p{L}][\p{L}\p{N} ()/-]{0,47}:)([ \t]+)([\s\S]+)$/u)
+          : null;
         return (
-          <p key={index}>
-            <InlineMarkdown text={block.text} />
+          <p key={index} className={label ? 'workflow-labelled-paragraph' : undefined}>
+            {label ? (
+              <>
+                <strong className="workflow-paragraph-label">{label[1]}</strong>
+                {label[2]}
+                <InlineMarkdown text={label[3]} />
+              </>
+            ) : (
+              <InlineMarkdown text={block.text} />
+            )}
           </p>
         );
       })}
@@ -605,6 +624,7 @@ export function WorkflowRunInteraction({
   onRecovery,
   onOpenWorkflowRun,
   actionError,
+  showHistory = false,
 }: {
   session: Session;
   working?: boolean;
@@ -613,15 +633,12 @@ export function WorkflowRunInteraction({
   onRecovery?: () => void;
   onOpenWorkflowRun?: (runId: string) => void;
   actionError?: string;
+  showHistory?: boolean;
 }) {
   const flow = session.flow;
   const nodes = session.workflow?.nodes ?? session.workflow?.steps ?? [];
   const node = flow ? nodes.find((item) => item.id === flow.nodeId) : undefined;
-  const { submission, bindings, sourceNodeId } = workflowRunOutput(session);
-  const outputSourceName =
-    sourceNodeId && sourceNodeId !== flow?.nodeId
-      ? (nodes.find((item) => item.id === sourceNodeId)?.name ?? submission?.step ?? sourceNodeId)
-      : undefined;
+  const { submission, bindings } = workflowRunOutput(session);
   const [feedback, setFeedback] = useState('');
   const [feedbackDraftContext, setFeedbackDraftContext] = useState('');
   const [feedbackBusy, setFeedbackBusy] = useState(false);
@@ -706,7 +723,7 @@ export function WorkflowRunInteraction({
   const summaryLabel = summaryBinding?.label;
   const discloseSummary = Boolean(
     primaryDetail ||
-      (otherDetailEntries.length === 1 && !visibleDetailBindings.length && !summaryBinding?.primary),
+    (otherDetailEntries.length === 1 && !visibleDetailBindings.length && !summaryBinding?.primary),
   );
   useEffect(() => {
     const element = summaryRef.current;
@@ -725,9 +742,6 @@ export function WorkflowRunInteraction({
   const hasBlockingState =
     ['failed', 'interrupted', 'awaiting_submission'].includes(flow?.status ?? '') ||
     session.assignment?.state === 'uncertain';
-  const failureEvent = session.events
-    .filter((event) => /failed|rejected|interrupted/.test(event.type))
-    .slice(-1)[0];
   const humanTaskKey =
     flow?.status === 'waiting_gate' && node?.kind === 'human' && !node.legacyHumanTask
       ? `${flow.id}:${node.id}:${flow.instance}`
@@ -1271,18 +1285,18 @@ export function WorkflowRunInteraction({
     }
   }
   const summaryContent = (
-    <section className="workflow-output-summary" aria-label={summaryLabel || 'Summary'}>
+    <section className="workflow-output-summary" aria-label={summaryLabel || 'Output summary'}>
       {!discloseSummary && (summaryLabel || Object.keys(details).length > 0) && (
-        <h3 className="workflow-output-label">{summaryLabel || 'Summary'}</h3>
+        <h3 className="workflow-output-label">{summaryLabel || 'Output summary'}</h3>
       )}
       <div
         ref={summaryRef}
         id={`workflow-submission-summary-${session.id}`}
         className={`workflow-submission-summary${!summaryExpanded ? ' is-collapsed' : ''}`}
       >
-        <WorkflowArtifactContent text={submission?.summary ?? ''} />
+        <WorkflowArtifactContent text={submission?.summary ?? ''} sectionLabels />
       </div>
-      {(summaryOverflows || summaryExpanded) && (
+      {!discloseSummary && (summaryOverflows || summaryExpanded) && (
         <button
           type="button"
           className="workflow-summary-toggle"
@@ -1300,29 +1314,19 @@ export function WorkflowRunInteraction({
   const associatedWorkflowRunId = session.workflowRunId ?? flow.id;
   return (
     <section
-      className={`workflow-run-interaction${inspecting ? ' is-inspecting' : ''}`}
-      aria-label="Current activity"
+      className={`workflow-run-interaction${inspecting ? ' is-inspecting' : ''}${recoveryNeeded ? ' needs-recovery' : ''}`}
+      aria-label="Current step"
     >
       <header className="workflow-run-heading">
         <div className="workflow-activity-title">
-          <small>{flow.status === 'completed' ? 'Latest activity' : 'Current activity'}</small>
-          <h2>{node?.name ?? session.workflow?.name ?? 'Workflow activity'}</h2>
+          <small>{flow.status === 'completed' ? 'Latest step' : 'Current step'}</small>
+          <h2>{node?.name ?? session.workflow?.name ?? 'Workflow step'}</h2>
         </div>
         <div className="workflow-state-labels">
-          <span role="status" className={attentionLabel ? 'is-attention' : ''}>
-            {attentionLabel ?? (session.status === 'queued' ? 'Queued' : statusText)}
-          </span>
-          {attentionLabel && statusText && statusText !== attentionLabel && (
-            <small aria-label={`Execution status: ${statusText}`}>{statusText}</small>
-          )}
-          {onOpenWorkflowRun && associatedWorkflowRunId && (
-            <button
-              type="button"
-              className="workflow-run-link"
-              onClick={() => onOpenWorkflowRun(associatedWorkflowRunId)}
-            >
-              Workflow run ↗
-            </button>
+          {(!hasBlockingState || attentionLabel !== 'Recovery required') && (
+            <span role="status" className={attentionLabel ? 'is-attention' : ''}>
+              {attentionLabel ?? (session.status === 'queued' ? 'Queued' : statusText)}
+            </span>
           )}
         </div>
       </header>
@@ -1397,52 +1401,30 @@ export function WorkflowRunInteraction({
         </section>
       )}
       {hasBlockingState && (
-        <section className="workflow-blocking-state" role="alert">
-          <p>
-            {session.assignment?.state === 'uncertain'
-              ? (session.assignment.message ?? 'Execution outcome needs reconciliation.')
-              : (failureEvent?.message ??
-                failureEvent?.text ??
-                (flow.status === 'awaiting_submission'
-                  ? 'Required output is unavailable.'
-                  : 'This activity needs recovery.'))}
-          </p>
+        <WorkflowRecoveryNotice session={session} showError={!onRecovery}>
           {onRecovery && recoveryNeeded && (
-            <button type="button" className="secondary" onClick={onRecovery}>
+            <button type="button" className="primary" onClick={onRecovery}>
               Open recovery
             </button>
           )}
-        </section>
+        </WorkflowRecoveryNotice>
       )}
       {submission && (
         <div className="workflow-submission" aria-label="Activity output">
-          {(outputSourceName || submission.revision !== undefined) && (
-            <div className="workflow-output-provenance">
-              <span>{outputSourceName ? `Output from ${outputSourceName}` : 'Output'}</span>
-              {submission.revision !== undefined && <small>Revision {submission.revision}</small>}
-            </div>
-          )}
           {primaryDetail && (
             <div className="workflow-primary-detail">
-              <strong>{primaryDetail.label || primaryDetail.field}</strong>
+              <strong>{workflowFieldLabel(primaryDetail.field!, primaryDetail.label)}</strong>
               <p>{details[primaryDetail.field!]}</p>
             </div>
           )}
-          {discloseSummary ? (
-            <details className="workflow-supporting-summary">
-              <summary>{summaryLabel || 'Summary'}</summary>
-              {summaryContent}
-            </details>
-          ) : (
-            summaryContent
-          )}
+          {!discloseSummary && summaryContent}
           {visibleDetailBindings.filter((binding) => binding !== primaryDetail).length > 0 && (
             <dl>
               {visibleDetailBindings
                 .filter((binding) => binding !== primaryDetail)
                 .map((binding) => (
                   <div key={binding.field}>
-                    <dt>{binding.label || binding.field}</dt>
+                    <dt>{workflowFieldLabel(binding.field!, binding.label)}</dt>
                     <dd>{details[binding.field!]}</dd>
                   </div>
                 ))}
@@ -1452,23 +1434,11 @@ export function WorkflowRunInteraction({
             <dl className="workflow-output-fields">
               {otherDetailEntries.map(([field, value]) => (
                 <div key={field}>
-                  <dt>{field}</dt>
+                  <dt>{workflowFieldLabel(field)}</dt>
                   <dd>{value}</dd>
                 </div>
               ))}
             </dl>
-          ) : otherDetailEntries.length > 0 ? (
-            <details className="workflow-output-details">
-              <summary>Details · {otherDetailEntries.length}</summary>
-              <dl>
-                {otherDetailEntries.map(([field, value]) => (
-                  <div key={field}>
-                    <dt>{field}</dt>
-                    <dd>{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </details>
           ) : null}
         </div>
       )}
@@ -1481,6 +1451,36 @@ export function WorkflowRunInteraction({
         onInspectionChange={setInspecting}
         onStaleChange={setInspectionStale}
       />
+      {discloseSummary && (
+        <details className="workflow-supporting-summary workflow-output-disclosure">
+          <summary>{summaryLabel || 'Analysis'}</summary>
+          <div className="workflow-analysis-body">{summaryContent}</div>
+        </details>
+      )}
+      {otherDetailEntries.length > 1 && (
+        <details className="workflow-output-disclosure">
+          <summary>Additional output</summary>
+          <dl className="workflow-additional-output">
+            {otherDetailEntries.map(([field, value]) => (
+              <div key={field}>
+                <dt>{workflowFieldLabel(field)}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      )}
+      {showHistory && <WorkflowActivityHistory session={session} />}
+      {onOpenWorkflowRun && associatedWorkflowRunId && (
+        <button
+          type="button"
+          className="workflow-run-link"
+          aria-label="Open workflow run"
+          onClick={() => onOpenWorkflowRun(associatedWorkflowRunId)}
+        >
+          View run ↗
+        </button>
+      )}
       {deliveryNeedsAttention && (
         <p role="status" className="workflow-delivery-state">
           {flow.actionResult?.message ?? 'Delivery outcome needs attention.'}
@@ -1709,6 +1709,46 @@ export function WorkflowRunInteraction({
           {feedbackError && <p role="alert">{feedbackError}</p>}
         </form>
       )}
+    </section>
+  );
+}
+
+function workflowFailureMessage(session: Session) {
+  if (session.assignment?.state === 'uncertain') return session.assignment.message;
+  const failure = session.events
+    .filter((event) => /failed|rejected|interrupted|placement_error/.test(event.type))
+    .at(-1);
+  return failure?.message ?? failure?.text;
+}
+
+export function WorkflowRecoveryNotice({
+  session,
+  children,
+  showError = true,
+}: {
+  session: Session;
+  children?: ReactNode;
+  showError?: boolean;
+}) {
+  const uncertain = session.assignment?.state === 'uncertain';
+  const message = workflowFailureMessage(session);
+  const title = uncertain
+    ? 'Execution outcome uncertain'
+    : session.flow?.status === 'awaiting_submission'
+      ? 'Step output required'
+      : `Step ${workflowStatusLabel(session.flow?.status ?? session.status).toLowerCase()}`;
+  return (
+    <section className="workflow-blocking-state" aria-label="Workflow recovery">
+      <div className="workflow-recovery-reason">
+        <strong role="status">{title}</strong>
+        {showError && message && (
+          <details>
+            <summary>Recorded error</summary>
+            <p>{message}</p>
+          </details>
+        )}
+      </div>
+      {children}
     </section>
   );
 }

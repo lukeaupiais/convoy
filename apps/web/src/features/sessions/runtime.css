@@ -5,6 +5,30 @@
   font-size: 12px;
   line-height: 1.65;
 }
+.session-controls-disclosure {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+}
+.session-controls-disclosure > summary {
+  width: fit-content;
+  padding: 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.session-controls-disclosure > .session-controls {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 8px;
+}
+.session-controls-disclosure .runtime-details {
+  margin: 0;
+  padding: 10px 0;
+  border-color: var(--line);
+}
+.session-controls-disclosure .runtime-details > summary {
+  color: var(--muted);
+}
 .runtime-page h1 {
   font-size: 17px;
   font-weight: 550;

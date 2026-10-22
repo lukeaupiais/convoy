@@ -1,11 +1,8 @@
-import { writableTicketStatuses } from '../integrations';
 import { Select } from '../../shared/ui/Select';
 import { BoardAutomationInspector } from '../workflows/index';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Activity, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Flag,
-  UserRound,
   GripVertical,
   LayoutGrid,
   List,
@@ -15,6 +12,9 @@ import {
   X,
 } from 'lucide-react';
 import { command } from '../../shared/api/runtime';
+import { BoardMoves } from './board-moves';
+import { BoardView } from './BoardView';
+import { sourceOwnsBoardField } from './board-fields';
 import type { Board, BoardColumn as Column, RuntimeState, Ticket, WorkflowReference } from '../../shared/api/runtime';
 import './studio.css';
 import './board-overrides.css';
@@ -53,38 +53,11 @@ const starter: Board = {
 };
 const boardData = (state: RuntimeState) => state.boards;
 const templateData = (state: RuntimeState) => state.boardTemplates;
-const valueFor = (ticket: Ticket, field: string, projects: RuntimeState['projects']) => {
-  if (field === 'project')
-    return projects.find((project) => project.id === ticket.projectId)?.name ?? 'Project';
-  if (field.startsWith('custom.')) return String(ticket.customFields?.[field.slice(7)] ?? '');
-  if (
-    field === 'label' ||
-    field === 'agent' ||
-    field === 'priority' ||
-    field === 'title' ||
-    field === 'status'
-  )
-    return ticket[field];
-  return '';
-};
-function columnFor(board: Board, ticket: Ticket) {
-  return (
-    board.tickets?.find((p) => p.ticketId === ticket.id)?.columnId ?? board.columns[0]?.id ?? ''
-  );
-}
-const sourceOwnsBoardField = (board: Board, ticket: Ticket, state: RuntimeState) => {
-  if (board.grouping.mode !== 'field') return false;
-  if (board.grouping.field === 'status') {
-    const writable = writableTicketStatuses(ticket, state.ticketConnections ?? []);
-    return writable !== null && !board.columns.some(column => writable.includes(String(column.value ?? column.name)));
-  }
-  return board.grouping.field === 'priority' && ticket.externalLinks?.some(link => link.fieldOwnership?.priority === 'external');
-};
 
 export function BoardStudio({
   state,
   projectId,
-  tickets,
+  tickets: authoritativeTickets,
   projectName,
   onSelectTicket,
   onNewTicket,
@@ -103,7 +76,40 @@ export function BoardStudio({
     [boards, projectId],
   );
   const [boardId, setBoardId] = useState(available[0].id);
-  const board = available.find((b) => b.id === boardId) ?? available[0];
+  const [recentBoards, setRecentBoards] = useState([boardId]);
+  const authoritativeBoard = available.find((b) => b.id === boardId) ?? available[0];
+  const moveScope = JSON.stringify([projectId, state.deployment?.id, state.currentUser?.id, state.activeContext]);
+  const moves = useMemo(() => new BoardMoves(), [moveScope]);
+  const currentMoves = useRef<BoardMoves | null>(moves);
+  currentMoves.current = moves;
+  const viewActions = useRef({ state, projectName, onSelectTicket, onNewTicket, onOpenWorkflow });
+  viewActions.current = { state, projectName, onSelectTicket, onNewTicket, onOpenWorkflow };
+  const stableActions = useMemo(() => ({
+    projectName: (id?: string) => viewActions.current.projectName(id),
+    onSelectTicket: (id: number) => viewActions.current.onSelectTicket(id),
+    onNewTicket: (boardId: string, columnId: string) => viewActions.current.onNewTicket(boardId, columnId),
+    onOpenWorkflow: (reference: WorkflowReference) => viewActions.current.onOpenWorkflow(reference),
+  }), []);
+  const moveAvailable = useRef(runtimeAvailable);
+  moveAvailable.current = runtimeAvailable;
+  useEffect(() => {
+    currentMoves.current = moves;
+    return () => {
+      moves.cancelQueued();
+      if (currentMoves.current === moves) currentMoves.current = null;
+    };
+  }, [moves]);
+  const [moveRevision, renderMoves] = useState(0);
+  useEffect(() => {
+    if (!runtimeAvailable && moves.cancelQueued()) renderMoves(value => value + 1);
+  }, [runtimeAvailable, moves]);
+  useEffect(() => {
+    if (moves.reconcile(authoritativeTickets)) renderMoves(value => value + 1);
+  }, [moves, authoritativeTickets]);
+  const { board, tickets } = useMemo(
+    () => moves.project(authoritativeBoard, authoritativeTickets),
+    [moves, moveRevision, authoritativeBoard, authoritativeTickets],
+  );
   const [boardQuery, setBoardQuery] = useState('');
   const [boardMenuOpen, setBoardMenuOpen] = useState(false);
   const boardMenu = useRef<HTMLDetailsElement>(null);
@@ -133,43 +139,9 @@ export function BoardStudio({
   const [templateId, setTemplateId] = useState('');
   const organizationId = state.projects.find((project) => project.id === projectId)?.organizationId;
   const connections = (state.ticketConnections ?? []).filter((value) => value.organizationId === organizationId);
-  useEffect(() => {
-    if (!editing) setDraft(board);
-  }, [boardId, board, editing]);
-  const boardTickets = useMemo(() => {
-    const ids = new Set((board.tickets ?? []).map((p) => p.ticketId));
-    const f = board.filters ?? {};
-    return tickets.filter(
-      (t) =>
-        ids.has(t.id) &&
-        (!f.query || `${t.title} ${t.description}`.toLowerCase().includes(f.query.toLowerCase())) &&
-        (!f.projectIds?.length || f.projectIds.includes(t.projectId)) &&
-        (!f.origins?.length || f.origins.includes(t.origin ?? 'convoy')) &&
-        (!f.workTypes?.length || f.workTypes.includes(t.workType ?? 'task')) &&
-        (!f.importBindingIds?.length || (state.ticketImportMemberships ?? []).some((m) => m.ticketId === t.id && f.importBindingIds?.includes(m.bindingId))) &&
-        (!f.statuses?.length || f.statuses.includes(t.status)) &&
-        (!f.labels?.length || f.labels.includes(t.label)) &&
-        (!f.agents?.length || f.agents.includes(t.agent)) &&
-        (!f.priorities?.length || f.priorities.includes(t.priority)) &&
-        `${t.title} ${t.id} ${projectName(t.projectId)}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-    );
-  }, [tickets, board, query, projectName, state.ticketImportMemberships]);
   const syncBinding = board.filters.importBindingIds?.length === 1
     ? state.ticketImportBindings?.find((value) => value.id === board.filters.importBindingIds?.[0] && value.enabled) : undefined;
   const syncSource = connections.find((value) => value.id === syncBinding?.connectionId && value.enabled);
-  const lanes = useMemo(() => {
-    const mode = board.swimlanes?.mode ?? 'none';
-    if (mode === 'none') return [{ name: '', tickets: boardTickets }];
-    const field = mode === 'field' ? (board.swimlanes.field ?? 'label') : mode;
-    const groups = new Map<string, Ticket[]>();
-    boardTickets.forEach((t) => {
-      const value = valueFor(t, field, state.projects) || 'Unassigned';
-      groups.set(value, [...(groups.get(value) ?? []), t]);
-    });
-    return [...groups].map(([name, laneTickets]) => ({ name, tickets: laneTickets }));
-  }, [board, boardTickets, state.projects]);
   function patch(p: Partial<Board>) {
     setDraft((d) => ({ ...d, ...p }));
   }
@@ -230,21 +202,38 @@ export function BoardStudio({
       setSaving(false);
     }
   }
-  async function move(ticket: Ticket, columnId: string) {
-    if (!runtimeAvailable) return;
+  const move = useCallback(async (board: Board, ticket: Ticket, columnId: string) => {
+    if (!moveAvailable.current || sourceOwnsBoardField(board, ticket, viewActions.current.state)) return;
+    const pending = moves.start(board, ticket, columnId);
+    if (!pending) return;
     setMessage('');
+    renderMoves(value => value + 1);
+    if (!moves.canSend(pending)) return;
+    let active: typeof pending | undefined = pending;
     try {
-      await command('setBoardPlacement', {
-        boardId: board.id,
-        ticketId: ticket.id,
-        revision: ticket.revision,
-        placement: { columnId },
-      });
-      setMessage('Placement saved.');
+      while (active) {
+        if (currentMoves.current !== moves || !moveAvailable.current) {
+          moves.reject(active);
+          break;
+        }
+        const response = await command('setBoardPlacement', {
+          boardId: active.boardId,
+          ticketId: active.ticketId,
+          revision: active.expectedRevision,
+          placement: { columnId: active.columnId },
+        });
+        if (!Number.isSafeInteger(response.result?.revision)) throw new Error('Save outcome is uncertain. Refresh the board before moving this ticket again.');
+        active = moves.accept(active, response.result.revision);
+        if (currentMoves.current === moves) renderMoves(value => value + 1);
+      }
     } catch (e) {
-      setMessage(`Placement was not saved: ${(e as Error).message}`);
+      if (active) moves.reject(active);
+      if (currentMoves.current === moves)
+        setMessage(`Placement could not be confirmed: ${(e as Error).message} Refresh to inspect the current placement before retrying.`);
+    } finally {
+      if (currentMoves.current === moves) renderMoves(value => value + 1);
     }
-  }
+  }, [moves]);
   function newBoard() {
     const value = {
       ...starter,
@@ -265,7 +254,10 @@ export function BoardStudio({
               ref={boardMenu}
               className="board-switcher"
               open={boardMenuOpen}
-              onToggle={(event) => setBoardMenuOpen(event.currentTarget.open)}
+              onToggle={(event) => {
+                if (event.currentTarget.open !== boardMenuOpen)
+                  setBoardMenuOpen(event.currentTarget.open);
+              }}
             >
               <summary aria-label="Choose board">
                 {editing && draft.id === boardId ? draft.name : board.name}{' '}
@@ -291,6 +283,7 @@ export function BoardStudio({
                           key={value.id}
                           onClick={() => {
                             setBoardId(value.id);
+                            setRecentBoards(ids => [value.id, ...ids.filter(id => id !== value.id)].slice(0, 3));
                             setBoardMenuOpen(false);
                             setBoardQuery('');
                             setEditing(false);
@@ -827,150 +820,21 @@ export function BoardStudio({
           </div>
         </div>
       )}
-      {view === 'list' ? (
-        <div className="board-ticket-list">
-          {boardTickets.map((t) => (
-            <div className="board-list-row" key={t.id}>
-              <button onClick={() => onSelectTicket(t.id)}>
-                <span>CVY-{t.id}</span>
-                <strong title={t.title}>{t.title}</strong>
-                {t.externalPublish && <span aria-label="External creation needs review">⚠</span>}
-              </button>
-              {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
-              <Select
-                aria-label={`Move CVY-${t.id}`}
-                disabled={!runtimeAvailable || Boolean(sourceOwnsBoardField(board, t, state))}
-                title={!runtimeAvailable ? 'Reconnect to refresh before moving tickets.' : sourceOwnsBoardField(board, t, state) ? 'This external field does not support writes from Convoy.' : undefined}
-                value={columnFor(board, t)}
-                onChange={(e) => void move(t, e.target.value)}
-              >
-                {board.columns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div
-          className={`custom-board ${board.density ?? 'comfortable'}`}
-          style={{ '--column-count': board.columns.length } as CSSProperties}
-        >
-          {lanes.map((lane) => (
-            <div className="board-lane" key={lane.name || 'all'}>
-              {lane.name && (
-                <div className="board-lane-title">
-                  {lane.name}
-                  <span>{lane.tickets.length}</span>
-                </div>
-              )}
-              <div className="board-columns">
-                {board.columns.map((column) => {
-                  const cards = lane.tickets.filter((t) => columnFor(board, t) === column.id);
-                  return (
-                    <section
-                      className="custom-column"
-                      style={{ '--column-color': column.color && CSS.supports('color', column.color) ? column.color : '#87d5cb' } as CSSProperties}
-                      key={column.id}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        const id = Number(e.dataTransfer.getData('text/plain'));
-                        const t = tickets.find((x) => x.id === id);
-                        if (runtimeAvailable && t) void move(t, column.id);
-                      }}
-                    >
-                      <header>
-                        <span className="column-swatch" style={{ background: 'var(--column-color)' }} />
-                        <h2>{column.name}</h2>
-                        <BoardAutomationInspector
-                          key={`${board.id}:${column.id}`}
-                          board={board}
-                          columnId={column.id}
-                          view={state.boardAutomations?.[board.id]}
-                          projects={state.projects}
-                          error={runtimeError}
-                          onOpen={onOpenWorkflow}
-                        />
-                        <span>
-                          {cards.length}
-                          {column.wipLimit ? ` / ${column.wipLimit}` : ''}
-                        </span>
-                        {runtimeAvailable && (!board.filters.origins?.length || board.filters.origins.includes('convoy')) && !board.filters.importBindingIds?.length &&
-                          <button
-                            aria-label={`Add ticket to ${column.name}`}
-                            onClick={() => onNewTicket(board.id, column.id)}
-                          >
-                            <Plus size={15} />
-                          </button>}
-                      </header>
-                      <div className="custom-column-cards">
-                        {cards.map((t) => (
-                          <article
-                            className="custom-card"
-                            draggable={runtimeAvailable && !sourceOwnsBoardField(board, t, state)}
-                            key={t.id}
-                            onDragStart={(e) => e.dataTransfer.setData('text/plain', String(t.id))}
-                          >
-                            <button
-                              className="custom-card-open"
-                              onClick={() => onSelectTicket(t.id)}
-                            >
-                              <span className="ticket-card-heading">
-                                <span className="task-id">CVY-{t.id}</span>
-                                {t.externalPublish && <span className="task-id" aria-label="External creation needs review">⚠</span>}
-                                {board.cardFields.includes('priority') && (
-                                  <span
-                                    className={`ticket-priority priority-${t.priority.toLowerCase()}`}
-                                    title={`${t.priority} priority`}
-                                  >
-                                    <Flag size={12} />
-                                    {t.priority}
-                                  </span>
-                                )}
-                              </span>
-                              <strong title={t.title}>{t.title}</strong>
-                              <span className="ticket-card-tags">
-                                {board.cardFields
-                                  .filter(
-                                    (f) => !['title', 'priority', 'agent', 'project', 'label'].includes(f),
-                                  )
-                                  .map((f) => {
-                                    const value = valueFor(
-                                      t as Ticket & { customFields?: Record<string, string> },
-                                      f,
-                                      state.projects,
-                                    );
-                                    return value !== '' ? (
-                                      <span className="ticket-label" key={f}>
-                                        {f.startsWith('custom.') ? f.slice(7) + ': ' : ''}
-                                        {String(value)}
-                                      </span>
-                                    ) : null;
-                                  })}
-                              </span>
-                              <span className="ticket-card-footer">
-                                {board.cardFields.includes('agent') && (
-                                  <span className="ticket-assignee" title={t.agent || 'Unassigned'}>
-                                    <UserRound size={12} />
-                                    {t.agent || 'Unassigned'}
-                                  </span>
-                                )}
-                              </span>
-                            </button>
-                            {t.externalLinks?.[0] && <a className="board-external-link" href={t.externalLinks[0].url} target="_blank" rel="noopener noreferrer">{t.externalLinks[0].provider} ↗</a>}
-                          </article>
-                        ))}
-                      </div>
-                    </section>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      {[...new Set([board.id, ...recentBoards])].map(id => {
+        const source = available.find(value => value.id === id);
+        if (!source) return null;
+        const projected = id === board.id ? { board, tickets } : moves.project(source, authoritativeTickets);
+        return (
+          <Activity key={id} mode={id === board.id ? 'visible' : 'hidden'}>
+            <BoardView
+              {...projected} state={state} query={query} view={view}
+              runtimeAvailable={runtimeAvailable} runtimeError={runtimeError}
+              moves={moves} moveRevision={moveRevision} {...stableActions}
+              onMove={move}
+            />
+          </Activity>
+        );
+      })}
       {message && (
         <p className="board-message" role="status">
           {message}

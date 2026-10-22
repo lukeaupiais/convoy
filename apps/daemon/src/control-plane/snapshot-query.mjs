@@ -62,11 +62,33 @@ export function createSnapshotQuery({
       capabilities.sessionSkillProjection({skillSnapshots:[ref]},scope).skillSnapshots.length)} : {})});
     if(moduleState.workflows)moduleState.workflows=moduleState.workflows.map(publicWorkflow);
     if(moduleState.workflowDrafts)moduleState.workflowDrafts=Object.fromEntries(Object.entries(moduleState.workflowDrafts).map(([id,draft])=>[id,{...draft,workflow:publicWorkflow(draft.workflow)}]));
-    const includeSessionDetails = id !== undefined || view !== 'overview';
-    const sessions = (includeSessionDetails ? (id ? [getSession(id)] : Object.values(state.sessions)) : []).filter(
+    const attentionOnly = id === undefined && view === 'attention';
+    const includeSessionDetails = id !== undefined || !['overview', 'attention'].includes(view);
+    const sessions = (includeSessionDetails || attentionOnly ? (id ? [getSession(id)] : Object.values(state.sessions)) : []).filter(
       (session) => !scope || scope.projectIds.includes(session.projectId),
     );
-    const publicSessions = sessions.map(
+    // Attention needs decision/status metadata, never transcripts, tool output,
+    // approvals' inputs, workflow histories, or capability expansion.
+    const publicSessions = attentionOnly ? sessions.map(session => ({
+      id: session.id,
+      conversationId: session.conversationId,
+      projectId: session.projectId,
+      activeTicketId: session.activeTicketId,
+      workflowRunId: session.workflowRunId,
+      title: session.title,
+      status: jobs.has(session.id) && session.status === 'awaiting_review' ? 'running' : session.status,
+      updatedAt: session.updatedAt,
+      queueReason: session.queueReason,
+      pending: session.pending ? { tool: session.pending.tool } : null,
+      pendingQuestion: session.pendingQuestion ? { question: session.pendingQuestion.question } : null,
+      assignment: session.assignment ? { state: session.assignment.state } : null,
+      interruption: session.interruption ? { needsReview: session.interruption.needsReview } : null,
+      workspace: session.workspace ? {} : null,
+      flow: session.flow ? { id: session.flow.id, instance: session.flow.instance, status: session.flow.status } : null,
+      terminals: (session.terminals ?? []).map(terminal => ({ state: terminal.state })),
+      control: { stopping: Boolean(session.stopRequested) },
+      events: [],
+    })) : sessions.map(
       ({ messages, requests, steeringRequests, agentSessions, executionPrincipal, flow, workflowRunId, pastRuns, lease, ...session }) => {
         const publicLease = lease ? Object.fromEntries(Object.entries(lease).filter(([key]) => key !== 'actorKey')) : null;
         const publicFlow = flow ? structuredClone(flow) : null;
