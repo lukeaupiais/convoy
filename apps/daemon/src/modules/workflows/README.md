@@ -12,6 +12,12 @@ fact is observed through the control plane; multiple matches conflict and an
 active run blocks another start. Legacy rules require the offline automation migration; runtime accepts only the
 canonical schema. Active-run holds remain visible until explicit retry.
 
+Agent turns default to a one-hour wall-clock limit. An agent node can pin
+`executionTimeoutSeconds` (1–43200 seconds), independently of its round budget;
+the editor exposes this as Time limit (minutes). Timeout and runner disconnect
+events state their cause and preserve completed work for explicit continuation.
+Command deadlines and verification runtime expiry still enforce their own limits.
+
 Import and customer-message start rules are scoped to one import binding and
 may also select a work type. A wait node can resume an active run from a ticket
 event, including an update to linked development work. Workflow actions can

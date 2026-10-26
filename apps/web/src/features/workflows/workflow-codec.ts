@@ -86,6 +86,7 @@ export type GraphNode = {
   session?: { mode: SessionMode; name?: string; target?: string };
   permissions?: string;
   maxRounds?: number;
+  executionTimeoutSeconds?: number;
   finalizationRounds?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
   summaryHeadings?: string[];
@@ -516,6 +517,8 @@ export function safeNode(raw: unknown, index: number): GraphNode {
           : undefined,
     finalizationRounds:
       type === 'agent' ? (value.finalizationRounds as number | undefined) : undefined,
+    executionTimeoutSeconds:
+      type === 'agent' ? (value.executionTimeoutSeconds as number | undefined) : undefined,
     reasoningEffort:
       type === 'agent' ? (value.reasoningEffort as GraphNode['reasoningEffort']) : undefined,
     submissionRequirements:
@@ -653,6 +656,7 @@ export function backendNode(node: GraphNode): WorkflowStep {
     result.session = session ?? { mode: 'continue' };
     result.permissions = node.permissions;
     result.maxRounds = node.maxRounds;
+    if (node.executionTimeoutSeconds !== undefined) result.executionTimeoutSeconds = node.executionTimeoutSeconds;
     if (node.finalizationRounds !== undefined) result.finalizationRounds = node.finalizationRounds;
     if (node.reasoningEffort) result.reasoningEffort = node.reasoningEffort;
     if (node.submissionRequirements) result.submissionRequirements = node.submissionRequirements;

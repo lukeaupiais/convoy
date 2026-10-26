@@ -395,6 +395,8 @@ export type WorkflowStep = {
   session?: WorkflowSessionRule;
   permissions?: WorkflowPermission;
   maxRounds?: number;
+  /** Agent turn wall-clock limit; defaults to 3600 seconds, independent of round budgets. */
+  executionTimeoutSeconds?: number;
   finalizationRounds?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
   summaryHeadings?: string[];

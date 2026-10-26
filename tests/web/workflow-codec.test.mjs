@@ -34,6 +34,15 @@ test('workflow codec uses the browser-compatible ID seam rather than requiring r
   assert.doesNotMatch(source, /globalThis\.crypto\.randomUUID/);
 });
 
+test('agent execution deadlines survive editing without changing existing implicit defaults', () => {
+  for (const executionTimeoutSeconds of [undefined, 7200]) {
+    const original = { id: 'investigation', name: 'Investigation', nodes: [
+      { id: 'research', name: 'Research', kind: 'agent', prompt: 'Investigate', executionTimeoutSeconds },
+    ], edges: [] };
+    assert.equal(toWorkflow(fromWorkflow(original)).nodes[0].executionTimeoutSeconds, executionTimeoutSeconds);
+  }
+});
+
 test('stage view follows the entry and primary edges when storage order differs', () => {
   const graph = fromWorkflow({
     id: 'ordered',
