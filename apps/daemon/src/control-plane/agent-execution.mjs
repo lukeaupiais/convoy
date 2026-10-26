@@ -35,7 +35,20 @@ export function createAgentExecution({
   const { activeTerminal, concurrentWorkspaceExecution, tool } = sessionExecution;
   async function run(s, input, controller, instance) {
     const signal = controller.signal;
-    const timer = setTimeout(() => controller.abort(), 15 * 60000);
+    const configuredStep = instance
+      ? ((s.workflow?.nodes ?? s.workflow?.steps)?.find(node => node.id === s.flow?.nodeId) ??
+        (s.workflow?.nodes ?? s.workflow?.steps)?.[s.step]) : undefined;
+    const timeoutSeconds = configuredStep?.executionTimeoutSeconds ?? 3600;
+    const abortWithReason = message => {
+      if (signal.aborted) return;
+      const error = new Error(message);
+      error.publicMessage = message;
+      controller.abort(error);
+    };
+    const duration = timeoutSeconds % 60 === 0 ? `${timeoutSeconds / 60} minutes` : `${timeoutSeconds} seconds`;
+    const timer = setTimeout(() => abortWithReason(
+      `Agent execution reached its time limit of ${duration}. Completed results were preserved. Resume explicitly to continue.`,
+    ), timeoutSeconds * 1000);
     try {
       capabilities.pinDefault(s);
       ensureAgentSessions(s);
@@ -73,7 +86,7 @@ export function createAgentExecution({
         setExecutor: (value) => {
           execute = value ?? ((...args) => runners.execute(...args));
         },
-        disconnected: () => controller.abort(),
+        disconnected: () => abortWithReason('Runner disconnected. Completed results were preserved. Inspect the original runner before continuing.'),
         started: async (worker) => {
           event(s, 'worker_started', worker);
           await store.save();
@@ -500,6 +513,7 @@ export function createAgentExecution({
         await runners.runAgent(s.runnerId ? runnerFor(s) : null, options, handlers, signal);
       else await runAgentLoop(options, (method, args) => handlers[method](args));
     } catch (error) {
+      const interruptionReason = signal.aborted ? signal.reason?.publicMessage : undefined;
       steering.settle(s);
       steering.hold(
         s,
@@ -512,9 +526,9 @@ export function createAgentExecution({
           s,
           s.interruption?.needsReview
             ? s.interruption.reason
-            : signal.aborted
+            : interruptionReason ?? (signal.aborted
               ? 'Turn stopped. Completed results and conversation context were preserved.'
-              : 'Response failed. Partial output was retained; it is not a completed response.',
+              : 'Response failed. Partial output was retained; it is not a completed response.'),
           !!s.inFlightTool?.mutating,
         );
       delete s.inFlightTool;
@@ -524,7 +538,7 @@ export function createAgentExecution({
       if (instance) await getEngine().fail(s, instance);
       event(s, s.status, {
         message:
-          error.publicMessage ??
+          interruptionReason ?? error.publicMessage ??
           (/^(Connect|Codex|Convoy login|Context limit|Agent step|Stopped|Response interrupted)/.test(
             error.message,
           )

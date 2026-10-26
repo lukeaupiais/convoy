@@ -1966,6 +1966,16 @@ function NodeInspector({
               />
             </label>
             <label>
+              Time limit (minutes)
+              <input
+                type="number"
+                min="1"
+                max="720"
+                value={(node.executionTimeoutSeconds ?? 3600) / 60}
+                onChange={(event) => onPatch(node.id, { executionTimeoutSeconds: Number(event.target.value) * 60 })}
+              />
+            </label>
+            <label>
               Advance
               <select
                 value={node.advance ?? 'automatic'}

@@ -363,6 +363,8 @@ function normalizeNode(original, index, ids, sessions, seenNewSessions) {
     if (node.requiresCheck && node.permissions !== 'full') throw new Error(`${node.name}: a required shell check needs read, write and shell permission.`);
     if (!['none', 'read', 'read-write', 'full'].includes(node.permissions)) throw new Error(`${node.name}: invalid tool policy.`);
     node.maxRounds ??= 12;
+    if (node.executionTimeoutSeconds !== undefined && (!Number.isInteger(node.executionTimeoutSeconds) || node.executionTimeoutSeconds < 1 || node.executionTimeoutSeconds > 43200))
+      throw new Error(`${node.name}: execution timeout must be 1–43200 seconds.`);
     if (!Number.isInteger(node.maxRounds) || node.maxRounds < 1 || node.maxRounds > 100) throw new Error(`${node.name}: choose 1–100 agent rounds.`);
     if (node.finalizationRounds !== undefined && (!Number.isInteger(node.finalizationRounds) || node.finalizationRounds < 0 || node.finalizationRounds >= node.maxRounds)) throw new Error(`${node.name}: finalization rounds must be nonnegative and below max rounds.`);
     if (node.reasoningEffort !== undefined && !['low', 'medium', 'high'].includes(node.reasoningEffort)) throw new Error(`${node.name}: unsupported reasoning effort.`);
