@@ -42,4 +42,5 @@ jobs:
           npm run build
           npm run build:worker
       - name: Exercise real SDK, runner and portable worker integration
-        run: node --test --test-concurrency=1 tests/acceptance/deepthought.test.mjs tests/modules/deepthought-extension.test.mjs tests/runner/deepthought.test.mjs tests/runner/working-directory.test.mjs
+        timeout-minutes: 3
+        run: node --test --test-timeout=60000 --test-concurrency=1 tests/acceptance/deepthought.test.mjs tests/modules/deepthought-extension.test.mjs tests/runner/deepthought*.test.mjs tests/runner/working-directory.test.mjs

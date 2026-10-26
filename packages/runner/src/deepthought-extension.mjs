@@ -163,6 +163,7 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
     const child = spawn(command, argv, {
       cwd: '/',
       env: environment,
+      detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const stdout = [];
@@ -170,11 +171,25 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
       error,
       stderrBytes = 0,
       force;
+    const signalGroup = (signal) => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch (cause) {
+        if (cause.code !== 'ESRCH') error ??= cause;
+      }
+    };
     const stop = (message) => {
       if (error) return;
       error = new Error(message);
-      child.kill('SIGTERM');
-      force = setTimeout(() => child.kill('SIGKILL'), 250);
+      signalGroup('SIGTERM');
+      force = setTimeout(() => {
+        signalGroup('SIGKILL');
+        // An exited leader can leave inherited pipes open in a descendant.
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }, 250);
     };
     const abort = () => stop('DeepThought query cancelled.');
     const timer = setTimeout(() => stop('DeepThought query timed out.'), timeoutMs);
@@ -195,6 +210,7 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
       error ??= cause;
     });
     child.once('close', (code) => {
+      signalGroup('SIGKILL');
       clearTimeout(timer);
       clearTimeout(force);
       signal?.removeEventListener('abort', abort);
@@ -214,7 +230,9 @@ function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } 
 async function assertRuntimeOutside(python, root) {
   const provisioned = await Promise.all([realpath(python), realpath(dirname(python))]);
   if ([python, ...provisioned].some((path) => within(root, path)))
-    throw new Error('DeepThought runtime must be provisioned outside the assigned working directory.');
+    throw new Error(
+      'DeepThought runtime must be provisioned outside the assigned working directory.',
+    );
 }
 
 export async function createDeepThoughtAdapter({
@@ -270,7 +288,9 @@ export async function createDeepThoughtAdapter({
       { signal, timeoutMs: 5000, maxOutputBytes: 4000 },
     );
     if (checked.prefixes.some((prefix) => within(root, prefix)))
-      throw new Error('DeepThought runtime must be provisioned outside the assigned working directory.');
+      throw new Error(
+        'DeepThought runtime must be provisioned outside the assigned working directory.',
+      );
     return checked;
   };
   if (workingDirectory) metadata = await loadRuntime(await realpath(workingDirectory), signal);
@@ -344,7 +364,10 @@ export async function installedDeepThoughtAdapters(signal, workingDirectory) {
     await assertRuntimeOutside(python, root);
     const key = JSON.stringify([python, root]);
     if (!installed.has(key))
-      installed.set(key, await createDeepThoughtAdapter({ python, signal, workingDirectory: root }));
+      installed.set(
+        key,
+        await createDeepThoughtAdapter({ python, signal, workingDirectory: root }),
+      );
     return { deepthought: installed.get(key) };
   } catch (error) {
     if (signal?.aborted) throw error;
