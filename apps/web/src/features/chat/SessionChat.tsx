@@ -103,7 +103,7 @@ export function SessionChat({
 }) {
   const key = `convoy.chat.v1.${taskId}`;
   const [local, setLocal] = useState(() => load(key));
-  const { state, error: connectionError, isStale } = useRuntime();
+  const { state, error: connectionError, isStale } = useRuntime(taskId);
   const { session, connection } = useSessionStream(
     taskId,
     state?.sessions.find((s) => s.id === String(taskId)),

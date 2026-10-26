@@ -1,4 +1,4 @@
-import { useRuntime } from '../shared/api/runtime';
+import type { RuntimeState } from '../shared/api/runtime';
 import { AgentSettings } from '../features/library';
 import { EnvironmentSettings } from '../features/runners';
 import { WorkflowReferenceView, WorkflowWorkspace } from '../features/workflows/index';
@@ -9,6 +9,7 @@ import { IntegrationSettings } from '../features/integrations';
 type SettingsView = 'Providers' | 'Integrations' | 'Runners' | 'Workflows' | 'Agents';
 
 export function SettingsPage({
+  runtime,
   view,
   projectId,
   workflowReference,
@@ -16,6 +17,7 @@ export function SettingsPage({
   onCloseReference,
   onOpenConversation,
 }: {
+  runtime: { state: RuntimeState | null; error: string; isStale: boolean };
   view: SettingsView;
   projectId?: string;
   workflowReference?: WorkflowReference;
@@ -23,11 +25,10 @@ export function SettingsPage({
   onCloseReference?: () => void;
   onOpenConversation?: (id: string) => void;
 }) {
-  const { state, error, isStale } = useRuntime();
+  const { state, isStale } = runtime;
   return (
     <section className="runtime-page">
       {view !== 'Workflows' && <h1 className="sr-only">{view}</h1>}
-      {error && <p role="alert">{error}</p>}
       {view === 'Workflows' && state && workflowReference && (
           <WorkflowReferenceView
             state={state}

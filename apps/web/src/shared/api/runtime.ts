@@ -109,7 +109,7 @@ export async function command<Action extends RuntimeAction>(
   return result;
 }
 
-export function useRuntime(taskId?: number, overview: boolean | 'attention' = false, enabled = true) {
+export function useRuntime(taskId?: number | string, overview: boolean | 'attention' = false, enabled = true) {
   const [state, setState] = useState<RuntimeState | null>(null);
   const [loadedScope, setLoadedScope] = useState('');
   const [error, setError] = useState('');
@@ -132,7 +132,7 @@ export function useRuntime(taskId?: number, overview: boolean | 'attention' = fa
       if (reconnect) setIsRefreshing(true);
       try {
         const value = await api<RuntimeState>(
-          `/api/runtime${taskId ? `/${taskId}` : overview === 'attention' ? '?view=attention' : overview ? '?view=overview' : ''}`,
+          `/api/runtime${taskId ? `/${encodeURIComponent(String(taskId))}` : overview === 'attention' ? '?view=attention' : overview ? '?view=overview' : ''}`,
         );
         if (live && currentRequest === request && generation === contextGeneration) {
           setState(value);
