@@ -15,7 +15,8 @@ const scheduleEvent = {
   correlationPaths: ['scheduleId'], maxPayloadBytes: 2048,
 };
 
-function fixture({ now = () => '2026-01-01T00:00:00.000Z', save = async () => {} } = {}) {
+function fixture({ now = () => '2026-01-01T00:00:00.000Z', save = async () => {},
+  linkedExecutionState = () => ({ busy: false, uncertain: false }) } = {}) {
   const workflow = { id: 'inventory-review', version: 1, organizationId: 'org-a', name: 'Inventory review', nodes: [
     { id: 'review', kind: 'human', name: 'Review', prompt: 'Review this inventory result.' },
   ], edges: [] };
@@ -31,7 +32,7 @@ function fixture({ now = () => '2026-01-01T00:00:00.000Z', save = async () => {}
     automations: { snapshot: () => [], validate: () => {} }, eventDescriptors: [event, scheduleEvent],
     engine: { async start(run) { starts++; run.flow = { workflowId: workflow.id, workflowVersion: workflow.version,
       nodeId: 'review', instance: `instance-${starts}`, status: 'waiting_gate', history: [] }; } },
-    now,
+    now, linkedExecutionState,
   });
   return { state, workflows, rule, get starts() { return starts; } };
 }
@@ -64,6 +65,51 @@ test('explicit retry reconciles a failed acknowledgement to the already-created 
   assert.equal(f.state.workflowRuns[originalRunId], existing);
   assert.equal(f.starts, 1);
 });
+
+test('a failed run releases subscription capacity for held retries and new events', async () => {
+  const f = fixture();
+  delete f.rule.concurrency; // The default hold policy must also release settled failures.
+  async function accept(id) {
+    const accepted = await f.workflows.acceptEvent({ descriptor: { id: event.id, revision: 1 },
+      source: { id: 'inventory.source-a', eventId: id }, organizationId: 'org-a', projectId: 'project-a',
+      payload: { requestId: id }, correlation: { key: 'requestId', value: id } });
+    return Object.entries(f.state.automationDecisionLedger).find(([, value]) => value.eventId === accepted.event.id);
+  }
+  const [firstKey] = await accept('first');
+  const first = await f.workflows.ensureRunForDecision(firstKey);
+  const [heldKey, held] = await accept('held');
+  assert.equal(held.status, 'held');
+  f.state.workflowRuns[first.id].flow.status = 'failed';
+  await f.workflows.retryEventDecision(heldKey);
+  assert.equal((await f.workflows.ensureRunForDecision(heldKey)).id, held.runId);
+  f.state.workflowRuns[held.runId].flow.status = 'failed';
+  const [nextKey, next] = await accept('next');
+  assert.equal(next.status, 'reserved');
+  assert.equal((await f.workflows.ensureRunForDecision(nextKey)).id, next.runId);
+  assert.equal(f.starts, 3);
+});
+
+for (const unresolved of ['uncertain-effect', 'busy-execution', 'uncertain-execution']) {
+  test(`a failed run retains subscription capacity with ${unresolved}`, async () => {
+    const f = fixture({ linkedExecutionState: () => ({ busy: unresolved === 'busy-execution',
+      uncertain: unresolved === 'uncertain-execution' }) });
+    async function accept(id) {
+      const accepted = await f.workflows.acceptEvent({ descriptor: { id: event.id, revision: 1 },
+        source: { id: 'inventory.source-a', eventId: id }, organizationId: 'org-a', projectId: 'project-a',
+        payload: { requestId: id }, correlation: { key: 'requestId', value: id } });
+      return Object.entries(f.state.automationDecisionLedger).find(([, value]) => value.eventId === accepted.event.id);
+    }
+    const [firstKey] = await accept('first');
+    const first = await f.workflows.ensureRunForDecision(firstKey);
+    const run = f.state.workflowRuns[first.id];
+    run.flow.status = 'failed';
+    if (unresolved === 'uncertain-effect') run.attempt = { status: 'uncertain', effect: 'durable-effect', dispatchStarted: true };
+    const [key, decision] = await accept('second');
+    assert.equal(decision.status, 'held');
+    await assert.rejects(f.workflows.retryEventDecision(key), /active-run limit/);
+    assert.equal(f.starts, 1);
+  });
+}
 
 test('subscription reservations enforce capacity and explicit retry reuses the reserved run ID', async () => {
   const f = fixture();

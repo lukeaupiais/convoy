@@ -11,6 +11,9 @@ the principal whose current grants are checked at dispatch. The completed Work
 fact is observed through the control plane; multiple matches conflict and an
 active run blocks another start. Legacy rules require the offline automation migration; runtime accepts only the
 canonical schema. Active-run holds remain visible until explicit retry.
+Completed, failed, and cancelled runs release subscription capacity once their
+execution is settled. Uncertain effects and busy or uncertain linked execution
+retain capacity until reconciled or stopped.
 
 Agent turns default to a one-hour wall-clock limit. An agent node can pin
 `executionTimeoutSeconds` (1–43200 seconds), independently of its round budget;
