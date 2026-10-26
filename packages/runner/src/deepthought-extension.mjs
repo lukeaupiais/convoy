@@ -7,7 +7,7 @@ import { dirname, isAbsolute, relative } from 'node:path';
 export const deepThoughtExtensionManifest = {
   id: 'deepthought',
   kind: 'executor',
-  revision: 'sdk-0.2.0a1-adapter-1',
+  revision: 'sdk-0.2.1a1-adapter-2',
   execution: { location: 'runner', adapter: 'deepthought' },
   tools: [
     {
@@ -21,11 +21,22 @@ export const deepThoughtExtensionManifest = {
         required: ['operation'],
         properties: {
           operation: { type: 'string', enum: ['definitions', 'references', 'dependencies'] },
-          symbol: { type: 'string', minLength: 1, maxLength: 500 },
+          symbol: { type: 'string', minLength: 1, maxLength: 500, pattern: '\\S' },
           file: { type: 'string', minLength: 1, maxLength: 500 },
           index: { type: 'string', minLength: 1, maxLength: 500 },
           limit: { type: 'integer', minimum: 1, maximum: 100 },
         },
+        allOf: [
+          {
+            if: { properties: { operation: { const: 'references' } } },
+            then: { properties: { symbol: {} }, required: ['symbol'] },
+          },
+          {
+            if: { properties: { operation: { const: 'dependencies' } } },
+            then: { properties: { file: {}, symbol: false }, required: ['file'] },
+            else: { properties: { file: false } },
+          },
+        ],
       },
       approval: 'none',
     },
@@ -88,12 +99,10 @@ function sandboxArgs(prefixes, root) {
 }
 const bridge = String.raw`
 import json, sys, os, stat, tempfile
-from collections import Counter
-from dataclasses import asdict
 from pathlib import Path
-from deepthought import analyze_repository, ingest_scip, compose_graph
+from deepthought import QueryRequest, analyze_repository, ingest_scip, compose_graph, query_graph
 from deepthought import __version__
-if __version__!='0.2.0a1':
+if __version__!='0.2.1a1':
     raise ValueError('Installed SDK no longer matches the pinned adapter')
 a=json.load(sys.stdin)
 root=Path('/work')
@@ -120,41 +129,9 @@ if 'index' in a:
         os.close(directory)
 else:
     source=analyze_repository(root, repository_id='workspace', max_files=200, max_file_bytes=1000000, max_total_bytes=10000000)
-out={'status':source.status, 'analysis_status':source.status, 'snapshot_id':source.snapshot_id, 'capabilities':source.capabilities, 'coverage':dict(Counter(c.status for c in source.coverage)), 'diagnostic_count':len(source.diagnostics), 'diagnostics':[asdict(d) for d in source.diagnostics[:10]]}
-operation=a['operation']
-if operation=='definitions':
-    rows=[asdict(d) for d in source.definitions if 'symbol' not in a or a['symbol'] in (d.symbol,d.native_id)]
-elif 'references' not in source.capabilities:
-    rows=[]
-    out['status']='unavailable'
-    out['reason']='References require a supplied SCIP index; no indexer is executed.'
-else:
-    graph=compose_graph([source])
-    out['graph_status']=graph.status
-    out['status']=graph.status
-    out['graph_snapshot_id']=graph.snapshot_id
-    out['resolution_counts']=graph.resolution_counts
-    if operation=='references':
-        targets=graph.lookup_definitions(a['symbol'])
-        ids={node.id for node in targets}
-        rows=[]
-        for ref in graph.references:
-            if ids.intersection(ref.target_ids) or (not ids and ref.reference.native_id==a['symbol']):
-                row=asdict(ref)
-                row['target_count']=len(ref.target_ids)
-                row['target_ids']=ref.target_ids[:20]
-                row['targets_truncated']=len(ref.target_ids)>20
-                rows.append(row)
-    else:
-        rows=[]
-        for edge in graph.dependencies('workspace',a['file']):
-            row=asdict(edge)
-            row['witness_count']=len(edge.witness_ids)
-            row['witness_ids']=edge.witness_ids[:20]
-            row['witnesses_truncated']=len(edge.witness_ids)>20
-            rows.append(row)
-out.update(total_matches=len(rows),truncated=len(rows)>a.get('limit',20),matches=rows[:a.get('limit',20)])
-print(json.dumps(out,separators=(',',':'),allow_nan=False))
+request=QueryRequest(a['operation'], 'workspace', symbol=a.get('symbol'), file=a.get('file'),
+    limit=a.get('limit',20), max_output_bytes=a['max_output_bytes'])
+print(query_graph(compose_graph([source]), request).to_json())
 `;
 
 function runProcess(command, argv, { signal, timeoutMs, maxOutputBytes, input } = {}) {
@@ -269,11 +246,11 @@ export async function createDeepThoughtAdapter({
     );
     const checked = JSON.parse(probe);
     if (
-      checked.version !== '0.2.0a1' ||
+      checked.version !== '0.2.1a1' ||
       !Array.isArray(checked.prefixes) ||
       checked.prefixes.some((p) => typeof p !== 'string' || !isAbsolute(p) || p === '/')
     )
-      throw new Error('DeepThought adapter requires SDK 0.2.0a1 and bounded runtime prefixes.');
+      throw new Error('DeepThought adapter requires SDK 0.2.1a1 and bounded runtime prefixes.');
     await runProcess(
       '/usr/bin/bwrap',
       [
@@ -283,7 +260,7 @@ export async function createDeepThoughtAdapter({
         '-I',
         '-B',
         '-c',
-        "import deepthought,socket,errno; s=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',9))\nexcept OSError as e: assert e.errno in (errno.ENETUNREACH,errno.EHOSTUNREACH)\nelse: raise RuntimeError('Network isolation unavailable')\nassert deepthought.__version__=='0.2.0a1'",
+        "from deepthought import QueryRequest, query_graph; import deepthought,socket,errno; s=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',9))\nexcept OSError as e: assert e.errno in (errno.ENETUNREACH,errno.EHOSTUNREACH)\nelse: raise RuntimeError('Network isolation unavailable')\nassert deepthought.__version__=='0.2.1a1'",
       ],
       { signal, timeoutMs: 5000, maxOutputBytes: 4000 },
     );
@@ -315,7 +292,7 @@ export async function createDeepThoughtAdapter({
       throw new Error('Invalid DeepThought query.');
     if (
       args.symbol !== undefined &&
-      (typeof args.symbol !== 'string' || !args.symbol.length || args.symbol.length > 500)
+      (typeof args.symbol !== 'string' || !args.symbol.trim().length || args.symbol.length > 500)
     )
       throw new Error('Invalid DeepThought symbol.');
     for (const key of ['index', 'file'])
@@ -331,6 +308,13 @@ export async function createDeepThoughtAdapter({
       (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 100)
     )
       throw new Error('DeepThought limit must be 1-100.');
+    if (
+      (args.operation === 'dependencies' && args.symbol !== undefined) ||
+      (args.operation !== 'dependencies' && args.file !== undefined)
+    )
+      throw new Error(
+        'DeepThought dependencies accept a file; definitions and references accept a symbol.',
+      );
     if (signal?.aborted) throw new Error('DeepThought query cancelled.');
     const root = await realpath(workingDirectory);
     await assertRuntimeOutside(python, root);
@@ -344,7 +328,12 @@ export async function createDeepThoughtAdapter({
       signal,
       timeoutMs,
       maxOutputBytes,
-      input: JSON.stringify(args),
+      input: JSON.stringify({
+        ...args,
+        // The SDK supports budgets of at least 1024 bytes. Smaller transport
+        // limits remain independently enforced by runProcess.
+        max_output_bytes: maxOutputBytes >= 1024 ? maxOutputBytes : 32000,
+      }),
     });
     try {
       return JSON.parse(output);
