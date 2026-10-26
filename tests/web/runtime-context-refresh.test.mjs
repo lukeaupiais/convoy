@@ -41,6 +41,9 @@ test('context selection clears old state and discards an in-flight snapshot from
   assert.equal(values[0].activeContext.organizationId, 'editorial');
   useRuntime(7, true);
   assert.equal(paths.at(-1), '/api/runtime/7');
+  useRuntime('chat-12345678-1234-1234-1234-123456789abc');
+  assert.equal(paths.at(-1), '/api/runtime/chat-12345678-1234-1234-1234-123456789abc',
+    'conversation detail must request its selected session rather than every session');
 });
 
 test('reconnect refresh retains stale data after failure and replaces it only with an authoritative snapshot', async t => {

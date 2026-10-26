@@ -89,7 +89,7 @@ function App() {
     refresh: refreshRuntime,
   } = useRuntime(
     page === 'Project board' ? detailTicketId : undefined,
-    page === 'Project board' && detailTicketId === undefined,
+    page === 'Project board' ? detailTicketId === undefined : 'attention',
   );
   const selectedExecutionId = liveRuntime?.tickets.find((ticket) => ticket.id === selected)?.executionSessionId;
   useEffect(() => {
@@ -643,6 +643,7 @@ function App() {
         {page === 'Workflows' && (
           <SettingsPage
             key={`workflow-settings:${workflowContextKey}`}
+            runtime={{ state: liveRuntime, error: runtimeError, isStale: runtimeStale }}
             view="Workflows"
             projectId={project?.id}
             workflowReference={workflowReference}
@@ -651,9 +652,9 @@ function App() {
             onOpenConversation={inspectConversation}
           />
         )}
-        {page === 'Runners' && <SettingsPage key="runner-settings" view="Runners" />}
-        {page === 'Providers' && <SettingsPage key="provider-settings" view="Providers" />}
-        {page === 'Integrations' && <SettingsPage key="integration-settings" view="Integrations" />}
+        {page === 'Runners' && <SettingsPage key="runner-settings" view="Runners" runtime={{ state: liveRuntime, error: runtimeError, isStale: runtimeStale }} />}
+        {page === 'Providers' && <SettingsPage key="provider-settings" view="Providers" runtime={{ state: liveRuntime, error: runtimeError, isStale: runtimeStale }} />}
+        {page === 'Integrations' && <SettingsPage key="integration-settings" view="Integrations" runtime={{ state: liveRuntime, error: runtimeError, isStale: runtimeStale }} />}
         {page === 'Wiki' && liveRuntime && (
           <React.Suspense fallback={<p>Loading wiki…</p>}>
             <Wiki key={project?.id ?? 'wiki'} state={liveRuntime} projectId={project?.id} />
@@ -662,6 +663,7 @@ function App() {
         {page === 'Agents' && (
           <SettingsPage
             key={project?.id ?? 'agent-settings'}
+            runtime={{ state: liveRuntime, error: runtimeError, isStale: runtimeStale }}
             view="Agents"
             projectId={project?.id}
           />

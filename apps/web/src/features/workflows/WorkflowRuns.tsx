@@ -89,6 +89,9 @@ export function WorkflowRuns({
   const humanContextRef = useRef('');
   const committedHumanContext = useRef('');
   const canReviewTaskRef = useRef(false);
+  const readableProjectKey = JSON.stringify(state.projects.map(project => project.id).sort());
+  const readableProjectIds = useMemo(() => new Set<string>(JSON.parse(readableProjectKey)), [readableProjectKey]);
+  const selectedRunSnapshot = JSON.stringify(state.workflowRuns?.find(run => run.id === selectedRunId));
   detailRef.current = detail;
 
   useEffect(() => {
@@ -184,6 +187,7 @@ export function WorkflowRuns({
       return;
     }
     let current = true;
+    let timer: number | undefined;
     const pageGeneration = compositionPageGeneration.current;
     const refresh = async () => {
       try {
@@ -192,7 +196,7 @@ export function WorkflowRuns({
           ...(compositionOffset !== undefined ? { compositionOffset } : {}),
         });
         if (current && pageGeneration === compositionPageGeneration.current) {
-          if (!state.projects.some((project) => project.id === response.result.projectId)) {
+          if (!readableProjectIds.has(response.result.projectId)) {
             setDetail(null);
             setRefreshError('');
             setSelectedRunId('');
@@ -217,15 +221,16 @@ export function WorkflowRuns({
           setTerminalResultBusy(false);
           setRefreshError(caught instanceof Error ? caught.message : String(caught));
         }
+      } finally {
+        if (current) timer = window.setTimeout(() => void refresh(), 15000);
       }
     };
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 1500);
     return () => {
       current = false;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
-  }, [selectedRunId, refreshKey, state.projects, compositionOffset]);
+  }, [selectedRunId, selectedRunSnapshot, refreshKey, readableProjectIds, compositionOffset]);
 
   async function startRun(event: React.FormEvent) {
     event.preventDefault();
