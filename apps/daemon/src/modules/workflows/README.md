@@ -20,6 +20,8 @@ Agent turns default to a one-hour wall-clock limit. An agent node can pin
 the editor exposes this as Time limit (minutes). Timeout and runner disconnect
 events state their cause and preserve completed work for explicit continuation.
 Command deadlines and verification runtime expiry still enforce their own limits.
+Daemon-owned actions, including sending an approved captured reply, do not
+reacquire a runner or coding workspace from an earlier agent node.
 
 Import and customer-message start rules are scoped to one import binding and
 may also select a work type. A wait node can resume an active run from a ticket
