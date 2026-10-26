@@ -92,6 +92,10 @@ for (const worker of ['source', ...(process.env.CONVOY_TEST_COMPILED_WORKER ? ['
         args: { operation: 'definitions', symbol: 'portable' },
       });
       assert.equal(result.matches[0].definition.symbol, 'portable');
+      assert.equal(result.engine_version, '0.2.4a1');
+      assert.equal(result.workspace_freshness, 'unverified');
+      assert.equal(result.source_consistency.snapshot_id, result.snapshot_id);
+      assert.equal(result.source_consistency.status, 'unchanged');
     },
   );
 }
@@ -310,6 +314,11 @@ test(
       scoped.matches.map((d) => d.definition.symbol),
       ['Nested'],
     );
+    assert.equal(scoped.source_consistency.status, 'unchanged');
+    assert.deepEqual(
+      scoped.source_consistency.checks.map((check) => check.file),
+      ['nested.py'],
+    );
   },
 );
 
@@ -341,7 +350,7 @@ test(
       /revision/,
     );
     await assert.rejects(
-      invoke(adapter, undefined, { ...extension, revision: 'sdk-0.2.0a1-adapter-1' }),
+      invoke(adapter, undefined, { ...extension, revision: 'sdk-0.2.1a1-adapter-2' }),
       /revision/,
     );
     const cancel = new AbortController();
@@ -441,12 +450,14 @@ test(
     const direct = String.raw`
 import json, sys
 from pathlib import Path
-from deepthought import QueryRequest, analyze_repository, compose_graph, ingest_scip, query_graph
+from deepthought import QueryRequest, analyze_repository, compose_graph, ingest_scip, query_graph, check_source_consistency, __version__
 root=Path(sys.argv[1]); args=json.loads(sys.argv[2]); budget=int(sys.argv[3])
 source=(ingest_scip(root/args['index'], repository_id='workspace', max_index_bytes=10000000)
     if 'index' in args else analyze_repository(root, repository_id='workspace', max_files=200, max_file_bytes=1000000, max_total_bytes=10000000))
+evidence={'engine_version':__version__,'source_consistency':check_source_consistency(root,source,max_files=200,max_file_bytes=1000000,max_total_bytes=10000000).to_dict()}
+extra=len(json.dumps(evidence,sort_keys=True,ensure_ascii=False,allow_nan=False).encode('utf-8'))
 request=QueryRequest(args['operation'], 'workspace', symbol=args.get('symbol'), file=args.get('file'),
-    limit=args.get('limit',20), max_output_bytes=budget)
+    limit=args.get('limit',20), max_output_bytes=budget-extra)
 print(query_graph(compose_graph([source]), request).to_json())
 `;
     for (const args of [
@@ -480,7 +491,15 @@ print(query_graph(compose_graph([source]), request).to_json())
         undefined,
         { deepthought: adapter },
       );
-      assert.deepEqual(result, JSON.parse(expected.stdout));
+      const { engine_version, source_consistency, ...canonical } = result;
+      assert.deepEqual(canonical, JSON.parse(expected.stdout));
+      assert.equal(engine_version, '0.2.4a1');
+      assert.equal(result.workspace_freshness, 'unverified');
+      assert.equal(source_consistency.scope, 'recorded_files');
+      assert.equal(source_consistency.repository_id, 'workspace');
+      assert.equal(source_consistency.snapshot_id, result.snapshot_id);
+      assert.equal(source_consistency.status, args.index ? 'unverified' : 'unchanged');
+      assert(Buffer.byteLength(JSON.stringify(result)) + 1 <= budget);
       assert.equal(result.artifact_type, 'query');
       assert.equal(result.schema_version, '1');
       if (args.operation === 'definitions') {
@@ -500,6 +519,8 @@ print(query_graph(compose_graph([source]), request).to_json())
       { operation: 'dependencies', file: 'source.py', symbol: 'helper' },
       { operation: 'definitions', symbol: '   ' },
       { operation: 'definitions', max_output_bytes: 32000 },
+      { operation: 'definitions', engine_version: 'forged' },
+      { operation: 'definitions', source_consistency: { status: 'unchanged' } },
     ]) {
       await assert.rejects(
         adapter({ extension, tool: 'extension.deepthought.query', args, workingDirectory: root }),

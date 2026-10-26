@@ -11,7 +11,7 @@ Tests live in `tests/runner`.
 ## Local code intelligence
 
 The optional `deepthought` extension adapter uses the separately provisioned
-DeepThought SDK 0.2.1a1 on Linux. It does not install packages, execute indexers,
+DeepThought SDK 0.2.4a1 on Linux. It does not install packages, execute indexers,
 call models, or start a service. Configure `CONVOY_DEEPTHOUGHT_PYTHON` with an
 absolute virtualenv Python path on each runner host, outside assigned workspaces.
 Local and SSH workers use the same adapter and protocol; remote workers need
@@ -34,17 +34,35 @@ resolution states; dependency edges describe references, not calls. Match limits
 and truncated candidate/witness lists are reported explicitly.
 
 The adapter invokes the SDK's `query_graph` interface and returns query schema 1
-without reshaping its results. Definition matches include graph identity and a
+without reshaping its query fields. It adds `engine_version` from the installed
+SDK and a separate `source_consistency` record for the same source snapshot.
+The sandbox captures its own analysis artifact in private scratch space and invokes
+the SDK's `check-source` CLI with the assigned root/repository. This compares only
+recorded Tree-sitter source bytes. A record can be unchanged, changed, or
+unverified; retain its per-file reasons, cancellation state and coverage counts.
+SCIP document hashes remain unverified. `workspace_freshness` always remains
+`"unverified"`: additions, incomplete capture and changes after each sequential
+comparison are outside this check. Neither record authorizes source navigation. Definition matches include graph identity and a
 nested `definition` containing the symbol and source location. Reference targets
 and dependency witnesses retain their identities, counts and truncation flags.
-The SDK receives the runner's output budget when it is at least 1024 bytes;
-smaller transport limits are enforced independently by the runner. Input
+The runner's output limit covers the query, engine version, consistency record
+and final newline together. The adapter reserves the evidence members' exact
+UTF-8 size before asking the SDK to truncate query matches into the remaining
+budget. An oversized consistency record or insufficient space for required query
+metadata fails the request without dropping evidence. The checker uses the same
+200-file, 1 MB/file and 10 MB total source limits as capture, with a 10 MB analysis
+artifact limit. These bounds are not a hard memory bound. When the transport limit
+is below the SDK's 1024-byte minimum, the bridge uses a 32,000-byte engine budget;
+the runner still independently enforces the smaller transport limit. Input
 confinement, process deadlines and cancellation remain runner responsibilities.
 
-This changes the extension revision to `sdk-0.2.1a1-adapter-2`. Existing reviewed
+This changes the extension revision to `sdk-0.2.4a1-adapter-3`. Existing reviewed
 profiles are not rewritten: publish and review the new manifest, update the
-profile's exact revision/hash, and provision SDK 0.2.1a1 on the selected runner
-before granting the new revision. The adapter rejects old revisions and SDKs.
+profile's exact revision/hash, and provision SDK 0.2.4a1 on the selected runner
+before granting the new revision. The adapter rejects old revisions and SDKs. The dedicated integration workflow
+installs immutable SDK commit `5e80a0074566e4d890a41f6d453f94cda44289d5`.
+Both source and compiled workers are tested locally without Theia. Local/SSH
+workers share this implementation; actual SSH acceptance is a separate gate.
 
 Foreground and supervised shell commands accept up to 32,000 characters, so
 ordinary multiline scripts and evidence writes fit in one operation. Oversized

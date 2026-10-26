@@ -60,6 +60,8 @@ test('DeepThought tools require a reviewed pinned manifest and an installed assi
     { operation: 'references', symbol: 'helper', file: 'main.py' },
     { operation: 'dependencies', file: 'main.py', symbol: 'helper' },
     { operation: 'definitions', max_output_bytes: 32768 },
+    { operation: 'definitions', engine_version: 'forged' },
+    { operation: 'definitions', source_consistency: { status: 'unchanged' } },
   ]) {
     assert.throws(
       () => capabilities.validate(session, null, 'code_intelligence', args),
