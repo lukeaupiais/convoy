@@ -211,6 +211,12 @@ export async function createRuntime({
     ...workflowEvents.map(registration => registration?.descriptor ?? registration),
   ];
   const jobs = new Map();
+  const pendingWork = new Set();
+  function trackWork(promise) {
+    pendingWork.add(promise);
+    promise.then(() => pendingWork.delete(promise), () => pendingWork.delete(promise));
+    return promise;
+  }
   const listeners = new Set();
   const publish = (change) => {
     for (const listener of listeners)
@@ -1440,6 +1446,7 @@ export async function createRuntime({
     now,
   });
   function launch(s, input, step, instance) {
+    if (closing) return false;
     if (step && ['child', 'parallel', 'map'].includes(step.kind)) return false;
     if (s.independentRun) {
       if (!step || step.kind === 'agent') return false;
@@ -1510,6 +1517,7 @@ export async function createRuntime({
           if (!closing) await dispatch();
         }
       })();
+      trackWork(job.promise);
       job.promise.catch(() => {});
       return true;
     }
@@ -1644,11 +1652,17 @@ export async function createRuntime({
       await conversations.notify(s);
       if (!closing && !blocked) await dispatch();
     });
+    trackWork(job.promise);
     job.promise.catch(() => {});
     return true;
   }
-  async function dispatch() {
+  function dispatch() {
+    if (closing) return Promise.resolve();
+    return trackWork(dispatchAvailable());
+  }
+  async function dispatchAvailable() {
     await workflowEffects.drainImportFacts();
+    if (closing) return;
     for (const s of Object.values(state.sessions)) {
       for (const m of s.pendingMessages ?? [])
         if (m.binding !== messageBinding(s)) {
@@ -1657,6 +1671,7 @@ export async function createRuntime({
         }
     }
     await engine.pump();
+    if (closing) return;
     await advanceWorkflowCompositions();
     for (const s of Object.values(state.sessions)) {
       if (
@@ -1678,7 +1693,7 @@ export async function createRuntime({
     }
   }
   function advanceWorkflowCompositions() {
-    if (!workflows) return Promise.resolve();
+    if (closing || !workflows) return Promise.resolve();
     const current = compositionAdvance.then(runWorkflowCompositionAdvance);
     compositionAdvance = current.catch(() => {});
     return current;
@@ -1810,6 +1825,7 @@ export async function createRuntime({
       queue = queue
         .catch(() => {})
         .then(async () => {
+          if (closing) return;
           await pollTicketImports();
           await workflows.processDue(eventNow(), { limit: 100 });
           await processWorkflowEventDecisions();
@@ -2044,7 +2060,9 @@ export async function createRuntime({
   );
   skillSources.restore();
   async function tickWorkflowEvents() {
+    if (closing) throw new Error('Daemon is shutting down.');
     const result = queue.catch(() => {}).then(async () => {
+      if (closing) throw new Error('Daemon is shutting down.');
       const due = await workflows.processDue(eventNow(), { limit: 100 });
       await processWorkflowEventDecisions();
       await workflowEffects.drainImportFacts();
@@ -2055,7 +2073,9 @@ export async function createRuntime({
     return result;
   }
   async function receiveWorkflowWebhook(bindingId, payload, authenticatedPrincipal) {
+    if (closing) throw new Error('Daemon is shutting down.');
     const result = queue.catch(() => {}).then(async () => {
+      if (closing) throw new Error('Daemon is shutting down.');
       const binding = workflows.webhookBinding(bindingId);
       if (!binding) throw new Error('Workflow webhook binding is unavailable.');
       await identity.assertPrincipalActive(authenticatedPrincipal, { organizationId: binding.organizationId });
@@ -3321,6 +3341,7 @@ export async function createRuntime({
       return snapshot(id, client, authenticatedPrincipal, options);
     },
     command(input, authenticatedPrincipal = localPrincipal) {
+      if (closing) return Promise.reject(new Error('Daemon is shutting down.'));
       const command = validateRuntimeCommand(input);
       if (
         [
@@ -3335,7 +3356,7 @@ export async function createRuntime({
           'cancelWorkflow',
         ].includes(command.action)
       )
-        return executeAudited(command, authenticatedPrincipal);
+        return trackWork(executeAudited(command, authenticatedPrincipal));
       const result = queue
         .catch(() => {})
         .then(async () => {
@@ -3352,7 +3373,12 @@ export async function createRuntime({
         clearInterval(dispatchTimer);
         skillSources.close();
         for (const job of jobs.values()) job.controller.abort();
-        await Promise.allSettled([...jobs.values()].map((j) => j.promise));
+        await queue.catch(() => {});
+        // Capacity may be released before a job's final save/notification. Its
+        // complete lifetime, and any dispatch it already started, must drain
+        // before storage closes or another coordinator reopens the directory.
+        while (pendingWork.size) await Promise.allSettled([...pendingWork]);
+        await compositionAdvance;
         await runners?.close?.();
         await sessionExecution.close();
         await store.save();
