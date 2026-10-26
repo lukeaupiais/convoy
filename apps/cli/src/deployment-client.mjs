@@ -92,6 +92,42 @@ export function createDeploymentClient({
       if (validateContext) await validateSavedContext();
       return raw(path, input);
     },
+    async observeSession(id, { signal, session, partial, connected = () => {} }) {
+      if (!/^(?:\d{1,10}|chat-[a-f0-9-]{36})$/.test(String(id))) throw new Error('Invalid session ID.');
+      await verifyIdentity();
+      await validateSavedContext();
+      const response = await fetchImpl(`${profile.serverOrigin}/api/runtime/${id}/events`, {
+        headers: { ...headers(false), Accept: 'text/event-stream' }, redirect: 'manual', signal,
+      });
+      if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream')) {
+        await response.body?.cancel();
+        throw new Error('Live updates unavailable.');
+      }
+      connected();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const bytes of response.body) {
+        buffer = (buffer + decoder.decode(bytes, { stream: true })).replace(/\r\n/g, '\n');
+        if (buffer.length > 32 * 1024 * 1024) throw new Error('Live update exceeded the size limit.');
+        let end;
+        while ((end = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          const lines = frame.split('\n');
+          const type = lines.find(line => line.startsWith('event: '))?.slice(7);
+          if (!['session', 'partial'].includes(type)) continue;
+          const data = JSON.parse(lines.filter(line => line.startsWith('data: ')).map(line => line.slice(6)).join('\n'));
+          if (type === 'session') {
+            if (String(data.id) !== String(id)) throw new Error('Live update belongs to another session.');
+            session(data);
+          } else {
+            if (data.id !== undefined && String(data.id) !== String(id)) throw new Error('Live update belongs to another session.');
+            partial(data);
+          }
+        }
+      }
+      if (!signal?.aborted) throw new Error('Live connection closed.');
+    },
     async selectContext(context) {
       await verifyIdentity();
       const result = await raw('/api/runtime', {

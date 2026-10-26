@@ -24,6 +24,7 @@
     "test:acceptance": "node --test --test-concurrency=1 tests/acceptance/*.test.mjs",
     "test:modules": "node --test --test-concurrency=1 tests/modules/*.test.mjs tests/runner/*.test.mjs tests/web/*.test.mjs",
     "attach": "node apps/cli/src/cli.mjs attach",
+    "chat": "node apps/cli/src/cli.mjs chat",
     "terminal": "node apps/cli/src/cli.mjs terminal",
     "sessions": "node apps/cli/src/cli.mjs sessions",
     "desktop:install": "node node_modules/electron/install.js",

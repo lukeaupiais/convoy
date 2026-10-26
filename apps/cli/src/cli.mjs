@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { sshArgs } from '../../../packages/runner/src/index.mjs';
 import { createClientProfiles, normalizeDeploymentOrigin } from './client-profiles.mjs';
 import { createDeploymentClient } from './deployment-client.mjs';
+import { createConversationRepl } from './conversation-repl.mjs';
 const [command = 'help', argument, ...flags] = process.argv.slice(2);
 const profiles = createClientProfiles();
 // Strip terminal control codes from all model, tool and repository output.
@@ -228,86 +228,115 @@ if (command === 'login') {
   } finally {
     if (owned) await act('release').catch(() => {});
   }
-} else if (command === 'attach') {
-  const taskId = argument?.replace(/^(?:CVY|AG)-/, '');
+} else if (command === 'attach' || command === 'chat') {
+  let taskId = argument?.replace(/^(?:CVY|AG)-/, '');
+  if (command === 'chat') {
+    const args = [argument, ...flags].filter(value => value !== undefined);
+    let title;
+    let projectId;
+    for (let i = 0; i < args.length; i++) {
+      const value = args[i];
+      if (value === '--title' || value === '--project') {
+        const next = args[++i];
+        if (!next || next.startsWith('--')) throw new Error(`${value} requires a value.`);
+        if (value === '--title' && title === undefined) title = next;
+        else if (value === '--project' && projectId === undefined) projectId = next;
+        else throw new Error(`Duplicate option: ${value}`);
+      } else if (!value.startsWith('-') && title === undefined) title = value;
+      else throw new Error('Usage: npm run chat -- [TITLE] [--project PROJECT_ID]');
+    }
+    let created;
+    try {
+      created = await api('/api/runtime', {
+        action: 'createConversation', client, requestId: randomUUID(),
+        ...(title !== undefined ? { title } : {}),
+        ...(projectId !== undefined ? { projectId } : {}),
+      });
+    } catch (error) {
+      throw new Error(`Chat creation could not be confirmed: ${error.message}. Run npm run sessions before trying again.`);
+    }
+    taskId = created.result?.sessionId;
+    if (!/^chat-[a-f0-9-]{36}$/.test(taskId ?? ''))
+      throw new Error('Chat creation could not be confirmed. Run npm run sessions before trying again.');
+    if (!process.stdin.isTTY || !process.stdout.isTTY) console.log(safe(`Created conversation ${taskId}.`));
+  }
   if (!/^(?:\d{1,10}|chat-[a-f0-9-]{36})$/.test(taskId ?? ''))
     throw new Error('Usage: npm run attach -- CVY-16 or chat-ID [--read-only]');
   const readonly = flags.includes('--read-only');
   let owned = false;
-  let sequence = 0;
   let polling = false;
-  let partial = '';
-  let status = '';
-  let viewSession = 'all';
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: process.stdin.isTTY,
-  });
-  rl.pause(); // Do not consume piped commands while the initial snapshot is loading.
+  let lastSession;
+  let live = false;
+  let observing;
+  let lostReported = false;
+  const streamController = new AbortController();
+  const repl = createConversationRepl({ client, readOnly: readonly, sessionId: taskId });
   const act = (action, rest = {}) => api('/api/runtime', { action, taskId, client, ...rest });
-  console.log(
-    `Attached to ${taskId.startsWith('chat-') ? taskId : `CVY-${taskId}`}. Disconnecting does not stop the agent. ${readonly ? 'Read-only.' : '/claim to take control.'}`,
-  );
-  console.log(
-    '/claim /release /approve ID /deny ID /stop /resume /pending /discard ID /interrupt TEXT /context /diff /workflow /start-workflow /pause /continue /cancel /gate-approve /changes FEEDBACK /quit',
-  );
-  console.log(
-    'Messages queue while working. /resume-reviewed acknowledges that you inspected possible partial effects.',
-  );
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    repl.write(`\nCONVOY · ${taskId.startsWith('chat-') ? taskId : `CVY-${taskId}`}`);
+    repl.write(readonly ? 'Read-only attachment. /help for commands.' : '/help for commands · /quit to disconnect · end a line with \\ for multi-line input');
+  }
+  function receive(session, context) {
+    lastSession = session;
+    owned = session.lease?.client === client && session.lease.expiresAt > Date.now();
+    repl.observe(session, context);
+  }
+  function connect() {
+    if (observing || streamController.signal.aborted) return;
+    observing = deploymentClient.observeSession(taskId, {
+      signal: streamController.signal,
+      connected() { live = true; if (lostReported) repl.write('Live updates reconnected.'); lostReported = false; },
+      session: receive,
+      partial: repl.partial,
+    }).catch(() => {
+      if (!streamController.signal.aborted && !lostReported) {
+        repl.write('Live updates disconnected; refreshing recorded state. Agent work continues.');
+        lostReported = true;
+      }
+    }).finally(() => { live = false; observing = null; });
+  }
   async function poll() {
-    if (polling) return;
+    if (polling || streamController.signal.aborted) return;
     polling = true;
     try {
-      const state = await api(`/api/runtime/${taskId}`);
-      const s = state.sessions[0];
-      if (s.status !== status) {
-        status = s.status;
-        console.log(safe(`[status] ${status}`));
+      if (!live) {
+        const state = await api(`/api/runtime/${taskId}`);
+        const session = state.sessions[0];
+        receive(session, { projectName: state.projects.find(project => project.id === session.projectId)?.name });
       }
-      if (s.partial !== partial) {
-        if (s.partial)
-          process.stdout.write(
-            safe(
-              `[stream] ${s.partial.startsWith(partial) ? s.partial.slice(partial.length) : s.partial}\n`,
-            ),
-          );
-        partial = s.partial;
-      }
-      if (sequence && s.events[0]?.seq > sequence + 1)
-        console.log('[Earlier events compacted; reconnect snapshot starts here.]');
-      for (const e of s.events.filter((e) => e.seq > sequence)) {
-        if (viewSession === 'all' || !e.agentSessionId || e.agentSessionId === viewSession)
-          console.log(
-            safe(
-              `[${e.seq} ${e.type}] ${e.text ?? e.message ?? JSON.stringify(e.approval ?? e.output ?? e)}`,
-            ),
-          );
-        sequence = e.seq;
-      }
-      owned = s.lease?.client === client && s.lease.expiresAt > Date.now();
-      if (owned && s.lease.expiresAt - Date.now() < 60000) await act('heartbeat');
-    } catch (e) {
-      console.error(safe(e.message));
+      if (owned && lastSession?.lease?.expiresAt - Date.now() < 60000) await act('heartbeat');
+    } catch (error) {
+      if (!lostReported) repl.write(`Connection lost: ${error.message}`);
+      lostReported = true;
     } finally {
       polling = false;
     }
   }
-  await poll();
-  const timer = setInterval(poll, 1000);
-  rl.on('line', async (line) => {
-    const input = line.trim();
-    if (!input) return;
+  if (command === 'chat') {
     try {
-      if (input === '/quit') return rl.close();
+      await act('claim', { label: 'Native terminal' });
+      owned = true;
+      if (!process.stdin.isTTY || !process.stdout.isTTY) repl.write('Ready to chat. Type a message; /quit to disconnect.');
+    } catch (error) {
+      repl.close();
+      throw new Error(`Conversation ${taskId} was created but control could not be claimed: ${error.message}. Reconnect with npm run attach -- ${taskId}.`);
+    }
+  }
+  await poll();
+  connect();
+  const timer = setInterval(() => { void poll(); connect(); }, 1000);
+  async function handleInput(input) {
+    let messageRequestId;
+    try {
+      if (input === '/quit') return repl.close();
       if (input === '/context') {
         const s = (await api(`/api/runtime/${taskId}`)).sessions[0];
-        console.log(safe(JSON.stringify(s.provenance ?? s.instructions, null, 2)));
+        repl.write(safe(JSON.stringify(s.provenance ?? s.instructions, null, 2)));
         return;
       }
       if (input === '/pending') {
         const s = (await api(`/api/runtime/${taskId}`)).sessions[0];
-        console.log(
+        repl.write(
           safe(
             JSON.stringify(
               { messages: s.pendingMessages, interruption: s.interruption, control: s.control },
@@ -321,7 +350,7 @@ if (command === 'login') {
       if (input === '/placement') {
         const state = await api(`/api/runtime/${taskId}`);
         const s = state.sessions[0];
-        console.log(
+        repl.write(
           safe(
             JSON.stringify(
               {
@@ -338,7 +367,7 @@ if (command === 'login') {
       }
       if (input === '/workflow') {
         const s = (await api(`/api/runtime/${taskId}`)).sessions[0];
-        console.log(
+        repl.write(
           safe(
             JSON.stringify(
               { workflow: s.workflow, run: s.flow, sessions: s.agentSessions },
@@ -355,9 +384,8 @@ if (command === 'login') {
         const record = s.agentSessions?.find((a) => a.id === name || a.name === name);
         if (name !== 'all' && !record)
           throw new Error('Session not found. Use /workflow to list sessions.');
-        viewSession = record?.id ?? 'all';
-        sequence = 0;
-        await poll();
+        repl.setView(record?.id ?? 'all');
+        receive(s);
         return;
       }
       if (readonly)
@@ -407,7 +435,7 @@ if (command === 'login') {
       } else if (input === '/advance') await act('advance');
       else if (input === '/diff') {
         await act('diff');
-        console.log(
+        repl.write(
           safe(JSON.stringify((await api(`/api/runtime/${taskId}`)).sessions[0].review, null, 2)),
         );
       } else if (/^\/(approve|deny) /.test(input))
@@ -417,28 +445,31 @@ if (command === 'login') {
         });
       else if (input.startsWith('/')) throw new Error('Unknown command.');
       else {
-        const s = (await api(`/api/runtime/${taskId}`)).sessions[0];
+        messageRequestId = randomUUID();
+        repl.sending(input, messageRequestId);
         await act('sendMessage', {
           text: input,
           mode: 'queue',
-          model: s.model,
-          requestId: randomUUID(),
+          model: lastSession.model,
+          requestId: messageRequestId,
         });
       }
       await poll();
     } catch (e) {
-      console.error(safe(e.message));
+      repl.write(safe(messageRequestId ? `Message delivery could not be confirmed: ${e.message}. Check /pending before resending.` : e.message));
+    } finally {
+      if (messageRequestId) repl.sent(messageRequestId);
     }
-  });
-  rl.on('close', async () => {
+  }
+  repl.start({ submit: handleInput, disconnect: async () => {
     clearInterval(timer);
+    streamController.abort();
     if (owned) await act('release').catch(() => {});
     process.exit(0);
-  });
-  rl.resume();
+  } });
 } else {
   console.log(
-    'Convoy native client\n  convoy connect URL [--name NAME]\n  convoy profiles\n  convoy profile use NAME\n  convoy login\n  convoy logout\n  convoy context list|show\n  convoy context use ORG[/TEAM]/PROJECT\n  npm run sessions\n  npm run attach -- CVY-16 [--read-only]\n  npm run terminal -- CVY-16\nRemote deployments require HTTPS; loopback may use HTTP. CONVOY_URL remains a per-invocation override.',
+    'Convoy native client\n  convoy connect URL [--name NAME]\n  convoy profiles\n  convoy profile use NAME\n  convoy login\n  convoy logout\n  convoy context list|show\n  convoy context use ORG[/TEAM]/PROJECT\n  npm run chat -- [TITLE] [--project PROJECT_ID]\n  npm run sessions\n  npm run attach -- CVY-16 [--read-only]\n  npm run terminal -- CVY-16\nRemote deployments require HTTPS; loopback may use HTTP. CONVOY_URL remains a per-invocation override.',
   );
 }
 
