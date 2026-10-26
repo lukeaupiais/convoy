@@ -18,6 +18,10 @@ It is the transaction/orchestration layer, not a home for every rule.
 - `agent-execution.mjs` runs the provider loop and dispatches visible tools.
 - `state-schema.mjs` owns persisted-state defaults and migrations.
 - `snapshot-query.mjs` projects internal state into client read models.
+
+Shutdown rejects new runtime commands, workflow events and dispatches, aborts
+active jobs, and drains admitted commands and complete job cleanup before closing persistence.
+Wait for `close()` to finish before reopening the same storage directory.
 - `ticket-run.mjs` coordinates idempotent ticket-to-workflow execution.
 - `work-execution.mjs` and `workflow-references.mjs` expose narrow cross-owner
   queries instead of allowing Work to traverse another module's storage.
