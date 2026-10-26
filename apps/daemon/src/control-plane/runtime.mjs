@@ -1584,10 +1584,10 @@ export async function createRuntime({
         const agentUsesConfiguredPlacement = !step?.activity && (!step || step.kind === 'agent') &&
           placement.effective(s).mode !== 'none';
         const runnerRequired = Boolean(agentUsesConfiguredPlacement || step?.kind === 'check' ||
-          step?.requiresCheck || step?.artifact || activityNeedsRunner);
-        // Registered activities acquire only the active resources they declare.
-        // Legacy workflow steps retain their existing configured-placement path.
-        const acquirePlacement = step?.activity ? activityNeedsRunner : true;
+          step?.requiresCheck || step?.artifact || step?.operation === 'inspect_changes' || activityNeedsRunner);
+        // Daemon-owned effects use captured data, without reacquiring a coding
+        // workspace left by an earlier node.
+        const acquirePlacement = runnerRequired;
         const required = [
           ...(activityDescriptor?.resources.tools ?? []),
           ...(step?.artifact ? ['read_file'] : []),

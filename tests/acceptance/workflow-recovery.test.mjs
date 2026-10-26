@@ -17,6 +17,41 @@ async function until(read, predicate) {
     }
     throw new Error('Timed out waiting for workflow recovery.');
 }
+test('daemon-owned actions do not reacquire a retained inspection workspace', async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'convoy-action-resources-'));
+    const persistence = await createPersistence({ directory, initialState: initialControlPlaneState() });
+    const calls = [];
+    const runtime = await createControlPlaneRuntime({ persistence, models: [{ id: 'fixture' }],
+        auth: { token: async () => 'fixture', status: async () => ({ connected: true }) },
+        generate: async function* () { throw new Error('This action needs no agent'); },
+        runners: { close: async () => {}, execute: async (_runner, request) => {
+            calls.push(request.action);
+            if (request.action === 'probe') return { tools: [], inspection: true, executionDescriptorVersion: 1 };
+            throw new Error('Inspection descriptor does not match the bound assignment.');
+        } },
+    });
+    t.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); });
+    const act = (action, input = {}) => runtime.command({ action, client: 'action-resources', ...input });
+    const runner = await act('registerRunner', { name: 'Editorial inspector', kind: 'local', repository: '/editorial' });
+    const chat = await act('createConversation', { requestId: 'editorial-action', projectId: 'agent-platform' });
+    const scope = { sessionId: chat.sessionId };
+    await act('claim', scope);
+    await act('saveWorkflow', { workflow: { id: 'followup', name: 'Editorial followup', nodes: [
+        { id: 'create', kind: 'action', name: 'Create followup', operation: 'create_ticket',
+          input: { title: 'Editorial followup', projectId: 'agent-platform' } },
+    ], edges: [] } });
+    await act('configure', { ...scope, workflow: 'followup' });
+    const session = persistence.store.data.sessions[chat.sessionId];
+    session.runnerId = runner.id;
+    session.workspace = { path: '/editorial/retained' };
+    session.executionProfile = 'inspect';
+    session.placement = { mode: 'pinned', runnerId: runner.id };
+    calls.length = 0;
+    await act('startWorkflow', scope);
+    const result = await until(() => runtime.snapshot(), d => d.sessions.find(s => s.id === session.id)?.flow?.status === 'completed');
+    assert.ok(result.tickets.some(ticket => ticket.title === 'Editorial followup'));
+    assert.deepEqual(calls, [], 'daemon effects must not bind, inspect or start the old runner workspace');
+});
 test('uncertain workflow board effects are not replayed on restart and require explicit recovery', async (t) => {
     const directory = await mkdtemp(join(tmpdir(), 'convoy-workflow-recovery-'));
     const options = { directory, models: [{ id: 'fixture' }], auth: { token: async () => 'fixture', status: async () => ({ connected: true }) }, generate: async function* () { } };
