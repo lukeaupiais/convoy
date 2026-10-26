@@ -473,7 +473,7 @@ export function createWorkflows({
       if (existing) { decisions.push(triggerKey); continue; }
       const concurrency = rule.concurrency ?? { policy: 'hold', maxActiveRuns: 1 };
       const activeRuns = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === rule.id &&
-        !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
+        childActive(run)).length;
       const pendingReservations = Object.values(state.automationDecisionLedger).filter(decision =>
         decision.subscriptionId === rule.id && decision.subscriptionRevision === rule.revision &&
         ['reserved', 'started'].includes(decision.status) && !state.workflowRuns?.[decision.runId]).length;
@@ -923,7 +923,7 @@ export function createWorkflows({
     return childHasUncertainExecution(child) || Boolean(execution?.busy || execution?.uncertain);
   }
   function childActive(child) {
-    return !['completed', 'failed', 'cancelled'].includes(child?.flow?.status) || childHasUnresolvedExecution(child);
+    return !['completed', 'failed', 'cancelled'].includes(child?.flow?.status ?? child?.status) || childHasUnresolvedExecution(child);
   }
   function isCoordinatorOnlyRun(run) {
     if (!run?.independentRun || !run.attempt?.instance || !run.attempt?.nodeId) return false;
@@ -1851,7 +1851,7 @@ export function createWorkflows({
         throw new Error('The decision’s pinned workflow revision is unavailable or changed.');
       const runInput = pinnedDecisionRunInput(decision);
       const activeRuns = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === decision.subscriptionId &&
-        !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
+        childActive(run)).length;
       const waiting = Object.entries(state.automationDecisionLedger).filter(([key, value]) => key !== triggerKey &&
         value.subscriptionId === decision.subscriptionId && value.subscriptionRevision === decision.subscriptionRevision &&
         ['reserved', 'started'].includes(value.status) && !state.workflowRuns?.[value.runId]);
@@ -1903,7 +1903,7 @@ export function createWorkflows({
         return structuredClone(existing);
       }
       const active = Object.values(state.workflowRuns ?? {}).filter(run => run.provenance?.subscriptionId === decision.subscriptionId &&
-        !['completed', 'cancelled'].includes(run.flow?.status ?? run.status)).length;
+        childActive(run)).length;
       const pending = Object.values(state.automationDecisionLedger).filter(value => value !== decision &&
         value.subscriptionId === decision.subscriptionId && value.subscriptionRevision === decision.subscriptionRevision &&
         ['reserved', 'started'].includes(value.status) && !state.workflowRuns?.[value.runId]).length;
