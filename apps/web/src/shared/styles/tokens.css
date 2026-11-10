@@ -1,0 +1,71 @@
+/* Design tokens: the single source for colour, type, spacing, and shape.
+   Features read these variables instead of hard-coding values. */
+:root {
+  color-scheme: dark;
+
+  --color-canvas: #15242e;
+  --color-surface: #18252e;
+  --color-surface-raised: #20313b;
+  --color-surface-hover: #263b46;
+  --color-border: #344b57;
+  --color-border-strong: #526b72;
+  --color-text: #e8e7df;
+  --color-text-muted: #a6b6bb;
+  --color-text-subtle: #7f9297;
+  --color-accent: #c7ac76;
+  --color-accent-hover: #d6bd8a;
+  --color-on-accent: #18252e;
+  --color-info: #6fb6a8;
+  --color-success: #7cc49a;
+  --color-warning: #d9b36c;
+  --color-danger: #e07a6a;
+  --color-info-bg: #1c3a3a;
+  --color-success-bg: #1d3a2c;
+  --color-warning-bg: #3a3120;
+  --color-danger-bg: #3d2423;
+  --color-scrim: #080f18b8;
+  --color-selection: #f2cb69;
+
+  --font-sans: 'Segoe UI', Tahoma, Arial, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-display: 'Silkscreen', var(--font-mono);
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-control: 0;
+  --radius-card: 0;
+
+  /* Legacy names kept so existing feature styles resolve to the tokens above. */
+  --ink: var(--color-text);
+  --muted: var(--color-text-muted);
+  --paper: var(--color-canvas);
+  --surface: var(--color-surface);
+  --surface-2: var(--color-surface-raised);
+  --line: var(--color-border);
+  --line-strong: var(--color-border-strong);
+  --accent: var(--color-accent);
+  --accent-hover: var(--color-accent-hover);
+  --sea: var(--color-info);
+  --purple: var(--color-accent);
+  --signal: var(--color-warning);
+  --rail: #16383c;
+  --rail-soft: #20474a;
+  --raised: inset 1px 1px #ffffff0d;
+  --inset: inset 1px 1px #00000040;
+
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  color: var(--color-text);
+  background: var(--color-canvas);
+}

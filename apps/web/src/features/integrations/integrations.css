@@ -56,19 +56,19 @@
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  background: #8b9590;
-  border: 1px solid #fff;
-  box-shadow: 0 0 0 1px #69746e;
+  background: var(--color-text-subtle);
+  border: 1px solid var(--color-surface);
+  box-shadow: 0 0 0 1px var(--color-border-strong);
 }
 .integration-status-light.is-enabled {
-  background: #2c9463;
+  background: var(--color-success);
 }
 .integration-status {
-  color: #6b756f;
+  color: var(--color-text-muted);
   font-size: 11px;
 }
 .integration-status.is-enabled {
-  color: #296747;
+  color: var(--color-success);
 }
 .integration-actions {
   gap: 7px;

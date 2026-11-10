@@ -3,6 +3,7 @@ import { TicketDetails, TicketExecution, TicketMenuActions } from '../features/t
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArrowLeft, Check, Copy, Menu, MoreHorizontal, Plus, X } from 'lucide-react';
+import '../shared/styles/tokens.css';
 import '../shared/styles/styles.css';
 import '../shared/styles/minimal.css';
 import { ChatWorkspace } from '../features/chat/ChatWorkspace';
