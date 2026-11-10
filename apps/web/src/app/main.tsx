@@ -30,6 +30,7 @@ import './connection.css';
 import { ActiveContext } from '../features/access';
 import { ProjectSwitcher } from '../features/access/ProjectSwitcher';
 import { ticketNavigationReducer } from './ticket-navigation';
+import { appRouteHash, isAppPage, parseAppRoute } from './routes';
 
 type Status = 'Backlog' | 'Ready' | 'In progress' | 'In review' | 'Done';
 type Task = {
@@ -76,10 +77,11 @@ function App() {
       document.removeEventListener('focusout', update);
     };
   }, []);
-  const [page, setPageState] = useState(() =>
-    parseWikiLocation(window.location.hash) ? 'Wiki' : 'Project board',
+  const [initialRoute] = useState(() => parseAppRoute(window.location.hash));
+  const [page, setPageState] = useState<string>(() =>
+    parseWikiLocation(window.location.hash) ? 'Wiki' : (initialRoute?.page ?? 'Project board'),
   );
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(initialRoute?.ticket ?? null);
   const [detailTicketId, setDetailTicketId] = useState<number>();
   const {
     state: liveRuntime,
@@ -128,8 +130,6 @@ function App() {
     if (value === page) return true;
     if (!canLeaveAgents()) return false;
     if (!window.dispatchEvent(new Event('convoy-wiki-leave', { cancelable: true }))) return false;
-    if (value !== 'Wiki' && parseWikiLocation(window.location.hash))
-      window.history.pushState(null, '', window.location.pathname + window.location.search);
     if (value !== 'Workflows') setWorkflowRunId(undefined);
     setPageState(value);
     return true;
@@ -150,8 +150,9 @@ function App() {
       window.dispatchEvent(new Event('convoy-wiki-route'));
       const route = parseWikiLocation(window.location.hash);
       if (!route) {
-        // Only a hash change away from the wiki leaves it; a runtime refresh must not.
-        if (event) setPageState((current) => (current === 'Wiki' ? 'Project board' : current));
+        // Only a hash change to a non-app location leaves the wiki; a runtime refresh must not.
+        if (event && !parseAppRoute(window.location.hash))
+          setPageState((current) => (current === 'Wiki' ? 'Project board' : current));
         return;
       }
       setPageState('Wiki');
@@ -169,15 +170,23 @@ function App() {
     return () => window.removeEventListener('hashchange', followWikiLink);
   }, [routeProjects, runtimeStale]);
   const [workflowReference, setWorkflowReference] = useState<WorkflowReference>();
-  const [workflowRunId, setWorkflowRunId] = useState<string>();
+  const [workflowRunId, setWorkflowRunId] = useState<string | undefined>(initialRoute?.runId);
   const workflowContextKey = JSON.stringify([
     liveRuntime?.deployment?.id,
     liveRuntime?.currentUser?.id,
     liveRuntime?.activeContext?.organizationId,
     liveRuntime?.activeContext?.projectId,
   ]);
-  useEffect(() => setWorkflowReference(undefined), [workflowContextKey]);
-  useEffect(() => setWorkflowRunId(undefined), [workflowContextKey]);
+  const loadedWorkflowContext = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    // The first loaded context keeps a deep-linked run; later context switches clear it.
+    const previous = loadedWorkflowContext.current;
+    if (!liveRuntime) return;
+    loadedWorkflowContext.current = workflowContextKey;
+    if (previous === undefined || previous === workflowContextKey) return;
+    setWorkflowReference(undefined);
+    setWorkflowRunId(undefined);
+  }, [workflowContextKey]);
   function openWorkflowRun(runId: string) {
     setWorkflowReference(undefined);
     setWorkflowRunId(runId);
@@ -218,7 +227,45 @@ function App() {
   const [ticketMenuCommandActive, setTicketMenuCommandActive] = useState(false);
   const ticketMenuCommandActiveRef = useRef(false);
   ticketMenuCommandActiveRef.current = ticketMenuCommandActive;
-  const [chatConversationId, setChatConversationId] = useState('');
+  const [chatConversationId, setChatConversationId] = useState(initialRoute?.conversationId ?? '');
+  // Keep the address bar in step with the visible page so it can be shared, reloaded, and
+  // navigated with Back and Forward.
+  const routeHash = isAppPage(page)
+    ? appRouteHash({
+        page,
+        conversationId: page === 'Chat' ? chatConversationId || undefined : undefined,
+        runId: page === 'Workflows' ? workflowRunId : undefined,
+        ticket: selected ?? undefined,
+      })
+    : undefined;
+  useEffect(() => {
+    const { pathname, search, hash } = window.location;
+    let next = routeHash;
+    if (page === 'Wiki' && !parseWikiLocation(hash)) next = wikiHref({ projectId: project?.id });
+    if (!next || hash === next) return;
+    const replace = hash === '' || hash === '#';
+    window.history[replace ? 'replaceState' : 'pushState'](null, '', pathname + search + next);
+  });
+  useEffect(() => {
+    const followAppRoute = () => {
+      const route = parseAppRoute(window.location.hash);
+      if (!route) return;
+      if (route.page !== page && !setPage(route.page)) {
+        // The current page refused to close, so restore its address.
+        if (routeHash) window.history.replaceState(null, '', routeHash);
+        return;
+      }
+      if (route.page !== page) setMobile(false);
+      setSelected(route.ticket ?? null);
+      if (route.page === 'Chat') setChatConversationId(route.conversationId ?? '');
+      if (route.page === 'Workflows') {
+        setWorkflowReference(undefined);
+        setWorkflowRunId(route.runId);
+      }
+    };
+    window.addEventListener('hashchange', followAppRoute);
+    return () => window.removeEventListener('hashchange', followAppRoute);
+  });
   const [newChatOpen, setNewChatOpen] = useState(false);
   useEffect(() => {
     dispatchTicketNavigation({ type: 'ticket-selected' });
@@ -651,6 +698,7 @@ function App() {
             workflowRunId={workflowRunId}
             onCloseReference={() => setWorkflowReference(undefined)}
             onOpenConversation={inspectConversation}
+            onWorkflowRunChange={setWorkflowRunId}
           />
         )}
         {page === 'Runners' && <SettingsPage key="runner-settings" view="Runners" runtime={{ state: liveRuntime, error: runtimeError, isStale: runtimeStale }} />}
