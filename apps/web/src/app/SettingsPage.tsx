@@ -16,6 +16,7 @@ export function SettingsPage({
   workflowRunId,
   onCloseReference,
   onOpenConversation,
+  onWorkflowRunChange,
 }: {
   runtime: { state: RuntimeState | null; error: string; isStale: boolean };
   view: SettingsView;
@@ -24,6 +25,7 @@ export function SettingsPage({
   workflowRunId?: string;
   onCloseReference?: () => void;
   onOpenConversation?: (id: string) => void;
+  onWorkflowRunChange?: (id?: string) => void;
 }) {
   const { state, isStale } = runtime;
   return (
@@ -46,6 +48,7 @@ export function SettingsPage({
             projectId={projectId}
             workflowRunId={workflowRunId}
             onOpenConversation={onOpenConversation}
+            onRunChange={onWorkflowRunChange}
           />
         )}
         {view === 'Agents' && state && <AgentSettings state={state} />}
