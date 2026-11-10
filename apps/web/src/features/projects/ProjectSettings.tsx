@@ -4,6 +4,7 @@ import type { Project, RuntimeState, RuntimeDefinitionInput } from '../../shared
 import { PlacementEditor } from './PlacementEditor';
 import { ExecutionProfileEditor } from './ExecutionProfileEditor';
 import './ticket-fields.css';
+import './project-settings.css';
 import { InstructionSettings, ProjectAgentProfile } from '../library';
 export function ProjectSettings({
   state,

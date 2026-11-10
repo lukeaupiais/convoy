@@ -371,6 +371,7 @@
   padding: 10px 26px;
   font-size: 12px;
   flex-shrink: 0;
+  color: #a6b6bb;
 }
 .page-project-scope select {
   max-width: 280px;
