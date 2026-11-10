@@ -543,7 +543,7 @@ function App() {
           </label>
         )}
         {page === 'Project settings' && project && liveRuntime && (
-          <section className="runtime-page">
+          <section className="runtime-page project-settings-page">
             <fieldset
               className="stale-settings-controls"
               disabled={runtimeStale}
