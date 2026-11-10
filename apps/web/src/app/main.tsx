@@ -150,7 +150,8 @@ function App() {
       window.dispatchEvent(new Event('convoy-wiki-route'));
       const route = parseWikiLocation(window.location.hash);
       if (!route) {
-        setPageState((current) => (current === 'Wiki' ? 'Project board' : current));
+        // Only a hash change away from the wiki leaves it; a runtime refresh must not.
+        if (event) setPageState((current) => (current === 'Wiki' ? 'Project board' : current));
         return;
       }
       setPageState('Wiki');
