@@ -1,0 +1,36 @@
+/* Project settings uses the same dark settings surface as the other settings pages. */
+.runtime-page.project-settings-page {
+  --ink: #e8e7df;
+  --muted: #a6b6bb;
+  --surface: #18252e;
+  --surface-2: #20313b;
+  --line: #344b57;
+  --accent: #c7ac76;
+  color-scheme: dark;
+  color: #e8e7df;
+}
+.app .runtime-page.project-settings-page :is(h1, h2, h3, h4, label, summary, strong) {
+  color: #e8e7df;
+}
+.app .runtime-page.project-settings-page p {
+  color: #a6b6bb;
+}
+.app .runtime-page.project-settings-page :is(input, select, textarea):not([type='checkbox']) {
+  background: #18252e;
+  color: #e8e7df;
+  border: 1px solid #526b72;
+  border-radius: 0;
+  box-shadow: none;
+}
+.runtime-page.project-settings-page :is(.primary, .secondary) {
+  color: #e8e7df;
+  background: #20313b;
+  border: 1px solid #526b72;
+  border-radius: 0;
+  box-shadow: none;
+}
+.runtime-page.project-settings-page .primary {
+  color: #18252e;
+  background: #c7ac76;
+  border-color: #c7ac76;
+}
