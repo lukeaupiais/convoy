@@ -152,10 +152,11 @@ export function PlacementEditor({
         )}
       </div>
       <div className="runtime-toolbar">
-        <button className="secondary" disabled={working} onClick={save}>
+        <button type="button" className="secondary" disabled={working} onClick={save}>
           Save placement
         </button>
         <button
+          type="button"
           className="secondary"
           onClick={() => {
             setValue(structuredClone(target.placement));
