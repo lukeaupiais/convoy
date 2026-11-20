@@ -65,7 +65,7 @@ export function ExecutionProfileEditor({
           Reviewer: {selected.approval.reviewer}.
         </p>
       )}
-      <button className="secondary" disabled={working} onClick={save}>
+      <button type="button" className="secondary" disabled={working} onClick={save}>
         {working ? 'Saving…' : 'Save execution profile'}
       </button>
       {message && <p role="status">{message}</p>}
