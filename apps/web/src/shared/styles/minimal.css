@@ -1,18 +1,4 @@
 /* Minimal workspace: neutral surfaces, one navigation level, quiet metadata. */
-:root {
-  font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
-  color: #25272b;
-  background: #fff;
-  --line: #e9eaec;
-  --muted: #757980;
-  --purple: #333840;
-  font-size: 13px;
-}
 .app {
   height: 100dvh;
   min-height: 0;

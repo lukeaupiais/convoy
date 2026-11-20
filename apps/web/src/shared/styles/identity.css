@@ -6,43 +6,18 @@
   font-display: swap;
 }
 
-/* DOS game menus meet early X11: system type, flat colour, square frames.
-   Product state colours remain user-defined. */
-:root {
-  color-scheme: light;
-  --ink: #172c36;
-  --muted: #4c6166;
-  --accent: #7055b6;
-  --accent-hover: #594095;
-  --paper: #c9cecb;
-  --surface: #e8eae0;
-  --surface-2: #bdc8c4;
-  --line: #859995;
-  --line-strong: #728783;
-  --raised: inset 1px 1px #fffdf6, inset -1px -1px #7b8982;
-  --inset: inset 1px 1px #7b8982, inset -1px -1px #fffdf6;
-  --rail: #16383c;
-  --rail-soft: #20474a;
-  --signal: #ffd064;
-  --sea: #2f7b73;
-  --purple: var(--sea);
-  --font-system: 'Segoe UI', Tahoma, Arial, sans-serif;
-  font-family: var(--font-system);
-  font-size: 13px;
-  color: var(--ink);
-  background: var(--paper);
-}
+/* Shared control styling. Colours come from tokens.css; product state colours remain user-defined. */
 body {
   background: var(--paper);
   color: var(--ink);
 }
 * {
-  scrollbar-color: #82958f #d8d6c8;
+  scrollbar-color: var(--color-border-strong) var(--color-surface);
   scrollbar-width: thin;
 }
 ::selection {
-  background: #f2cb69;
-  color: #102c31;
+  background: var(--color-selection);
+  color: var(--color-on-accent);
 }
 .app :is(button, input, textarea, select, summary) {
   border-radius: 0;
@@ -55,34 +30,29 @@ body {
   outline-offset: 2px;
 }
 .app .primary {
-  background: #574480;
-  color: #fffaf0;
-  border: 1px solid #59418e;
-  border-radius: 0;
-  box-shadow:
-    inset 1px 1px #c9b7ee,
-    inset -1px -1px #45346e,
-    1px 1px #273c3b;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-control);
+  box-shadow: none;
   font-weight: 700;
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .app .primary:hover {
-  background: #6a5397;
-  border-color: #59418e;
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
 }
 .app .secondary {
-  background: var(--surface-2);
-  color: #274b4d;
-  border: 1px solid #9daba5;
-  border-radius: 0;
-  box-shadow:
-    var(--raised),
-    1px 1px #7b898260;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: none;
 }
 .app .secondary:hover {
-  background: #fffdf2;
-  border-color: #728d88;
-  color: #15383b;
+  background: var(--color-surface-hover);
+  border-color: var(--color-text-muted);
+  color: var(--color-text);
 }
 .app :is(.primary, .secondary, .icon-button):active {
   box-shadow: var(--inset);
@@ -99,7 +69,7 @@ body {
 .app input::placeholder,
 .app textarea::placeholder,
 .select-search input::placeholder {
-  color: #72827e;
+  color: var(--color-text-subtle);
   opacity: 1;
 }
 
@@ -109,7 +79,7 @@ body {
   :is(input, textarea, select) {
   background: var(--surface);
   color: var(--ink);
-  border-color: #9eaca5;
+  border-color: var(--color-border-strong);
   border-radius: 0;
 }
 .app
@@ -136,26 +106,26 @@ body {
   color: var(--muted);
 }
 .select-control .select-trigger {
-  color: #24494b;
+  color: var(--color-text);
   background: var(--surface);
-  border-color: #9daba5;
+  border-color: var(--color-border-strong);
   border-radius: 0;
   box-shadow: var(--raised);
 }
 .select-trigger > svg {
-  color: #4d6e6c;
+  color: var(--color-text-muted);
 }
 .select-control .select-trigger:hover,
 .select-control .select-trigger[aria-expanded='true'] {
-  background: var(--surface);
-  border-color: #708b86;
+  background: var(--color-surface-hover);
+  border-color: var(--color-text-muted);
 }
 .select-popover {
-  background: #fbf8ea;
-  border: 1px solid #82958f;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
   color: var(--ink);
   border-radius: 0;
-  box-shadow: 0 12px 30px #17363830;
+  box-shadow: 0 12px 30px #00000059;
 }
 .select-heading,
 .select-heading > button,
@@ -168,23 +138,23 @@ body {
   border-color: var(--line);
 }
 .select-options > button[aria-selected='true'] {
-  background: #d6e5dc;
-  color: #173d3e;
+  background: var(--color-info-bg);
+  color: var(--color-text);
 }
 .select-options > button:hover,
 .select-options > button:focus-visible {
-  background: #e2eadf;
+  background: var(--color-surface-hover);
   outline-color: var(--accent);
 }
 
 /* Shared modal mechanics; each feature owns its dialog presentation. */
 .modal-backdrop,
 .select-scrim {
-  background: #080f18b8;
+  background: var(--color-scrim);
   backdrop-filter: none;
 }
 .app :is(.monitor-reason, .monitor-location) {
-  color: #526d69;
+  color: var(--color-text-muted);
 }
 .app .terminal-preview {
   background: #153438;
@@ -204,40 +174,40 @@ body {
   color: var(--ink);
 }
 .runtime-page :is(h1, h2, h3, h4, .monitor-session-heading strong) {
-  color: #183b3e;
+  color: var(--color-text);
 }
 .monitor-session {
   background: var(--surface);
-  border: 1px solid #9eada5;
+  border: 1px solid var(--color-border);
   border-radius: 0;
-  box-shadow: 0 2px 5px #17393a12;
+  box-shadow: none;
 }
 .monitor-filters button {
-  color: #506c68;
+  color: var(--color-text-muted);
   border-radius: 0;
 }
 .monitor-filters button[aria-pressed='true'] {
-  color: #164b48;
-  background: #d7e4da;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 .run-status {
-  background: #dce3d8;
-  color: #3b5c58;
-  border: 1px solid #c2cdc1;
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
   border-radius: 0;
 }
 .run-status.running {
-  background: #d2e6d7;
-  color: #235c3d;
+  background: var(--color-success-bg);
+  color: var(--color-success);
 }
 .run-status.waiting_approval,
 .run-status.awaiting_review {
-  background: #f3e5bf;
-  color: #73581d;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 .approval-card {
-  background: #fff4d9;
-  border-color: #d4b76b;
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning);
 }
 
 /* Stable agent signatures now live in a fleet-friendly spectrum. */
