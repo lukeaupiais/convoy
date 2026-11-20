@@ -14,6 +14,7 @@ publication rule.
 - [Deployment persistence, migration, and backup](architecture/persistence.md)
 - [Command execution](command-execution.md)
 - [Browser verification through the shell](architecture/browser-shell-verification.md)
+- [Web interface actions](web-actions.md)
 
 ## Architecture and contracts
 
