@@ -1,10 +1,10 @@
 .wiki {
-  --wiki-ink: #252631;
-  --wiki-soft: #f8f8fb;
-  --wiki-accent: #6251b5;
+  --wiki-ink: var(--color-text);
+  --wiki-soft: var(--color-surface-raised);
+  --wiki-accent: var(--color-accent);
   color: var(--wiki-ink);
   min-width: 0;
-  background: white;
+  background: var(--color-surface);
   min-height: calc(100vh - 100px);
 }
 .wiki button {
@@ -15,7 +15,7 @@
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 7px 11px;
-  background: white;
+  background: var(--color-surface);
   line-height: 1.4;
 }
 .wiki button:hover {
@@ -26,9 +26,9 @@
 .wiki select {
   min-width: 0;
   max-width: 100%;
-  border: 1px solid #dedee7;
+  border: 1px solid var(--color-border);
   border-radius: 6px;
-  background: white;
+  background: var(--color-surface);
   padding: 9px 10px;
   color: inherit;
 }
@@ -68,7 +68,7 @@
 }
 .wiki .wiki-muted,
 .wiki .wiki-nav-label {
-  color: #767783;
+  color: var(--color-text-muted);
 }
 .wiki-topbar {
   display: flex;
@@ -100,7 +100,7 @@
   padding: 4px 7px 4px 12px;
 }
 .wiki-search svg {
-  color: #81818e;
+  color: var(--color-text-muted);
   flex-shrink: 0;
 }
 .wiki .wiki-search input {
@@ -129,11 +129,11 @@
 .wiki-navigation {
   padding: 25px 16px;
   border-right: 1px solid var(--line);
-  background: #fcfcfd;
+  background: var(--color-surface-raised);
 }
 .wiki .wiki-collection-label {
   margin: 0 0 24px;
-  color: #767783;
+  color: var(--color-text-muted);
   font-size: 11px;
 }
 .wiki .wiki-collection-label select {
@@ -158,12 +158,12 @@
 }
 .wiki-navigation svg {
   flex-shrink: 0;
-  color: #91929e;
+  color: var(--color-text-subtle);
 }
 .wiki-navigation > a[aria-current='page'],
 .wiki-navigation > a.is-active {
-  background: #efecfa;
-  color: #5947a9;
+  background: var(--color-surface-hover);
+  color: var(--color-accent);
   font-weight: 550;
 }
 .wiki-navigation a span {
@@ -178,7 +178,7 @@
 }
 .wiki-nav-manage {
   margin: 32px 8px 0;
-  color: #6e6e7c;
+  color: var(--color-text-muted);
 }
 .wiki-nav-manage summary {
   font-size: 12px;
@@ -213,7 +213,7 @@
   max-width: 650px;
   font-size: 16px;
   line-height: 1.7;
-  color: #646574;
+  color: var(--color-text-muted);
   white-space: pre-wrap;
 }
 .wiki-overview > h2 {
@@ -230,9 +230,9 @@
   align-items: flex-start;
   gap: 18px;
   padding: 21px;
-  border: 1px solid #e4e0f1;
+  border: 1px solid var(--color-border);
   border-radius: 10px;
-  background: #fbfaff;
+  background: var(--color-surface-raised);
 }
 .wiki-cards svg {
   color: var(--wiki-accent);
@@ -251,7 +251,7 @@
   flex: 1;
 }
 .wiki-page-list svg {
-  color: #888996;
+  color: var(--color-text-subtle);
 }
 .wiki-article-layout {
   display: grid;
@@ -266,7 +266,7 @@
 .wiki-breadcrumb {
   display: flex;
   gap: 8px;
-  color: #7a7a87;
+  color: var(--color-text-muted);
   font-size: 11px;
   margin-bottom: 24px;
   overflow-wrap: anywhere;
@@ -282,7 +282,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  color: #767783;
+  color: var(--color-text-muted);
   font-size: 12px;
 }
 .wiki-article-meta > span {
@@ -300,19 +300,19 @@
   top: 35px;
   right: 0;
   width: 210px;
-  background: white;
+  background: var(--color-surface);
   border: 1px solid var(--line);
   padding: 12px;
   border-radius: 9px;
   z-index: 5;
-  box-shadow: 0 8px 30px #24243016;
+  box-shadow: 0 8px 30px #00000059;
 }
 .wiki-page-menu button {
   width: 100%;
   margin: 3px 0;
 }
 .wiki-notice {
-  background: #fff8e7;
+  background: var(--color-warning-bg);
   padding: 12px 14px;
   border-radius: 7px;
   line-height: 1.6;
@@ -323,7 +323,7 @@
 .wiki-prose {
   font-size: 15px;
   line-height: 1.85;
-  color: #454653;
+  color: var(--color-text);
   overflow-wrap: anywhere;
 }
 .wiki-prose h2,
@@ -351,16 +351,16 @@
 .wiki-prose blockquote {
   margin: 20px 0;
   padding: 10px 20px;
-  border-left: 3px solid #c9bfee;
-  color: #626370;
-  background: #faf9fc;
+  border-left: 3px solid var(--color-accent);
+  color: var(--color-text-muted);
+  background: var(--color-surface-raised);
 }
 .wiki-prose blockquote p:last-child {
   margin-bottom: 0;
 }
 .wiki-prose pre {
-  background: #f5f5f8;
-  border: 1px solid #e9e9ef;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 16px;
   overflow: auto;
@@ -369,7 +369,7 @@
 }
 .wiki-prose code {
   font-size: 0.85em;
-  background: #f1f1f5;
+  background: var(--color-surface-hover);
   padding: 2px 5px;
   border-radius: 4px;
 }
@@ -394,7 +394,7 @@
   text-align: left;
 }
 .wiki-table th {
-  background: #f8f8fb;
+  background: var(--color-surface-raised);
   font-weight: 600;
 }
 .wiki-heading-link {
@@ -422,7 +422,7 @@
 }
 .wiki-toc a {
   display: block;
-  color: #777785;
+  color: var(--color-text-muted);
   line-height: 1.6;
   margin: 10px 0;
 }
@@ -450,7 +450,7 @@
   margin-top: 30px;
   border-top: 1px solid var(--line);
   padding-top: 16px;
-  color: #737481;
+  color: var(--color-text-muted);
   font-size: 12px;
 }
 .wiki-metadata dl {
@@ -482,13 +482,13 @@
   margin: 0;
 }
 .wiki-editbar > span {
-  color: #7b7b88;
+  color: var(--color-text-muted);
   font-size: 11px;
 }
 .wiki .wiki-primary {
-  background: #6553b5;
-  color: white;
-  border-color: #6553b5;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-color: var(--color-accent);
 }
 .wiki-editor input,
 .wiki-editor textarea,
@@ -516,8 +516,8 @@
   padding: 8px;
 }
 .wiki-edit-tools button[aria-pressed='true'] {
-  background: #eeebf9;
-  border-color: #dcd5f3;
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 .wiki-link-options {
   max-height: 200px;
@@ -564,8 +564,8 @@
   overflow-wrap: anywhere;
 }
 .wiki-error {
-  color: #9a3535;
-  background: #fff1f1;
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
   padding: 12px 24px;
   margin: 0;
 }
@@ -587,7 +587,7 @@
   .wiki-mobile-toc {
     display: block;
     margin-bottom: 24px;
-    color: #737481;
+    color: var(--color-text-muted);
   }
   .wiki-mobile-toc a {
     display: block;
@@ -637,7 +637,7 @@
     width: min(300px, 100%);
     min-height: 100%;
     z-index: 10;
-    box-shadow: 8px 10px 30px #30304422;
+    box-shadow: 8px 10px 30px #00000059;
   }
   .wiki-overview,
   .wiki-article-layout,
@@ -673,7 +673,7 @@
   }
 }
 /* The application shell is a scrolling flex column. Keep the complete article
-   in normal flow rather than shrinking its white surface to the viewport. */
+   in normal flow rather than shrinking its surface to the viewport. */
 .wiki {
   flex: 0 0 auto;
 }
