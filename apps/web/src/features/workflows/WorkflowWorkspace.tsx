@@ -17,17 +17,23 @@ export function WorkflowWorkspace({
   projectId,
   workflowRunId,
   onOpenConversation,
+  onRunChange,
 }: {
   state: RuntimeState;
   projectId?: string;
   workflowRunId?: string;
   onOpenConversation?: (id: string) => void;
+  onRunChange?: (id?: string) => void;
 }) {
   const [pane, setPane] = useState<WorkflowPane>(workflowRunId ? 'workflow' : 'list');
   const [selectedId, setSelectedId] = useState<string | undefined>(
     () => state.workflowRuns?.find((run) => run.id === workflowRunId)?.workflowId,
   );
-  const [runId, setRunId] = useState(workflowRunId);
+  const [runId, setRunIdState] = useState(workflowRunId);
+  function setRunId(id?: string) {
+    setRunIdState(id);
+    onRunChange?.(id);
+  }
   const [startOpen, setStartOpen] = useState(false);
   const [editor, setEditor] = useState<{ id?: string; key: number }>();
   const menu = useDetailsPopover();
